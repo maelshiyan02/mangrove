@@ -1,0 +1,450 @@
+import 'dart:async';
+
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+import 'package:venera/foundation/app.dart';
+import 'package:venera/foundation/appdata.dart';
+import 'package:venera/foundation/image_translation/translation_worker.dart';
+import 'package:venera/foundation/log.dart';
+import 'package:venera/network/app_dio_io.dart';
+import 'package:venera/utils/io.dart';
+
+/// A single downloadable file of a model component. [urls] is a fallback
+/// chain: mirrors are tried in order, so a blocked host does not make the
+/// component impossible to install.
+class ModelFile {
+  const ModelFile(this.name, this.urls);
+
+  /// File name inside the component directory.
+  final String name;
+
+  /// Candidate URLs. `{hf}` is replaced with the configured HuggingFace
+  /// endpoint (official or mirror) at download time.
+  final List<String> urls;
+}
+
+/// A downloadable model component (detector / OCR / translator).
+class ModelComponent {
+  const ModelComponent({
+    required this.id,
+    required this.files,
+    required this.approxSizeBytes,
+  });
+
+  final String id;
+  final List<ModelFile> files;
+
+  /// Rough total download size, for display before downloading.
+  final int approxSizeBytes;
+
+  String get directory =>
+      FilePath.join(App.dataPath, 'translation_models', id);
+
+  bool get isInstalled {
+    for (var file in files) {
+      var f = File(FilePath.join(directory, file.name));
+      if (!f.existsSync() || f.lengthSync() == 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  String filePath(String name) => FilePath.join(directory, name);
+}
+
+/// Registry of every component the local translation pipeline can use.
+///
+/// All models are public, permissively licensed releases fetched directly
+/// from their official repositories; nothing is bundled into the app so the
+/// install stays lightweight until the user opts in.
+abstract class TranslationModels {
+  /// Text region detector (PP-OCRv4 mobile, DBNet). Language independent.
+  static const detector = ModelComponent(
+    id: 'text_detector',
+    approxSizeBytes: 4900000,
+    files: [
+      ModelFile('det.onnx', [
+        '{hf}/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx',
+      ]),
+    ],
+  );
+
+  /// Japanese OCR (manga-ocr, vision encoder-decoder). The only reliable
+  /// option for vertical manga text; large but worth it.
+  static const ocrJa = ModelComponent(
+    id: 'ocr_ja',
+    approxSizeBytes: 461000000,
+    files: [
+      ModelFile('encoder.onnx', [
+        '{hf}/mayocream/manga-ocr-onnx/resolve/main/encoder_model.onnx',
+      ]),
+      ModelFile('decoder.onnx', [
+        '{hf}/mayocream/manga-ocr-onnx/resolve/main/decoder_model.onnx',
+      ]),
+      ModelFile('vocab.txt', [
+        '{hf}/mayocream/manga-ocr-onnx/resolve/main/vocab.txt',
+      ]),
+    ],
+  );
+
+  /// Chinese + Latin OCR (PP-OCRv4 mobile rec).
+  static const ocrZh = ModelComponent(
+    id: 'ocr_zh',
+    approxSizeBytes: 11000000,
+    files: [
+      ModelFile('rec.onnx', [
+        '{hf}/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx',
+      ]),
+      ModelFile('dict.txt', [
+        'https://cdn.jsdelivr.net/gh/PaddlePaddle/PaddleOCR@v2.7.0/ppocr/utils/ppocr_keys_v1.txt',
+        'https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v2.7.0/ppocr/utils/ppocr_keys_v1.txt',
+      ]),
+    ],
+  );
+
+  /// English OCR (PP-OCRv3 rec).
+  static const ocrEn = ModelComponent(
+    id: 'ocr_en',
+    approxSizeBytes: 9000000,
+    files: [
+      ModelFile('rec.onnx', [
+        '{hf}/SWHL/RapidOCR/resolve/main/PP-OCRv3/en_PP-OCRv3_rec_infer.onnx',
+      ]),
+      ModelFile('dict.txt', [
+        'https://cdn.jsdelivr.net/gh/PaddlePaddle/PaddleOCR@v2.7.0/ppocr/utils/en_dict.txt',
+        'https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v2.7.0/ppocr/utils/en_dict.txt',
+      ]),
+    ],
+  );
+
+  /// Korean OCR (PP-OCR mobile rec).
+  static const ocrKo = ModelComponent(
+    id: 'ocr_ko',
+    approxSizeBytes: 8000000,
+    files: [
+      ModelFile('rec.onnx', [
+        '{hf}/SWHL/RapidOCR/resolve/main/PP-OCRv1/korean_mobile_v2.0_rec_infer.onnx',
+      ]),
+      ModelFile('dict.txt', [
+        'https://cdn.jsdelivr.net/gh/PaddlePaddle/PaddleOCR@v2.7.0/ppocr/utils/dict/korean_dict.txt',
+        'https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v2.7.0/ppocr/utils/dict/korean_dict.txt',
+      ]),
+    ],
+  );
+
+  // -------------------------------------------------------------------------
+  // Offline machine-translation engines (encoder/decoder ONNX pairs). File
+  // names inside each component are normalized to encoder.onnx /
+  // decoder.onnx / tokenizer.json regardless of how the source repository
+  // lays them out, so the worker never branches on per-repo paths.
+  // -------------------------------------------------------------------------
+
+  /// NLLB-200 distilled 1.3B, dynamic int8. Quality tier (~1.9 GB). The
+  /// source repo stores the quantized graphs at its root.
+  static const mtNllb13b = ModelComponent(
+    id: 'mt_nllb_1_3b',
+    approxSizeBytes: 1930000000,
+    files: [
+      ModelFile('encoder.onnx', [
+        '{hf}/fine444666/nllb-200-distilled-1.3B-onnx-int8/resolve/main/encoder_model_quantized.onnx',
+      ]),
+      ModelFile('decoder.onnx', [
+        '{hf}/fine444666/nllb-200-distilled-1.3B-onnx-int8/resolve/main/decoder_model_quantized.onnx',
+      ]),
+      ModelFile('tokenizer.json', [
+        '{hf}/fine444666/nllb-200-distilled-1.3B-onnx-int8/resolve/main/tokenizer.json',
+        '{hf}/Xenova/nllb-200-distilled-1.3B/resolve/main/tokenizer.json',
+      ]),
+    ],
+  );
+
+  /// NLLB-200 distilled 600M, dynamic int8 (Xenova conversion, graphs under
+  /// `onnx/`). Lightweight tier (~0.9 GB).
+  static const mtNllb600m = ModelComponent(
+    id: 'mt_nllb_600m',
+    approxSizeBytes: 900000000,
+    files: [
+      ModelFile('encoder.onnx', [
+        '{hf}/Xenova/nllb-200-distilled-600M/resolve/main/onnx/encoder_model_quantized.onnx',
+      ]),
+      ModelFile('decoder.onnx', [
+        '{hf}/Xenova/nllb-200-distilled-600M/resolve/main/onnx/decoder_model_quantized.onnx',
+      ]),
+      ModelFile('tokenizer.json', [
+        '{hf}/Xenova/nllb-200-distilled-600M/resolve/main/tokenizer.json',
+      ]),
+    ],
+  );
+
+  /// Opus-MT Japanese→English (Marian), int8 (~110 MB). Tiny specialist.
+  static const mtOpusJaEn = ModelComponent(
+    id: 'mt_opus_ja_en',
+    approxSizeBytes: 110000000,
+    files: [
+      ModelFile('encoder.onnx', [
+        '{hf}/Xenova/opus-mt-ja-en/resolve/main/onnx/encoder_model_quantized.onnx',
+      ]),
+      ModelFile('decoder.onnx', [
+        '{hf}/Xenova/opus-mt-ja-en/resolve/main/onnx/decoder_model_quantized.onnx',
+      ]),
+      ModelFile('tokenizer.json', [
+        '{hf}/Xenova/opus-mt-ja-en/resolve/main/tokenizer.json',
+      ]),
+    ],
+  );
+
+  /// Machine-translation components in display order.
+  static const machineTranslation = [mtNllb13b, mtNllb600m, mtOpusJaEn];
+
+  static const all = [
+    detector,
+    ocrJa,
+    ocrZh,
+    ocrEn,
+    ocrKo,
+    mtNllb13b,
+    mtNllb600m,
+    mtOpusJaEn,
+  ];
+
+  static ModelComponent? find(String id) {
+    for (var c in all) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  /// The OCR component required for a source language. Spanish and Latin
+  /// share the English PP-OCRv3 recognizer (Latin glyph set); Classical
+  /// Latin has no dedicated offline OCR model anywhere.
+  static ModelComponent ocrFor(String sourceLang) {
+    return switch (sourceLang) {
+      'ja' => ocrJa,
+      'ko' => ocrKo,
+      'en' || 'es' || 'la' => ocrEn,
+      _ => ocrZh,
+    };
+  }
+
+  /// Languages that get their own rec-model entry in the worker. 'es' and
+  /// 'la' alias the English files but keep distinct keys, so an explicitly
+  /// selected Spanish/Latin comic is recognized and *labelled* with its own
+  /// language instead of being guessed as English.
+  static const _recLangs = ['zh', 'en', 'ko', 'es', 'la'];
+
+  /// Rec input heights: 48 for the v3/v4 models, 32 for the older Korean one.
+  static int recHeightFor(String lang) => lang == 'ko' ? 32 : 48;
+
+  /// Model file paths for the worker isolate, containing only what is
+  /// actually installed.
+  static WorkerModelPaths workerPaths() {
+    var recModels = <String, String>{};
+    var recDicts = <String, String>{};
+    var recHeights = <String, int>{};
+    for (var lang in _recLangs) {
+      var component = ocrFor(lang);
+      if (component.isInstalled) {
+        recModels[lang] = component.filePath('rec.onnx');
+        recDicts[lang] = component.filePath('dict.txt');
+        recHeights[lang] = recHeightFor(lang);
+      }
+    }
+    var hasJa = ocrJa.isInstalled;
+    return WorkerModelPaths(
+      detector: detector.filePath('det.onnx'),
+      jaEncoder: hasJa ? ocrJa.filePath('encoder.onnx') : null,
+      jaDecoder: hasJa ? ocrJa.filePath('decoder.onnx') : null,
+      jaVocab: hasJa ? ocrJa.filePath('vocab.txt') : null,
+      recModels: recModels,
+      recDicts: recDicts,
+      recHeights: recHeights,
+    );
+  }
+
+  /// Components required for the current settings, for the model management
+  /// UI. With 'auto' any one OCR component suffices, so only the detector is
+  /// strictly required.
+  static List<ModelComponent> requiredFor(String sourceLang) {
+    return [
+      detector,
+      if (sourceLang != 'auto') ocrFor(sourceLang),
+    ];
+  }
+
+  /// Whether detection + OCR can run for [sourceLang]. Translation-engine
+  /// readiness (LLM configured / local model installed) is checked
+  /// separately by the service.
+  static bool isReadyFor(String sourceLang) {
+    // Checked on every reader image-provider construction; cache the file
+    // probes and invalidate when the model store changes anything.
+    return _readyCache[sourceLang] ??= _computeReady(sourceLang);
+  }
+
+  static bool _computeReady(String sourceLang) {
+    if (!detector.isInstalled) return false;
+    if (sourceLang == 'auto') {
+      return ocrJa.isInstalled || _recLangs.any((l) => ocrFor(l).isInstalled);
+    }
+    return ocrFor(sourceLang).isInstalled;
+  }
+
+  static final _readyCache = <String, bool>{};
+
+  static void invalidateReadyCache() => _readyCache.clear();
+}
+
+class ModelDownloadState {
+  bool downloading = false;
+  double progress = 0;
+  int receivedBytes = 0;
+  int? totalBytes;
+  String? error;
+}
+
+/// Downloads and manages local translation model files.
+class TranslationModelStore with ChangeNotifier {
+  TranslationModelStore._();
+
+  static final instance = TranslationModelStore._();
+
+  final _states = <String, ModelDownloadState>{};
+  final _cancelTokens = <String, CancelToken>{};
+
+  ModelDownloadState stateOf(ModelComponent component) {
+    return _states.putIfAbsent(component.id, () => ModelDownloadState());
+  }
+
+  static String get hfEndpoint {
+    var value = appdata.settings['imageTranslationHfEndpoint'];
+    if (value is String && value.isNotEmpty) {
+      return value;
+    }
+    return 'https://huggingface.co';
+  }
+
+  /// Model downloads are large one-shot transfers, so this stays a bare [Dio]
+  /// (no shared cache / cookie / log interceptors, no total timeout) rather
+  /// than [AppDio]. The adapter is still the app's: dio's default `dart:io`
+  /// one honored none of the proxy / DNS / certificate settings, which made
+  /// every download fail behind a TLS-intercepting proxy while the rest of the
+  /// app kept working.
+  Dio _createDio() {
+    return Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 30),
+        headers: {'User-Agent': 'venera/${App.version}'},
+        followRedirects: true,
+        maxRedirects: 10,
+      ),
+    )..httpClientAdapter = createAppHttpClientAdapter();
+  }
+
+  Future<void> download(ModelComponent component) async {
+    var state = stateOf(component);
+    if (state.downloading || component.isInstalled) {
+      return;
+    }
+    state
+      ..downloading = true
+      ..error = null
+      ..progress = 0
+      ..receivedBytes = 0
+      ..totalBytes = component.approxSizeBytes;
+    notifyListeners();
+    var cancelToken = CancelToken();
+    _cancelTokens[component.id] = cancelToken;
+    var dio = _createDio();
+    try {
+      Directory(component.directory).createSync(recursive: true);
+      // Progress is reported across the whole component, weighted by each
+      // file's share of the approximate total.
+      var finishedBytes = 0;
+      for (var file in component.files) {
+        var target = File(component.filePath(file.name));
+        if (target.existsSync() && target.lengthSync() > 0) {
+          continue;
+        }
+        var temp = File('${target.path}.part');
+        Object? lastError;
+        var ok = false;
+        for (var url in file.urls) {
+          url = url.replaceFirst('{hf}', hfEndpoint);
+          try {
+            await dio.download(
+              url,
+              temp.path,
+              cancelToken: cancelToken,
+              onReceiveProgress: (count, total) {
+                state.receivedBytes = finishedBytes + count;
+                var estimated = component.approxSizeBytes;
+                state.progress = (state.receivedBytes / estimated).clamp(
+                  0.0,
+                  1.0,
+                );
+                notifyListeners();
+              },
+            );
+            temp.renameSync(target.path);
+            ok = true;
+            break;
+          } catch (e) {
+            temp.deleteIgnoreError();
+            if (cancelToken.isCancelled) {
+              rethrow;
+            }
+            lastError = e;
+            Log.warning(
+              'Translation Models',
+              'Download failed from $url, trying next mirror: $e',
+            );
+          }
+        }
+        if (!ok) {
+          throw lastError ?? Exception('Download failed');
+        }
+        finishedBytes += target.lengthSync();
+      }
+      state.progress = 1;
+    } catch (e) {
+      if (!cancelToken.isCancelled) {
+        state.error = e.toString();
+        Log.error('Translation Models', 'Failed to download ${component.id}', e);
+      }
+    } finally {
+      dio.close();
+      _cancelTokens.remove(component.id);
+      state.downloading = false;
+      TranslationModels.invalidateReadyCache();
+      notifyListeners();
+    }
+  }
+
+  void cancelDownload(ModelComponent component) {
+    _cancelTokens[component.id]?.cancel();
+  }
+
+  Future<void> delete(ModelComponent component) async {
+    cancelDownload(component);
+    var dir = Directory(component.directory);
+    if (dir.existsSync()) {
+      await dir.deleteIgnoreError(recursive: true);
+    }
+    _states.remove(component.id);
+    TranslationModels.invalidateReadyCache();
+    notifyListeners();
+  }
+
+  /// Total disk usage of installed model files.
+  int get installedSizeBytes {
+    var root = Directory(FilePath.join(App.dataPath, 'translation_models'));
+    if (!root.existsSync()) return 0;
+    var total = 0;
+    for (var entity in root.listSync(recursive: true)) {
+      if (entity is File) {
+        total += entity.lengthSync();
+      }
+    }
+    return total;
+  }
+}

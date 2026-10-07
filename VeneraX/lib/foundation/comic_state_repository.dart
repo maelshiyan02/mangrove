@@ -1,0 +1,1070 @@
+import 'package:venera/foundation/app.dart';
+import 'package:venera/foundation/comic_collection_store.dart';
+import 'package:venera/foundation/comic_source/comic_source.dart';
+import 'package:venera/foundation/chapter_title_parser.dart';
+import 'package:venera/foundation/comic_type.dart';
+import 'package:venera/foundation/domain_database.dart';
+import 'package:venera/foundation/favorites.dart';
+import 'package:venera/foundation/follow_update_scope.dart';
+import 'package:venera/foundation/history.dart';
+import 'package:venera/foundation/local.dart';
+import 'package:venera/foundation/log.dart';
+import 'package:venera/foundation/source_platform.dart';
+
+class ComicIdentity {
+  const ComicIdentity({
+    required this.comicId,
+    required this.sourceKey,
+    required this.sourceComicId,
+    required this.platform,
+    required this.type,
+  });
+
+  factory ComicIdentity.fromSource({
+    required String sourceKey,
+    required String sourceComicId,
+  }) {
+    final platform = SourcePlatformResolver.fromSourceKey(sourceKey);
+    return ComicIdentity(
+      comicId: DomainDatabase.comicIdFor(platform, sourceComicId),
+      sourceKey: platform.canonicalKey,
+      sourceComicId: sourceComicId,
+      platform: platform,
+      type: platform.legacyIntType == null
+          ? ComicType.fromKey(platform.canonicalKey)
+          : ComicType(platform.legacyIntType!),
+    );
+  }
+
+  final String comicId;
+  final String sourceKey;
+  final String sourceComicId;
+  final SourcePlatformRef platform;
+  final ComicType type;
+
+  bool get isLocal => platform.kind == SourcePlatformKind.local;
+}
+
+class ComicState {
+  const ComicState({
+    required this.identity,
+    this.title,
+    this.subtitle,
+    this.cover,
+    this.description,
+    this.tags,
+    this.history,
+    this.localComic,
+    this.localFavoriteFolders = const [],
+    this.isDownloaded = false,
+  });
+
+  final ComicIdentity identity;
+  final String? title;
+  final String? subtitle;
+  final String? cover;
+  final String? description;
+  final List<String>? tags;
+  final History? history;
+  final LocalComic? localComic;
+  final List<String> localFavoriteFolders;
+  final bool isDownloaded;
+
+  bool get isLocalFavorite => localFavoriteFolders.isNotEmpty;
+  bool get isInLocalLibrary => localComic != null;
+}
+
+class ComicDisplayInfo {
+  const ComicDisplayInfo({
+    required this.title,
+    required this.cover,
+    required this.sourceName,
+    this.author,
+    this.status,
+    this.updateTime,
+    this.progressText,
+    this.pagesText,
+    this.description,
+    this.tags = const [],
+    this.rating,
+    this.hasNewUpdate = false,
+  });
+
+  final String title;
+  final String cover;
+  final String? sourceName;
+  final String? author;
+  final String? status;
+  final String? updateTime;
+  final String? progressText;
+  final String? pagesText;
+  final String? description;
+  final List<String> tags;
+  final double? rating;
+  final bool hasNewUpdate;
+}
+
+class ComicChapterProgressInfo {
+  const ComicChapterProgressInfo({this.currentTitle, this.latestTitle});
+
+  final String? currentTitle;
+  final String? latestTitle;
+
+  bool get hasAny => currentTitle != null || latestTitle != null;
+}
+
+class ComicStateRepository {
+  const ComicStateRepository({
+    DomainDatabase? domain,
+    LocalManager? localManager,
+    HistoryManager? historyManager,
+    LocalFavoritesManager? favoritesManager,
+  }) : _domain = domain,
+       _localManager = localManager,
+       _historyManager = historyManager,
+       _favoritesManager = favoritesManager;
+
+  final DomainDatabase? _domain;
+  final LocalManager? _localManager;
+  final HistoryManager? _historyManager;
+  final LocalFavoritesManager? _favoritesManager;
+
+  DomainDatabase get _db => _domain ?? App.domain;
+  LocalManager get _local => _localManager ?? LocalManager();
+  HistoryManager get _history => _historyManager ?? HistoryManager();
+  LocalFavoritesManager get _favorites =>
+      _favoritesManager ?? LocalFavoritesManager();
+  bool get _domainReady {
+    final domain = _domain ?? (App.isInitialized ? App.domain : null);
+    if (domain == null) {
+      return false;
+    }
+    if (!domain.isInitialized && _domain == null && App.isInitialized) {
+      try {
+        domain.initSync(App.dataPath);
+      } catch (_) {
+        return false;
+      }
+    }
+    return domain.isInitialized;
+  }
+
+  bool get isDomainReady => _domainReady;
+
+  ComicIdentity identityFor(String sourceKey, String sourceComicId) {
+    return ComicIdentity.fromSource(
+      sourceKey: sourceKey,
+      sourceComicId: sourceComicId,
+    );
+  }
+
+  ComicState load(String sourceKey, String sourceComicId) {
+    final identity = identityFor(sourceKey, sourceComicId);
+    final history = _findHistory(sourceComicId, identity.type);
+    final localComic = _findLocalComic(sourceComicId, identity.type);
+    final favoriteFolders = _findFavoriteFolders(sourceComicId, identity.type);
+    final favorite = _findFavoriteItem(
+      favoriteFolders,
+      sourceComicId,
+      identity.type,
+    );
+
+    return ComicState(
+      identity: identity,
+      title: localComic?.title ?? favorite?.title ?? history?.title,
+      subtitle: localComic?.subtitle ?? favorite?.subtitle ?? history?.subtitle,
+      cover: localComic?.cover ?? favorite?.cover ?? history?.cover,
+      description:
+          localComic?.description ??
+          favorite?.description ??
+          history?.description,
+      tags: localComic?.tags ?? favorite?.tags ?? history?.tags,
+      history: history,
+      localComic: localComic,
+      localFavoriteFolders: favoriteFolders,
+      isDownloaded: localComic != null,
+    );
+  }
+
+  ComicDisplayInfo displayInfoFor(Comic comic, {String? badge}) {
+    final identity = identityFor(comic.sourceKey, comic.id);
+    final domain = _findDomainBaseInfo(identity);
+    final history = comic is History
+        ? comic
+        : _findHistory(comic.id, identity.type);
+    final localComic = _findLocalComic(comic.id, identity.type);
+    final favoriteFolders = _findFavoriteFolders(comic.id, identity.type);
+    final favorite = comic is FavoriteItem
+        ? comic
+        : _findFavoriteItem(favoriteFolders, comic.id, identity.type);
+    final updateInfo = comic is FavoriteItemWithUpdateInfo
+        ? comic
+        : _findFollowUpdateInfo(comic.id, identity.type);
+
+    final currentMeta = _ComicMetadata.fromComic(comic);
+    final favoriteMeta = favorite == null
+        ? null
+        : _ComicMetadata.fromFavorite(favorite);
+    final localMeta = localComic == null
+        ? null
+        : _ComicMetadata.fromLocalComic(localComic);
+    final domainTags = domain?.tags ?? const <String>[];
+    final tags = comic is LocalComic
+        ? _mergeTags([comic.tags])
+        : _mergeTags([
+            domainTags,
+            updateInfo?.tags ?? const <String>[],
+            favorite?.tags ?? const <String>[],
+            localComic?.tags ?? const <String>[],
+            comic.tags ?? const <String>[],
+          ]);
+
+    final status = _pick([
+      domain?.status,
+      _ComicMetadata.statusFromTags(updateInfo?.tags),
+      favoriteMeta?.status,
+      localMeta?.status,
+      currentMeta.status,
+    ]);
+    final updateTime = _pick([
+      updateInfo?.updateTime,
+      domain?.updateTime,
+      currentMeta.updateTime,
+      favoriteMeta?.updateTime,
+      localMeta?.updateTime,
+    ]);
+    final pages = _pick([
+      comic.maxPage?.toString(),
+      domain?.pageCount?.toString(),
+      currentMeta.pageCount?.toString(),
+    ]);
+
+    return ComicDisplayInfo(
+      // A local comic's own metadata is ground truth — the domain row may
+      // carry a stale work link from a deleted comic whose id was reused
+      // (issue #135), so it must not override the local title/cover.
+      title:
+          _pick([
+            localComic?.title,
+            domain?.title,
+            updateInfo?.title,
+            favorite?.title,
+            history?.title,
+            comic.title,
+          ]) ??
+          comic.title,
+      cover:
+          _pick([
+            localComic?.cover,
+            domain?.coverUri,
+            updateInfo?.cover,
+            favorite?.cover,
+            history?.cover,
+            comic.cover,
+          ]) ??
+          comic.cover,
+      sourceName: badge ?? _sourceNameFor(comic.sourceKey),
+      author: _pick([
+        domain?.author,
+        localMeta?.author,
+        favoriteMeta?.author,
+        currentMeta.author,
+        history?.subtitle,
+      ]),
+      status: status,
+      updateTime: updateTime,
+      progressText: history?.description,
+      pagesText: pages,
+      description: _pick([
+        domain?.description,
+        localComic?.description,
+        updateInfo?.description,
+        favorite?.description,
+        comic.description,
+      ]),
+      tags: tags,
+      rating: comic.stars,
+      hasNewUpdate: updateInfo?.hasNewUpdate ?? false,
+    );
+  }
+
+  /// Cheap, tags-only comic status — does NO database lookups, unlike
+  /// [displayInfoFor]. [displayInfoFor] aggregates status across the domain DB,
+  /// favorites and local library (several queries per comic): fine for a single
+  /// visible tile, but catastrophic in a bulk filter over hundreds of comics
+  /// (e.g. the follow-updates "Ended" tab). Bulk callers that only need the
+  /// status string should use this instead.
+  String? quickStatusFor(Comic comic) =>
+      _ComicMetadata.statusFromTags(comic.tags);
+
+  /// Cheap, tags-only page count, same contract as [quickStatusFor]: reads only
+  /// what the list item already carries, so a grid of tiles doesn't pay
+  /// [displayInfoFor]'s per-comic database lookups. Prefers [Comic.maxPage] and
+  /// falls back to a `pages:` style tag.
+  String? quickPageCountFor(Comic comic) {
+    final maxPage = comic.maxPage;
+    if (maxPage != null && maxPage > 0) {
+      return maxPage.toString();
+    }
+    return _ComicMetadata.pageCountFromTags(comic.tags);
+  }
+
+  List<DomainComicSourceLink> relatedSourcesFor(Comic comic) {
+    if (!_domainReady) {
+      return const <DomainComicSourceLink>[];
+    }
+    final fallbackIdentity = identityFor(comic.sourceKey, comic.id);
+    try {
+      final comicId = mirrorComic(comic);
+      _db.ensureWorkForComic(comicId: comicId);
+      return _db.getRelatedSources(comicId);
+    } catch (error, stackTrace) {
+      Log.warning('Related sources load failed', '$error\n$stackTrace');
+      return _db.getRelatedSources(fallbackIdentity.comicId);
+    }
+  }
+
+  ComicChapterProgressInfo chapterProgressFor(Comic comic, History? history) {
+    final chapters = _findChapters(comic);
+    final latestTitle =
+        chapters?.titles.lastOrNull ?? _latestChapterTitleFallbackFor(comic);
+    return ComicChapterProgressInfo(
+      currentTitle: history == null || chapters == null || chapters.length == 0
+          ? null
+          : _chapterTitleAt(chapters, history),
+      latestTitle: latestTitle,
+    );
+  }
+
+  ComicChapterProgressInfo chapterProgressFromDetails(
+    ComicDetails comic,
+    History? history,
+  ) {
+    final chapters = comic.chapters;
+    if (history == null || chapters == null || chapters.length == 0) {
+      return const ComicChapterProgressInfo();
+    }
+    return ComicChapterProgressInfo(
+      currentTitle: _chapterTitleAt(chapters, history),
+      latestTitle: chapters.titles.lastOrNull,
+    );
+  }
+
+  void linkRelatedSource({
+    required Comic comic,
+    required String targetSourceKey,
+    required String targetComicId,
+  }) {
+    if (!_domainReady) {
+      throw 'Related source database unavailable';
+    }
+    mirrorComic(comic);
+    final identity = identityFor(comic.sourceKey, comic.id);
+    final targetPlatform = SourcePlatformResolver.fromSourceKey(
+      targetSourceKey,
+    );
+    _db.linkSourceComics(
+      sourcePlatform: identity.platform,
+      sourceComicId: identity.sourceComicId,
+      targetPlatform: targetPlatform,
+      targetSourceComicId: targetComicId,
+    );
+  }
+
+  void acceptRelatedSource(DomainComicSourceLink link) {
+    if (!_domainReady) {
+      throw 'Related source database unavailable';
+    }
+    _db.acceptWorkSource(workId: link.workId, comicId: link.comicId);
+  }
+
+  void rejectRelatedSource(DomainComicSourceLink link) {
+    if (!_domainReady) {
+      throw 'Related source database unavailable';
+    }
+    _db.rejectWorkSource(workId: link.workId, comicId: link.comicId);
+  }
+
+  void unlinkRelatedSource(DomainComicSourceLink link) {
+    if (!_domainReady) {
+      throw 'Related source database unavailable';
+    }
+    _db.unlinkWorkSource(workId: link.workId, comicId: link.comicId);
+  }
+
+  String mirrorComic(Comic comic) {
+    final identity = identityFor(comic.sourceKey, comic.id);
+    if (!_domainReady) {
+      return identity.comicId;
+    }
+    final metadata = _ComicMetadata.fromComic(comic);
+    return _safeMirror(
+      fallbackComicId: identity.comicId,
+      write: () => _db.ensureComicSource(
+        platform: identity.platform,
+        sourceComicId: comic.id,
+        title: comic.title,
+        subtitle: comic.subtitle ?? '',
+        description: comic.description,
+        author: metadata.author,
+        status: metadata.status,
+        updateTime: metadata.updateTime,
+        language: comic.language,
+        coverUri: comic.cover,
+        tags: comic.tags,
+        pageCount: comic.maxPage,
+      ),
+      afterBaseWrite: (comicId) => _mirrorCommonState(identity, comicId),
+    );
+  }
+
+  String mirrorComicDetails(ComicDetails comic) {
+    final identity = identityFor(comic.sourceKey, comic.id);
+    if (!_domainReady) {
+      return identity.comicId;
+    }
+    final metadata = _ComicMetadata.fromDetails(comic);
+    return _safeMirror(
+      fallbackComicId: identity.comicId,
+      write: () => _db.ensureComicSource(
+        platform: identity.platform,
+        sourceComicId: comic.id,
+        title: comic.title,
+        subtitle: comic.subTitle ?? '',
+        description: comic.description ?? '',
+        author: metadata.author,
+        status: metadata.status,
+        updateTime: metadata.updateTime,
+        coverUri: comic.cover,
+        sourceUrl: comic.url,
+        sourceTitle: comic.title,
+        tags: comic.plainTags,
+        pageCount: comic.maxPage,
+      ),
+      afterBaseWrite: (comicId) {
+        _mirrorChapters(identity, comic.chapters);
+        _mirrorCommonState(identity, comicId);
+      },
+    );
+  }
+
+  /// Purges the domain mirror of a deleted local comic. Local ids are reused,
+  /// so leaving the mirror behind would let the next comic with the same id
+  /// inherit the old comic's work link (title/cover) — issue #135.
+  void removeLocalComicMirror(String sourceComicId) {
+    if (!_domainReady) {
+      return;
+    }
+    try {
+      final identity = identityFor(
+        SourcePlatformResolver.localCanonicalKey,
+        sourceComicId,
+      );
+      _db.removeComicSource(
+        platform: identity.platform,
+        sourceComicId: sourceComicId,
+      );
+    } catch (error, stackTrace) {
+      Log.warning('Domain mirror purge failed', '$error\n$stackTrace');
+    }
+  }
+
+  String mirrorLocalComic(LocalComic comic) {
+    final identity = identityFor(comic.sourceKey, comic.id);
+    if (!_domainReady) {
+      return identity.comicId;
+    }
+    final metadata = _ComicMetadata.fromLocalComic(comic);
+    return _safeMirror(
+      fallbackComicId: identity.comicId,
+      write: () {
+        final comicId = _db.ensureComicSource(
+          platform: identity.platform,
+          sourceComicId: comic.id,
+          title: comic.title,
+          subtitle: comic.subtitle,
+          description: comic.description,
+          author: metadata.author,
+          status: metadata.status,
+          updateTime: metadata.updateTime,
+          coverUri: comic.cover,
+          tags: comic.tags,
+          pageCount: metadata.pageCount,
+          timestamp: comic.createdAt.millisecondsSinceEpoch,
+        );
+        _db.markLocalLibraryItem(
+          comicId: comicId,
+          directory: comic.directory,
+          importRoot: comic.baseDir,
+        );
+        return comicId;
+      },
+      afterBaseWrite: (comicId) {
+        _mirrorChapters(identity, comic.chapters);
+        _mirrorCommonState(identity, comicId);
+      },
+    );
+  }
+
+  String _safeMirror({
+    required String fallbackComicId,
+    required String Function() write,
+    required void Function(String comicId) afterBaseWrite,
+  }) {
+    try {
+      final comicId = write();
+      try {
+        afterBaseWrite(comicId);
+      } catch (error, stackTrace) {
+        Log.warning(
+          'Domain mirror skipped common state',
+          '$error\n$stackTrace',
+        );
+      }
+      return comicId;
+    } catch (error, stackTrace) {
+      Log.warning('Domain mirror failed', '$error\n$stackTrace');
+      return fallbackComicId;
+    }
+  }
+
+  void _mirrorCommonState(ComicIdentity identity, String comicId) {
+    final history = _findHistory(identity.sourceComicId, identity.type);
+    if (history != null) {
+      _db.markRead(
+        comicId: comicId,
+        occurredAt: history.time.millisecondsSinceEpoch,
+      );
+    }
+    for (final folder in _findFavoriteFolders(
+      identity.sourceComicId,
+      identity.type,
+    )) {
+      _db.markFavorite(comicId: comicId, folderName: folder);
+    }
+  }
+
+  History? _findHistory(String sourceComicId, ComicType type) {
+    if (_historyManager == null && !App.isInitialized) {
+      return null;
+    }
+    if (!_history.isInitialized) {
+      return null;
+    }
+    try {
+      return _history.find(sourceComicId, type);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  LocalComic? _findLocalComic(String sourceComicId, ComicType type) {
+    if (_localManager == null && !App.isInitialized) {
+      return null;
+    }
+    try {
+      return _local.find(sourceComicId, type);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<String> _findFavoriteFolders(String sourceComicId, ComicType type) {
+    if (_favoritesManager == null && !App.isInitialized) {
+      return const [];
+    }
+    try {
+      return _favorites.find(sourceComicId, type);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  FavoriteItem? _findFavoriteItem(
+    List<String> folders,
+    String sourceComicId,
+    ComicType type,
+  ) {
+    if (folders.isEmpty || (_favoritesManager == null && !App.isInitialized)) {
+      return null;
+    }
+    try {
+      return _favorites.getComic(folders.first, sourceComicId, type);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  FavoriteItemWithUpdateInfo? _findFollowUpdateInfo(
+    String sourceComicId,
+    ComicType type,
+  ) {
+    if (_favoritesManager == null && !App.isInitialized) {
+      return null;
+    }
+    try {
+      return _favorites.getComicWithUpdatesInfoIn(
+        FollowUpdateScope.folders(),
+        sourceComicId,
+        type,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  DomainComicBaseInfo? _findDomainBaseInfo(ComicIdentity identity) {
+    try {
+      final domain = _domain ?? (App.isInitialized ? App.domain : null);
+      if (domain == null || !domain.isInitialized) {
+        return null;
+      }
+      return domain.getComicBaseInfoBySource(
+        platform: identity.platform,
+        sourceComicId: identity.sourceComicId,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  ComicChapters? _findChapters(Comic comic) {
+    if (comic is LocalComic) {
+      return comic.chapters;
+    }
+    return _findDomainChapters(comic);
+  }
+
+  ComicChapters? _findDomainChapters(Comic comic) {
+    try {
+      final domain = _domain ?? (App.isInitialized ? App.domain : null);
+      if (domain == null || !domain.isInitialized) {
+        return null;
+      }
+      final identity = identityFor(comic.sourceKey, comic.id);
+      final rows = domain.getSourceChapters(
+        platform: identity.platform,
+        sourceComicId: identity.sourceComicId,
+      );
+      if (rows.isEmpty) {
+        return null;
+      }
+      if (rows.any((row) => row.sourceChapterGroup != null)) {
+        final grouped = <String, Map<String, String>>{};
+        for (final row in rows) {
+          final groupIndex = row.sourceChapterGroup ?? 1;
+          final groupName = row.sourceGroupTitle ?? groupIndex.toString();
+          final sourceId = row.sourceChapterId ?? row.chapterId;
+          grouped.putIfAbsent(groupName, () => <String, String>{})[sourceId] =
+              row.title;
+        }
+        return ComicChapters.grouped(grouped);
+      }
+      // Check for multi-scanlation-group: if chapter titles contain group
+      // info (e.g. "Ch.5 - Luna Toons"), aggregate by chapter number.
+      final versions = <String, List<ComicChapterVersion>>{};
+      for (final row in rows) {
+        final parsed = parseChapterTitle(row.title);
+        final chNumber = parsed.chapterNumber?.toString() ??
+            row.sourceChapterId ??
+            row.chapterId;
+        versions.putIfAbsent(chNumber, () => []).add(ComicChapterVersion(
+          scanlationGroup: parsed.scanlationGroup,
+          title: parsed.displayTitle,
+          chapterKey: row.sourceChapterId ?? row.chapterId,
+        ));
+      }
+      // Only collapse into versioned mode when the same chapter number actually
+      // carries multiple scanlation groups. Plain duplicate titles (e.g. two
+      // "第5话" entries without group info) keep their separate flat entries so
+      // they stay independent chapters (the "hide duplicate chapters" feature
+      // relies on them staying distinct).
+      final hasMultipleGroups = versions.values.any(
+        (v) => v.length > 1 && v.any((x) => x.scanlationGroup != null),
+      );
+      if (hasMultipleGroups) {
+        return ComicChapters.versioned(versions);
+      }
+      return ComicChapters({
+        for (final row in rows) row.sourceChapterId ?? row.chapterId: row.title,
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? _chapterTitleAt(ComicChapters chapters, History history) {
+    return chapters.titleAt(history.ep, group: history.group);
+  }
+
+  String? _latestChapterTitleFallbackFor(Comic comic) {
+    final identity = identityFor(comic.sourceKey, comic.id);
+    final updateInfo = comic is FavoriteItemWithUpdateInfo
+        ? comic
+        : _findFollowUpdateInfo(comic.id, identity.type);
+    return _pick([
+      _extractChapterTitle(updateInfo?.updateTime),
+      if (comic is! History) _extractChapterTitle(comic.description),
+      if (comic is! History) _extractChapterTitle(comic.subtitle),
+    ]);
+  }
+
+  String? _extractChapterTitle(String? text) {
+    if (text == null || text.trim().isEmpty) {
+      return null;
+    }
+    final lines = text
+        .replaceAll('|', '\n')
+        .split('\n')
+        .map((e) => e.replaceAll(RegExp(r'\s+'), ' ').trim())
+        .where((e) => e.isNotEmpty);
+    for (final line in lines) {
+      if (RegExp(r'^\d{4}[-/]\d{1,2}[-/]\d{1,2}').hasMatch(line)) {
+        continue;
+      }
+      final cnMatch = RegExp(
+        r'(?:第\s*)?\d+(?:\.\d+)?\s*(?:话|話|章|回|卷|集)',
+        caseSensitive: false,
+      ).firstMatch(line);
+      if (cnMatch != null) {
+        return cnMatch.group(0)?.trim();
+      }
+      final enMatch = RegExp(
+        r'(?:ch(?:apter)?\.?|ep(?:isode)?\.?)\s*\d+(?:\.\d+)?',
+        caseSensitive: false,
+      ).firstMatch(line);
+      if (enMatch != null) {
+        return enMatch.group(0)?.trim();
+      }
+    }
+    return null;
+  }
+
+  void _mirrorChapters(ComicIdentity identity, ComicChapters? chapters) {
+    if (chapters == null) {
+      return;
+    }
+    final rows = <DomainComicChapterInfo>[];
+    var chapterIndex = 1;
+    if (chapters.isGrouped) {
+      var groupIndex = 1;
+      for (final groupName in chapters.groups) {
+        var indexInGroup = 1;
+        for (final entry in chapters.getGroup(groupName).entries) {
+          rows.add(
+            DomainComicChapterInfo(
+              chapterId: '${identity.comicId}:chapter:$chapterIndex',
+              title: entry.value,
+              chapterIndex: chapterIndex,
+              sourceChapterId: entry.key,
+              sourceChapterIndex: chapterIndex,
+              sourceChapterGroup: groupIndex,
+              sourceGroupTitle: groupName,
+              sourceChapterIndexInGroup: indexInGroup,
+            ),
+          );
+          chapterIndex++;
+          indexInGroup++;
+        }
+        groupIndex++;
+      }
+    } else {
+      for (final entry in chapters.allChapters.entries) {
+        rows.add(
+          DomainComicChapterInfo(
+            chapterId: '${identity.comicId}:chapter:$chapterIndex',
+            title: entry.value,
+            chapterIndex: chapterIndex,
+            sourceChapterId: entry.key,
+            sourceChapterIndex: chapterIndex,
+          ),
+        );
+        chapterIndex++;
+      }
+    }
+    _db.replaceSourceChapters(
+      platform: identity.platform,
+      sourceComicId: identity.sourceComicId,
+      chapters: rows,
+    );
+  }
+
+  String? _sourceNameFor(String sourceKey) {
+    if (sourceKey == 'local') {
+      return 'Local';
+    }
+    // A collection's members may come from several sources, so naming one of
+    // them (or the collection's own synthetic source) would be misleading.
+    // The tile badges it as a collection instead — done in the UI layer, which
+    // is where translation lives.
+    if (ComicCollectionStore.isCollectionSourceKey(sourceKey)) {
+      return null;
+    }
+    return ComicSource.find(sourceKey)?.name;
+  }
+
+  List<String> _mergeTags(List<List<String>> groups) {
+    final result = <String>[];
+    for (final group in groups) {
+      for (final tag in group) {
+        final clean = _ComicMetadata.clean(tag);
+        if (clean == null || _ComicMetadata.isMetadataTag(clean)) {
+          continue;
+        }
+        if (!result.contains(clean)) {
+          result.add(clean);
+        }
+      }
+    }
+    return result;
+  }
+
+  String? _pick(Iterable<String?> values) {
+    for (final value in values) {
+      final clean = _ComicMetadata.clean(value);
+      if (clean != null) {
+        return clean;
+      }
+    }
+    return null;
+  }
+}
+
+class _ComicMetadata {
+  const _ComicMetadata({
+    this.author,
+    this.status,
+    this.updateTime,
+    this.pageCount,
+  });
+
+  final String? author;
+  final String? status;
+  final String? updateTime;
+  final int? pageCount;
+
+  factory _ComicMetadata.fromComic(Comic comic) {
+    final tags = comic.tags ?? const <String>[];
+    return _ComicMetadata(
+      author:
+          clean(comic.subtitle) ??
+          _first(namespaceValues(tags, _authorNamespaces)),
+      status: statusFromTags(tags),
+      updateTime: _first(
+        namespaceValues(tags, _updateNamespaces).where(_looksLikeDate),
+      ),
+      pageCount: comic.maxPage ?? _firstPageCount(tags),
+    );
+  }
+
+  factory _ComicMetadata.fromFavorite(FavoriteItem favorite) {
+    return _ComicMetadata(
+      author:
+          clean(favorite.author) ??
+          _first(namespaceValues(favorite.tags, _authorNamespaces)),
+      status: statusFromTags(favorite.tags),
+      updateTime: _first(
+        namespaceValues(favorite.tags, _updateNamespaces).where(_looksLikeDate),
+      ),
+      pageCount: _firstPageCount(favorite.tags),
+    );
+  }
+
+  factory _ComicMetadata.fromLocalComic(LocalComic comic) {
+    return _ComicMetadata(
+      author:
+          clean(comic.subtitle) ??
+          _first(namespaceValues(comic.tags, _authorNamespaces)),
+      status: statusFromTags(comic.tags),
+      updateTime: _first(
+        namespaceValues(comic.tags, _updateNamespaces).where(_looksLikeDate),
+      ),
+      pageCount: comic.maxPage ?? _firstPageCount(comic.tags),
+    );
+  }
+
+  factory _ComicMetadata.fromDetails(ComicDetails comic) {
+    final tags = comic.plainTags;
+    return _ComicMetadata(
+      author:
+          clean(comic.findAuthor()) ??
+          clean(comic.subTitle) ??
+          clean(comic.uploader) ??
+          _first(namespaceValues(tags, _authorNamespaces)),
+      status: statusFromTags(tags),
+      updateTime:
+          clean(comic.findUpdateTime()) ??
+          _first(
+            namespaceValues(tags, _updateNamespaces).where(_looksLikeDate),
+          ),
+      pageCount: comic.maxPage ?? _firstPageCount(tags),
+    );
+  }
+
+  static String? statusFromTags(List<String>? tags) {
+    if (tags == null) {
+      return null;
+    }
+    return _first(namespaceValues(tags, _statusNamespaces)) ??
+        _first(tags.map(clean).whereType<String>().where(_looksLikeStatus));
+  }
+
+  /// Page count a source reported as a `pages:` style tag rather than through
+  /// [Comic.maxPage]. Kept as the source's own string: it may carry a suffix
+  /// the app has no business reformatting.
+  static String? pageCountFromTags(List<String>? tags) {
+    if (tags == null) {
+      return null;
+    }
+    return _first(namespaceValues(tags, _pagesNamespaces));
+  }
+
+  static List<String> namespaceValues(
+    List<String> tags,
+    Set<String> namespaces,
+  ) {
+    final values = <String>[];
+    for (final tag in tags) {
+      final index = tag.indexOf(':');
+      if (index <= 0) {
+        continue;
+      }
+      final namespace = _normalizeNamespace(tag.substring(0, index));
+      if (!namespaces.contains(namespace)) {
+        continue;
+      }
+      final value = clean(tag.substring(index + 1));
+      if (value != null) {
+        values.add(value);
+      }
+    }
+    return values;
+  }
+
+  static bool isMetadataTag(String tag) {
+    final index = tag.indexOf(':');
+    if (index <= 0) {
+      final value = clean(tag);
+      return value == null || _looksLikeDate(value) || _looksLikeStatus(value);
+    }
+    final namespace = _normalizeNamespace(tag.substring(0, index));
+    final value = clean(tag.substring(index + 1));
+    return _metadataNamespaces.contains(namespace) ||
+        value == null ||
+        _looksLikeDate(value) ||
+        _looksLikeStatus(value);
+  }
+
+  static String? clean(String? value) {
+    final result = value?.replaceAll('\n', ' ').trim();
+    return result == null ||
+            result.isEmpty ||
+            result == 'Unknown' ||
+            result.startsWith('Unknown:')
+        ? null
+        : result;
+  }
+
+  static int? _firstPageCount(List<String> tags) {
+    final value = _first(namespaceValues(tags, _pagesNamespaces));
+    return value == null ? null : int.tryParse(value);
+  }
+
+  static String? _first(Iterable<String> values) {
+    for (final value in values) {
+      final cleanValue = clean(value);
+      if (cleanValue != null) {
+        return cleanValue;
+      }
+    }
+    return null;
+  }
+
+  static bool _looksLikeDate(String value) {
+    return RegExp(r'^\d{4}[-/]\d{1,2}[-/]\d{1,2}').hasMatch(value) ||
+        RegExp(r'^\d{4}').hasMatch(value);
+  }
+
+  static bool _looksLikeStatus(String value) {
+    final normalized = value.trim().toLowerCase();
+    return const {
+      'completed',
+      'complete',
+      'ongoing',
+      'serializing',
+      '連載',
+      '連載中',
+      '连载',
+      '连载中',
+      '完結',
+      '完结',
+      '已完結',
+      '已完结',
+      '休載',
+      '休载',
+    }.contains(normalized);
+  }
+
+  static String _normalizeNamespace(String value) {
+    return value.trim().toLowerCase().replaceAll(' ', '');
+  }
+
+  static const _authorNamespaces = {
+    'author',
+    'artist',
+    'authors',
+    'artists',
+    'creator',
+    '原作',
+    '作者',
+    '作家',
+    '作画',
+    '作畫',
+    '漫畫',
+    '漫画',
+    '著者',
+    '绘师',
+    '繪師',
+  };
+
+  static const _statusNamespaces = {
+    'status',
+    'state',
+    'serialization',
+    '連載',
+    '连载',
+    '狀態',
+    '状态',
+  };
+
+  static const _updateNamespaces = {
+    'date',
+    'lastupdate',
+    'time',
+    'update',
+    'updated',
+    '更新',
+    '最後更新',
+    '最后更新',
+    '時間',
+    '时间',
+    '日期',
+  };
+
+  static const _pagesNamespaces = {'page', 'pages', '頁數', '页数'};
+
+  // Keep in sync with ComicDescription._metadataNamespaces, including the
+  // absence of 'language' (issue #288).
+  static const _metadataNamespaces = {
+    ..._authorNamespaces,
+    ..._statusNamespaces,
+    ..._updateNamespaces,
+    ..._pagesNamespaces,
+    'source',
+    'uploader',
+    '來源',
+    '来源',
+    '上傳者',
+    '上传者',
+  };
+}

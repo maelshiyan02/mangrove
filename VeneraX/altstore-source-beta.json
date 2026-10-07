@@ -1,0 +1,35 @@
+{
+  "name": "Venera (Beta)",
+  "identifier": "io.github.kyosee.venera.beta",
+  "subtitle": "Venera internal test builds — not for general use",
+  "iconURL": "https://raw.githubusercontent.com/Kyosee/venera/master/assets/app_icon.png",
+  "apps": [
+    {
+      "name": "Venera (Beta)",
+      "bundleIdentifier": "io.github.kyosee.venera",
+      "developerName": "Kyosee",
+      "subtitle": "Internal test builds — expect bugs",
+      "localizedDescription": "Venera is a cross-platform manga/comic reader with self-hosted Web frontend support.",
+      "iconURL": "https://raw.githubusercontent.com/Kyosee/venera/master/assets/app_icon.png",
+      "category": "entertainment",
+      "screenshots": [],
+      "versions": [
+        {
+          "version": "2.1.8",
+          "buildVersion": "223",
+          "date": "2026-07-11",
+          "localizedDescription": "",
+          "downloadURL": "https://github.com/Kyosee/venera/releases/download/v2.1.8-beta.1/venera-ios-2.1.8%2B223.ipa",
+          "size": 23121004,
+          "minOSVersion": "14.0"
+        }
+      ],
+      "version": "2.1.8",
+      "versionDate": "2026-07-11",
+      "versionDescription": "",
+      "downloadURL": "https://github.com/Kyosee/venera/releases/download/v2.1.8-beta.1/venera-ios-2.1.8%2B223.ipa",
+      "size": 23112214
+    }
+  ],
+  "news": []
+}

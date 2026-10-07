@@ -1,0 +1,36 @@
+﻿{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "启动 VeneraX",
+      "type": "shell",
+      "command": "${workspaceFolder}/VeneraX-portable/venera.exe",
+      "options": {
+        "cwd": "${workspaceFolder}/VeneraX-portable"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "启动 BallonTranslator",
+      "type": "shell",
+      "command": "${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win/python.exe",
+      "args": ["-m", "ballontranslator"],
+      "options": {
+        "cwd": "${workspaceFolder}/Ballonstranslator_win_minium",
+        "env": {
+          "PATH": "${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win;${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win/Scripts;${env:PATH}",
+          "ERROR_REPORTING": "FALSE"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+name: symbolicate_ios
+
+# Rebuilds the iOS AOT snapshot for a given ref (deterministic given the same
+# Flutter version + lockfile + Xcode) and symbolicates crash-report offsets
+# against the freshly generated App.framework dSYM. The UUID check proves the
+# rebuild is byte-identical to the shipped binary, so symbol names are exact.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag/commit matching the crashing build"
+        required: true
+        default: "v2.1.8-beta.1"
+      expected_uuid:
+        description: "App image UUID from the .ips (lowercase, dashed)"
+        required: false
+        default: "0c7143a3-b1f5-a69a-4c4f-f30279c01782"
+      app_offsets:
+        description: "Space-separated hex offsets into the App image"
+        required: true
+        default: "0x9590 0x39DAC 0x252F20 0x695BEC 0x68AB48 0x728E50 0x728DD0 0xBB74"
+      flutter_offsets:
+        description: "Space-separated hex offsets into Flutter.framework"
+        required: false
+        default: "0x572C04 0x57EE00 0x584334 0x584178 0x605C30 0x5E45FC"
+
+jobs:
+  symbolicate:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.ref }}
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          flutter-version-file: pubspec.yaml
+          architecture: x64
+      - run: sudo xcode-select --switch /Applications/Xcode_16.4.app
+      - run: flutter pub get
+      - run: flutter build ios --release --no-codesign
+      - name: Locate dSYM and verify UUID
+        run: |
+          set -euo pipefail
+          DSYM=$(find build -name 'App.framework.dSYM' -print -quit)
+          test -n "$DSYM" || { echo "App.framework.dSYM not found"; find build -name '*.dSYM'; exit 1; }
+          echo "DSYM=$DSYM" >> "$GITHUB_ENV"
+          dwarfdump --uuid "$DSYM"
+          EXPECTED="${{ github.event.inputs.expected_uuid }}"
+          if [ -n "$EXPECTED" ]; then
+            ACTUAL=$(dwarfdump --uuid "$DSYM" | awk '{print tolower($2)}' | head -1)
+            if [ "$ACTUAL" = "$EXPECTED" ]; then
+              echo "UUID MATCH: rebuild is byte-identical to shipped binary; symbols are exact."
+            else
+              echo "::warning::UUID MISMATCH (expected $EXPECTED, got $ACTUAL) — symbols are approximate."
+            fi
+          fi
+      - name: Symbolicate App offsets
+        run: |
+          set -euo pipefail
+          BIN="$DSYM/Contents/Resources/DWARF/App"
+          echo "=== App frames ==="
+          for off in ${{ github.event.inputs.app_offsets }}; do
+            SYM=$(xcrun atos -arch arm64 -o "$BIN" -l 0x0 "$off" || true)
+            echo "$off  ->  $SYM"
+          done
+      - name: Symbolicate Flutter engine offsets
+        if: ${{ github.event.inputs.flutter_offsets != '' }}
+        run: |
+          set -euo pipefail
+          FLUTTER_DSYM=$(find "$(dirname "$(which flutter)")/cache/artifacts/engine" -name 'Flutter.dSYM' -path '*ios-release*' -print -quit || true)
+          if [ -z "$FLUTTER_DSYM" ]; then
+            FLUTTER_DSYM=$(find "$(dirname "$(which flutter)")/cache/artifacts/engine" -name 'Flutter.dSYM' -print -quit || true)
+          fi
+          if [ -z "$FLUTTER_DSYM" ]; then
+            echo "Flutter.dSYM not present in engine artifacts; skipping engine frames."
+            exit 0
+          fi
+          BIN=$(find "$FLUTTER_DSYM" -type f -path '*DWARF*' -print -quit)
+          echo "=== Flutter engine frames ($FLUTTER_DSYM) ==="
+          for off in ${{ github.event.inputs.flutter_offsets }}; do
+            SYM=$(xcrun atos -arch arm64 -o "$BIN" -l 0x0 "$off" || true)
+            echo "$off  ->  $SYM"
+          done
+      - name: Upload dSYM for future crash reports
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-dsym-${{ github.event.inputs.ref }}
+          path: ${{ env.DSYM }}

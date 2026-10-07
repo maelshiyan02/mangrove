@@ -1,0 +1,156 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:venera/foundation/export_tasks.dart';
+
+/// Unit tests for the export-task data model (issue #54). These cover the
+/// persistence/resume logic — the part that must survive serialization and an
+/// app restart. The actual file/isolate work in [ExportTaskManager] needs a
+/// running app + storage and is verified on-device.
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('ExportFormat ext / label / fromName', () {
+    expect(ExportFormat.cbz.ext, '.cbz');
+    expect(ExportFormat.pdf.ext, '.pdf');
+    expect(ExportFormat.epub.ext, '.epub');
+    expect(ExportFormat.veneraComics.ext, '.venera_comics');
+    expect(ExportFormat.pdf.label, 'PDF');
+    expect(ExportFormat.veneraComics.label, 'venera_comics');
+    expect(ExportFormat.fromName('epub'), ExportFormat.epub);
+    // Unknown name falls back to cbz rather than throwing.
+    expect(ExportFormat.fromName('nonsense'), ExportFormat.cbz);
+  });
+
+  test('ExportComicRef key is stable and JSON round-trips', () {
+    final ref = ExportComicRef(id: 'abc', comicTypeValue: 7, title: 'Title');
+    expect(ref.key, 'abc_7');
+    final restored = ExportComicRef.fromJson(ref.toJson());
+    expect(restored.id, 'abc');
+    expect(restored.comicTypeValue, 7);
+    expect(restored.title, 'Title');
+    expect(restored.key, 'abc_7');
+  });
+
+  ExportTask makeTask({
+    ExportTaskStatus status = ExportTaskStatus.running,
+    Set<String>? doneKeys,
+  }) {
+    return ExportTask(
+      id: '1',
+      folderPath: '/dest',
+      format: ExportFormat.cbz,
+      comics: [
+        ExportComicRef(id: 'a', comicTypeValue: 1, title: 'A'),
+        ExportComicRef(id: 'b', comicTypeValue: 1, title: 'B'),
+        ExportComicRef(id: 'c', comicTypeValue: 1, title: 'C'),
+        ExportComicRef(id: 'd', comicTypeValue: 1, title: 'D'),
+      ],
+      createdAt: DateTime(2024),
+      status: status,
+      doneKeys: doneKeys,
+    );
+  }
+
+  test('progress / done reflect doneKeys', () {
+    final task = makeTask(doneKeys: {'a_1'});
+    expect(task.total, 4);
+    expect(task.done, 1);
+    expect(task.progress, closeTo(0.25, 1e-9));
+  });
+
+  test('an active task is persisted as paused so it is not auto-run on restart',
+      () {
+    final task = makeTask(status: ExportTaskStatus.running, doneKeys: {'a_1'});
+    final json = task.toJson();
+    expect(json['status'], ExportTaskStatus.paused.name);
+
+    final restored = ExportTask.fromJson(json);
+    expect(restored.status, ExportTaskStatus.paused);
+    expect(restored.isActive, isTrue);
+    // Resume must skip already-exported comics.
+    expect(restored.doneKeys, {'a_1'});
+    expect(restored.total, 4);
+    expect(restored.folderPath, '/dest');
+    expect(restored.format, ExportFormat.cbz);
+  });
+
+  test('a terminal task keeps its status across serialization', () {
+    for (final status in [
+      ExportTaskStatus.completed,
+      ExportTaskStatus.canceled,
+      ExportTaskStatus.failed,
+    ]) {
+      final task = makeTask(status: status);
+      expect(task.isActive, isFalse);
+      final restored = ExportTask.fromJson(task.toJson());
+      expect(restored.status, status);
+    }
+  });
+
+  test('merged flag round-trips', () {
+    final task = ExportTask(
+      id: '9',
+      folderPath: '/dest',
+      format: ExportFormat.veneraComics,
+      comics: const [],
+      createdAt: DateTime(2024),
+      merged: true,
+    );
+    expect(task.merged, isTrue);
+    expect(ExportTask.fromJson(task.toJson()).merged, isTrue);
+    // Default is off (per-comic files).
+    expect(makeTask().merged, isFalse);
+  });
+
+  test('phase defaults to preparing and round-trips (#92)', () {
+    // Progress-phase tracking (#92): a fresh task starts at preparing, and the
+    // phase must survive persistence so a restored/paused task shows sensibly.
+    expect(makeTask().phase, ExportPhase.preparing);
+    final task = makeTask()..phase = ExportPhase.writing;
+    final restored = ExportTask.fromJson(task.toJson());
+    expect(restored.phase, ExportPhase.writing);
+  });
+
+  test('unknown/missing phase in JSON falls back to preparing', () {
+    // Backups written before #92 have no "phase" key.
+    final json = makeTask().toJson()..remove('phase');
+    expect(ExportTask.fromJson(json).phase, ExportPhase.preparing);
+    final bad = makeTask().toJson()..['phase'] = 'garbage';
+    expect(ExportTask.fromJson(bad).phase, ExportPhase.preparing);
+  });
+
+  test('images format: empty ext, directory output, round-trips by name', () {
+    expect(ExportFormat.images.ext, '');
+    expect(ExportFormat.images.isDirectoryOutput, isTrue);
+    expect(ExportFormat.images.label, 'Image folder');
+    expect(ExportFormat.fromName('images'), ExportFormat.images);
+    // Every archive/document format is a single file output.
+    for (final f in [
+      ExportFormat.cbz,
+      ExportFormat.pdf,
+      ExportFormat.epub,
+      ExportFormat.veneraComics,
+    ]) {
+      expect(f.isDirectoryOutput, isFalse, reason: '$f');
+    }
+  });
+
+  test('useTranslations flag round-trips and defaults off', () {
+    expect(makeTask().useTranslations, isFalse);
+    final task = ExportTask(
+      id: '9',
+      folderPath: '/dest',
+      format: ExportFormat.cbz,
+      comics: const [],
+      createdAt: DateTime(2024),
+      useTranslations: true,
+    );
+    expect(task.useTranslations, isTrue);
+    expect(
+      ExportTask.fromJson(task.toJson()).useTranslations,
+      isTrue,
+    );
+    // Old persisted tasks have no "useTranslations" key.
+    final json = makeTask().toJson()..remove('useTranslations');
+    expect(ExportTask.fromJson(json).useTranslations, isFalse);
+  });
+}

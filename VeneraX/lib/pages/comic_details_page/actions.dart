@@ -1,0 +1,1002 @@
+part of 'comic_page.dart';
+
+abstract mixin class _ComicPageActions {
+  void update();
+
+  /// Re-fetches the local comic from the database and triggers a rebuild.
+  /// Called after operations that modify LocalComic data (e.g. setCover).
+  void refreshLocalComic();
+
+  /// Re-runs the detail fetch. Needed after an edit that changes what the
+  /// source will return (currently: editing the collection this comic is), where
+  /// a plain [update] would rebuild from the stale data still in hand.
+  void reloadDetails();
+
+  Future<void> _showRelatedSourcesManager();
+
+  ComicDetails get comic;
+
+  ComicSource? get comicSource => ComicSource.find(comic.sourceKey);
+
+  /// Whether this page is showing a user-assembled collection rather than a
+  /// comic from a real source. Gates the actions that assume an upstream source.
+  bool get _isCollection =>
+      ComicCollectionStore.isCollectionSourceKey(comic.sourceKey);
+
+  History? get history;
+
+  /// Whether the network fetch that resolves the chapter list is still running.
+  /// A comic with chapters shows [ComicDetails.chapters] == null until this
+  /// completes, so pre-translate must wait rather than treat it as chapter-less.
+  bool get isDetailsLoading;
+
+  /// Whether this comic's chapter list is currently rendered with same-title
+  /// repeats collapsed. Display-only: every consumer (reader, download,
+  /// pre-translate) still addresses chapters by their original flat index.
+  bool get hideDuplicateChapters =>
+      ChapterDuplicatePrefs.isHidden(comic.id, comic.sourceKey);
+
+  /// Flat indices this comic would hide, computed per group so that two editions
+  /// each having a "第一话" is not treated as a repeat.
+  Set<int> get duplicateChapterIndices =>
+      comic.chapters?.duplicateTitleIndices() ?? const {};
+
+  int get _duplicateChapterCount => duplicateChapterIndices.length;
+
+  bool isLiking = false;
+
+  bool isLiked = false;
+
+  void likeOrUnlike() async {
+    final source = comicSource;
+    if (source?.likeOrUnlikeComic == null) return;
+    if (isLiking) return;
+    isLiking = true;
+    update();
+    var res = await source!.likeOrUnlikeComic!(comic.id, isLiked);
+    if (res.error) {
+      App.rootContext.showMessage(message: res.errorMessage!);
+    } else {
+      isLiked = !isLiked;
+    }
+    isLiking = false;
+    update();
+  }
+
+  /// whether the comic is added to local favorite
+  bool isAddToLocalFav = false;
+
+  /// whether the comic is favorite on the server
+  bool isFavorite = false;
+
+  FavoriteItem _toFavoriteItem() {
+    var rawTags = <String>[];
+    for (var e in comic.tags.entries) {
+      rawTags.addAll(e.value.map((tag) => '${e.key}:$tag'));
+    }
+    final buckets = splitFavoriteTags(rawTags);
+    final author = buckets.authors.isNotEmpty
+        ? buckets.authors.join(', ')
+        : (comic.subTitle ?? comic.uploader ?? '');
+    return FavoriteItem(
+      id: comic.id,
+      name: comic.title,
+      coverPath: comic.cover,
+      author: author,
+      type: comic.comicType,
+      tags: buckets.tags,
+      authors: buckets.authors,
+      status: buckets.status,
+      updateTimeMeta: buckets.updateTime,
+      extraMeta: buckets.extraMeta,
+    );
+  }
+
+  void openFavPanel() {
+    showSideBar(
+      App.rootContext,
+      _FavoritePanel(
+        cid: comic.id,
+        type: comic.comicType,
+        isFavorite: isFavorite,
+        onFavorite: (local, network) {
+          if (network != null) {
+            isFavorite = network;
+          }
+          if (local != null) {
+            isAddToLocalFav = local;
+          }
+          update();
+        },
+        favoriteItem: _toFavoriteItem(),
+        updateTime: comic.findUpdateTime(),
+      ),
+    );
+  }
+
+  void quickFavorite() {
+    var folder = appdata.settings['quickFavorite'];
+    if (folder is! String || !LocalFavoritesManager().existsFolder(folder)) {
+      return;
+    }
+    LocalFavoritesManager().addComic(
+      folder,
+      _toFavoriteItem(),
+      null,
+      comic.findUpdateTime(),
+    );
+    isAddToLocalFav = true;
+    update();
+    App.rootContext.showMessage(message: "Added".tl);
+  }
+
+  /// whether the comic is in the "Read Later" list
+  bool get isInReadLater =>
+      ReadLaterManager().isExist(comic.id, comic.comicType);
+
+  void toggleReadLater() async {
+    if (isInReadLater) {
+      await ReadLaterManager().remove(comic.id, comic.comicType);
+      update();
+      App.rootContext.showMessage(message: "Removed from read later".tl);
+    } else {
+      await ReadLaterManager().addItem(
+        ReadLaterItem(
+          id: comic.id,
+          title: comic.title,
+          subtitle: comic.subTitle,
+          cover: comic.cover,
+          type: comic.comicType,
+          tags: comic.plainTags,
+          time: DateTime.now(),
+        ),
+      );
+      update();
+      App.rootContext.showMessage(message: "Added to read later".tl);
+    }
+  }
+
+  void share() {
+    var text = comic.title;
+    if (comic.url != null) {
+      text += '\n${comic.url}';
+    }
+    Share.shareText(text);
+  }
+
+  /// Translation needs two things that never travel with a backup: the OCR
+  /// models downloaded onto THIS device, and a configured LLM endpoint. A comic
+  /// switched on elsewhere therefore arrives unusable, so instead of hiding the
+  /// button (leaving the user with nothing to act on) we name the missing half
+  /// and offer to open the page that fixes it. Returns false when it prompted.
+  bool _ensureTranslationReady() {
+    var context = App.rootContext;
+    var lang = TranslationConfig.of(comic.id, comic.sourceKey).sourceLang;
+    if (!TranslationModels.isReadyFor(lang)) {
+      showConfirmDialog(
+        context: context,
+        title: "Models not downloaded".tl,
+        content:
+            "AI translation needs the offline recognition models on this device. Download them now?"
+                .tl,
+        confirmText: "Go to download".tl,
+        onConfirm: () =>
+            context.to(() => TranslationModelsPage(sourceLang: lang)),
+      );
+      return false;
+    }
+    if (!LlmTranslator.isConfigured) {
+      showConfirmDialog(
+        context: context,
+        title: "LLM provider not configured".tl,
+        content:
+            "AI translation needs a translation service. Add one now? A no-key option is available."
+                .tl,
+        confirmText: "Go to settings".tl,
+        onConfirm: () => context.to(() => const LlmProvidersPage()),
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /// Queues selected chapters for background pre-translation so their pages are
+  /// rendered and cached before the user opens the reader (no in-reader wait).
+  void preTranslate() {
+    if (!ImageTranslationService.isEnabledForComic(comic.id, comic.sourceKey)) {
+      App.rootContext.showMessage(
+        message: "Enable AI translation in the reader for this comic first".tl,
+      );
+      return;
+    }
+    if (!_ensureTranslationReady()) {
+      return;
+    }
+    // The chapter list arrives with the background network fetch; until it
+    // finishes, comic.chapters is null even for a comic that HAS chapters.
+    // Treating that as chapter-less would wrongly start a whole-comic job and
+    // skip the picker, so wait for the fetch instead.
+    if (isDetailsLoading && comic.chapters == null) {
+      App.rootContext.showMessage(message: "Loading chapters, please wait".tl);
+      return;
+    }
+    // Ordered (id, title) list of chapters; a chapter-less comic is one job.
+    final entries = <(String, String)>[];
+    // When the source groups chapters (e.g. comick's English/Latin editions),
+    // keep the grouping so the picker can show tabs. Each group maps to the
+    // flat indices into [entries] it covers, preserving the same order
+    // allChapters merges them in.
+    List<(String, List<int>)>? groups;
+    final chapters = comic.chapters;
+    if (chapters == null) {
+      entries.add(('0', comic.title));
+    } else if (chapters.isGrouped) {
+      groups = [];
+      var index = 1;
+      for (var groupName in chapters.groups) {
+        var indices = <int>[];
+        for (var entry in chapters.getGroup(groupName).entries) {
+          indices.add(entries.length);
+          entries.add((
+            entry.key,
+            entry.value.isEmpty ? 'E$index' : entry.value,
+          ));
+          index++;
+        }
+        groups.add((groupName, indices));
+      }
+    } else {
+      var index = 1;
+      for (var entry in chapters.allChapters.entries) {
+        entries.add((entry.key, entry.value.isEmpty ? 'E$index' : entry.value));
+        index++;
+      }
+    }
+
+    void startJob(List<int> selected) {
+      if (selected.isEmpty) return;
+      var picked = [
+        for (var i in selected)
+          PreTranslationChapter(eid: entries[i].$1, title: entries[i].$2),
+      ];
+      var task = PreTranslationTaskManager.instance.start(
+        cid: comic.id,
+        sourceKey: comic.sourceKey,
+        comicType: comic.comicType,
+        title: comic.title,
+        cover: comic.cover,
+        chapters: picked,
+      );
+      App.rootContext.showMessage(
+        message: task == null
+            ? "A pre-translation task is already running".tl
+            : "Pre-translation started".tl,
+      );
+    }
+
+    // A chapter-less comic has no picker to open, but pre-translation still
+    // runs in the background and may spend paid requests, so confirm before
+    // starting instead of kicking it off the moment the button is tapped.
+    if (chapters == null) {
+      showConfirmDialog(
+        context: App.rootContext,
+        title: "Start pre-translation?".tl,
+        content:
+            "Pages are translated in the background. If your configured AI endpoint is paid this may cost money; the offline engine is free."
+                .tl,
+        onConfirm: () => startJob([0]),
+      );
+      return;
+    }
+    App.rootContext.to(
+      () => _SelectPreTranslateChapter(
+        cid: comic.id,
+        sourceKey: comic.sourceKey,
+        comicType: comic.comicType,
+        title: comic.title,
+        cover: comic.cover,
+        entries: entries,
+        groups: groups,
+        finishSelect: startJob,
+      ),
+    );
+  }
+
+  /// Clears every translation (both stored text and rendered images) and the
+  /// learned glossary for this comic, so subsequent reading / pre-translation is
+  /// produced fresh. Reached by long-pressing the pre-translate button; used
+  /// when translations came out wrong and need to be redone.
+  void reTranslate() {
+    showConfirmDialog(
+      context: App.rootContext,
+      title: "Re-translate this comic?".tl,
+      content:
+          "This clears all translations and the learned glossary for this comic, then translates again."
+              .tl,
+      onConfirm: () async {
+        await ImageTranslationService.instance.retranslate(
+          comic.id,
+          comic.sourceKey,
+        );
+        // This comic's status is stale now; drop its ticks too.
+        PreTranslationTaskManager.instance.resetComicStatus(
+          comic.id,
+          comic.sourceKey,
+        );
+        App.rootContext.showMessage(message: "Translation results cleared".tl);
+        // Offer to pre-translate again right away; the user can also just
+        // reopen the reader, which translates on demand.
+        if (ImageTranslationService.isReadyForComic(
+          comic.id,
+          comic.sourceKey,
+        )) {
+          preTranslate();
+        }
+      },
+    );
+  }
+
+  /// read the comic
+  ///
+  /// [ep] the episode number, start from 1
+  ///
+  /// [page] the page number, start from 1
+  ///
+  /// [group] the chapter group number, start from 1
+  ///
+  /// [filteredChapters] optional filtered ComicChapters for scanlation-group
+  /// selection. When provided, the Reader opens with this filtered view
+  /// (so it only shows chapters from that scanlation group) while the full
+  /// chapters object remains on the comic model.
+  void read([int? ep, int? page, int? group, ComicChapters? filteredChapters]) {
+    // Heal a stale history row (e.g. a reused local id whose old record kept
+    // the previous comic's title/cover, issue #135) before the reader
+    // persists it again.
+    if (history != null) {
+      history!.title = comic.title;
+      history!.subtitle = comic.subTitle ?? '';
+      history!.cover = comic.cover;
+    }
+    App.rootContext
+        .to(
+          () => Reader(
+            type: comic.comicType,
+            cid: comic.id,
+            name: comic.title,
+            chapters: filteredChapters ?? comic.chapters,
+            initialChapter: ep,
+            initialPage: page,
+            initialChapterGroup: group,
+            history: history ?? History.fromModel(model: comic, ep: 0, page: 0),
+            author: comic.findAuthor() ?? '',
+            tags: comic.plainTags,
+          ),
+        )
+        .then((_) {
+          onReadEnd();
+        });
+  }
+
+  void continueRead() {
+    var ep = history?.ep;
+    var page = history?.page;
+    var group = history?.group;
+    read(ep, page, group);
+  }
+
+  void onReadEnd();
+
+  void download() async {
+    final source = comicSource;
+    if (source == null) {
+      App.rootContext.showMessage(message: "Comic source not found".tl);
+      return;
+    }
+    if (LocalManager().isDownloading(comic.id, comic.comicType)) {
+      App.rootContext.showMessage(message: "The comic is downloading".tl);
+      return;
+    }
+    if (comic.chapters == null &&
+        LocalManager().isDownloaded(comic.id, comic.comicType, 0)) {
+      App.rootContext.showMessage(message: "The comic is downloaded".tl);
+      return;
+    }
+    if (!await ensureDownloadStorageWritable()) return;
+
+    if (source.archiveDownloader != null) {
+      bool useNormalDownload = false;
+      List<ArchiveInfo>? archives;
+      int selected = -1;
+      bool isLoading = false;
+      bool isGettingLink = false;
+      await showDialog(
+        context: App.rootContext,
+        builder: (context) {
+          return StatefulBuilder(
+            builder: (context, setState) {
+              return ContentDialog(
+                title: "Download".tl,
+                content: RadioGroup<int>(
+                  groupValue: selected,
+                  onChanged: (v) {
+                    setState(() {
+                      selected = v ?? selected;
+                    });
+                  },
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      RadioListTile<int>(value: -1, title: Text("Normal".tl)),
+                      ExpansionTile(
+                        title: Text("Archive".tl),
+                        shape: const RoundedRectangleBorder(
+                          borderRadius: BorderRadius.zero,
+                        ),
+                        collapsedShape: const RoundedRectangleBorder(
+                          borderRadius: BorderRadius.zero,
+                        ),
+                        onExpansionChanged: (b) {
+                          if (!isLoading && b && archives == null) {
+                            isLoading = true;
+                            source.archiveDownloader!
+                                .getArchives(comic.id)
+                                .then((value) {
+                                  if (value.success) {
+                                    archives = value.data;
+                                  } else {
+                                    App.rootContext.showMessage(
+                                      message: value.errorMessage!,
+                                    );
+                                  }
+                                  setState(() {
+                                    isLoading = false;
+                                  });
+                                });
+                          }
+                        },
+                        children: [
+                          if (archives == null)
+                            const ListLoadingIndicator().toCenter()
+                          else
+                            for (int i = 0; i < archives!.length; i++)
+                              RadioListTile<int>(
+                                value: i,
+                                title: Text(archives![i].title),
+                                subtitle: Text(archives![i].description),
+                              ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  Button.filled(
+                    isLoading: isGettingLink,
+                    onPressed: () async {
+                      if (selected == -1) {
+                        useNormalDownload = true;
+                        context.pop();
+                        return;
+                      }
+                      setState(() {
+                        isGettingLink = true;
+                      });
+                      var res = await source.archiveDownloader!.getDownloadUrl(
+                        comic.id,
+                        archives![selected].id,
+                      );
+                      if (res.error) {
+                        App.rootContext.showMessage(message: res.errorMessage!);
+                        setState(() {
+                          isGettingLink = false;
+                        });
+                      } else if (context.mounted) {
+                        if (res.data.isNotEmpty) {
+                          LocalManager().addTask(
+                            ArchiveDownloadTask(res.data, comic),
+                          );
+                          App.rootContext.showMessage(
+                            message: "Download started".tl,
+                          );
+                        }
+                        context.pop();
+                      }
+                    },
+                    child: Text("Confirm".tl),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+      if (!useNormalDownload) {
+        return;
+      }
+    }
+
+    // The comic details may be a local-first placeholder whose chapter info
+    // hasn't been resolved yet (background network fetch still pending or
+    // failed). In that case a multi-chapter comic looks single-chapter and
+    // would download `chapter/null`. Resolve authoritative details first.
+    var details = comic;
+    if (details.chapters == null && source.loadComicInfo != null) {
+      try {
+        var res = await source.loadComicInfo!(comic.id);
+        if (res.success && res.data.chapters != null) {
+          details = res.data;
+        }
+      } catch (_) {
+        // Network/JS fetch failed; fall back to the current comic info so the
+        // download flow doesn't break or hang.
+      }
+    }
+
+    if (details.chapters == null) {
+      LocalManager().addTask(
+        ImagesDownloadTask(source: source, comicId: comic.id, comic: details),
+      );
+    } else {
+      List<String>? selected;
+      await showSideBar(
+        App.rootContext,
+        _SelectDownloadChapter(
+          _buildDownloadSections(details.chapters!, hideDuplicateChapters),
+          (v) => selected = v,
+        ),
+      );
+      if (selected == null || selected!.isEmpty) return;
+      // 每章一个任务（用户定案）：下载页里同漫画的不同章节各自成卡、可独立
+      // 暂停/取消，队列并行度内并行下载。漫画根目录在这里**解析一次**并显式
+      // 传给每个任务——findValidDirectoryName 按磁盘去重，若让并行任务各自
+      // 解析，第二个任务会被派生到 "Title(1)"，章节散落两个目录。
+      final rootDir = await LocalManager().findValidDirectory(
+        comic.id,
+        comic.comicType,
+        details.title,
+      );
+      LocalManager().addTasks([
+        for (final key in selected!)
+          ImagesDownloadTask(
+            source: source,
+            comicId: comic.id,
+            comic: details,
+            // 直接传 chapterKey：每个版本（话号 × 翻译组）的 key 都不同，
+            // 同话多组各自可查、可删，也不会"选 B 组下成 A 组"。
+            chapters: [key],
+          )..path = rootDir.path,
+      ]);
+    }
+    App.rootContext.showMessage(message: "Download started".tl);
+    update();
+  }
+
+  /// 组装下载选章器的分节数据（U3-6）。
+  ///
+  /// 版本化章节 → 按翻译组分节，每节是该组自己的全部话，节头显示 `组名(N)`。
+  /// 这样"11 个组 / 7 个话号"能列出 59 行而不是只有 6 行（旧版吃的是
+  /// [ComicChapters.titles]，而它在版本化模式下只 yield `versions.first`）。
+  ///
+  /// 扁平/分组章节 → 单节，沿用详情页的自定义顺序与"折叠重复章节"开关：
+  /// 看不到的章节不能通过"下载全部"溜进来。
+  List<_DownloadChapterSection> _buildDownloadSections(
+    ComicChapters chapters,
+    bool hideDuplicates,
+  ) {
+    final local = LocalManager().find(comic.id, comic.comicType);
+    final downloaded = local?.downloadedChapters.toSet() ?? const <String>{};
+
+    if (chapters.isVersioned) {
+      final sections = <_DownloadChapterSection>[];
+      for (final group in chapters.scanlationGroupsSorted) {
+        final items = <_DownloadChapterItem>[
+          for (final entry in chapters.allVersions)
+            if (entry.version.scanlationGroup == group)
+              _DownloadChapterItem(
+                chapterKey: entry.version.chapterKey,
+                title: entry.version.title,
+                downloaded: downloaded.contains(entry.version.chapterKey),
+              ),
+        ];
+        if (items.isNotEmpty) {
+          sections.add(_DownloadChapterSection(group: group, items: items));
+        }
+      }
+      // 没有组名的版本兜底成一节 —— 否则它们会从选章器里凭空消失。
+      final ungrouped = <_DownloadChapterItem>[
+        for (final entry in chapters.allVersions)
+          if (entry.version.scanlationGroup == null ||
+              entry.version.scanlationGroup!.trim().isEmpty)
+            _DownloadChapterItem(
+              chapterKey: entry.version.chapterKey,
+              title: entry.version.title,
+              downloaded: downloaded.contains(entry.version.chapterKey),
+            ),
+      ];
+      if (ungrouped.isNotEmpty) {
+        sections.add(
+          _DownloadChapterSection(group: "Unknown group".tl, items: ungrouped),
+        );
+      }
+      return sections;
+    }
+
+    final order = ChapterOrderPrefs.orderedIndices(
+      chapters,
+      comic.id,
+      comic.sourceKey,
+    );
+    final hidden = hideDuplicates
+        ? chapters.duplicateTitleIndices()
+        : const <int>{};
+    final ids = chapters.ids.toList();
+    final titles = chapters.titles.toList();
+    return [
+      _DownloadChapterSection(
+        items: [
+          for (final i in order)
+            if (i < ids.length && !hidden.contains(i))
+              _DownloadChapterItem(
+                chapterKey: ids[i],
+                title: titles[i],
+                downloaded: downloaded.contains(ids[i]),
+              ),
+        ],
+      ),
+    ];
+  }
+
+  void onTapTag(String tag, String namespace) {
+    final source = comicSource;
+    var target = source?.handleClickTagEvent?.call(namespace, tag);
+    var context = App.mainNavigatorKey!.currentContext!;
+    if (target != null) {
+      target.jump(context);
+      return;
+    }
+    // Collections and online libraries are native sources without a search
+    // implementation, so searching "within" them is meaningless. Send the tag to
+    // the aggregated search instead, which only queries sources that can search.
+    if (source?.searchPageData == null) {
+      context.to(() => AggregatedSearchPage(keyword: tag));
+      return;
+    }
+    context.to(() => SearchResultPage(text: tag, sourceKey: source!.key));
+  }
+
+  void showMoreActions() {
+    var context = App.rootContext;
+    final translationEnabled = ImageTranslationService.isEnabledForComic(
+      comic.id,
+      comic.sourceKey,
+    );
+    showMenuX(context, Offset(context.width - 16, context.padding.top), [
+      // Per-comic AI translation switch. Toggling notifies the service, which
+      // the detail page listens to, so the pre-translate button appears/hides
+      // in sync (when the engine is also ready).
+      MenuEntry(
+        icon: Icons.translate_rounded,
+        text: translationEnabled
+            ? "Disable AI translation".tl
+            : "Enable AI translation".tl,
+        color: translationEnabled ? context.colorScheme.primary : null,
+        onClick: () {
+          ImageTranslationService.setEnabledForComic(
+            comic.id,
+            comic.sourceKey,
+            !translationEnabled,
+          );
+          context.showMessage(
+            message: translationEnabled
+                ? "AI translation disabled".tl
+                : "AI translation enabled".tl,
+          );
+        },
+      ),
+      // Only offered when this comic actually has repeats: a chapter list
+      // without any would show a switch that visibly does nothing.
+      if (_duplicateChapterCount > 0)
+        MenuEntry(
+          icon: hideDuplicateChapters
+              ? Icons.filter_alt_rounded
+              : Icons.filter_alt_off_rounded,
+          text: hideDuplicateChapters
+              ? "Show duplicate chapters".tl
+              : "Hide duplicate chapters".tl,
+          color: hideDuplicateChapters ? context.colorScheme.primary : null,
+          onClick: () {
+            final next = !hideDuplicateChapters;
+            ChapterDuplicatePrefs.setHidden(comic.id, comic.sourceKey, next);
+            update();
+            context.showMessage(
+              message: next
+                  ? "Hid @count duplicate chapters".tlParams({
+                      'count': _duplicateChapterCount,
+                    })
+                  : "Showing all chapters".tl,
+            );
+          },
+        ),
+      MenuEntry(
+        icon: Icons.copy,
+        text: "Copy Title".tl,
+        onClick: () {
+          Clipboard.setData(ClipboardData(text: comic.title));
+          context.showMessage(message: "Copied".tl);
+        },
+      ),
+      MenuEntry(
+        icon: Icons.copy_rounded,
+        text: "Copy ID".tl,
+        onClick: () {
+          Clipboard.setData(ClipboardData(text: comic.id));
+          context.showMessage(message: "Copied".tl);
+        },
+      ),
+      if (comic.comicType == ComicType.local &&
+          LocalManager().find(comic.id, ComicType.local) != null)
+        MenuEntry(
+          icon: Icons.image_outlined,
+          text: "Custom Cover".tl,
+          onClick: () => _setCustomCover(context),
+        ),
+      if (comic.url != null)
+        MenuEntry(
+          icon: Icons.link,
+          text: "Copy URL".tl,
+          onClick: () {
+            Clipboard.setData(ClipboardData(text: comic.url!));
+            context.showMessage(message: "Copied".tl);
+          },
+        ),
+      if (comic.url != null)
+        MenuEntry(
+          icon: Icons.open_in_browser,
+          text: "Open in Browser".tl,
+          onClick: () {
+            launchUrlString(comic.url!);
+          },
+        ),
+      // A collection offers its own editor here; anything else can be filed
+      // into one. The two are mutually exclusive since collections cannot nest.
+      if (_isCollection)
+        MenuEntry(
+          icon: Icons.library_books_outlined,
+          text: "Edit collection".tl,
+          onClick: () {
+            final id = comic.id;
+            // Main navigator, not the root one this menu is positioned against:
+            // the editor pushes comic pages, and those must land above it (#185).
+            final host = App.mainNavigatorKey?.currentContext ?? context;
+            host
+                .to(() => ComicCollectionEditPage(collectionId: id))
+                // The editor writes straight to the store, so returning is the
+                // signal to re-read: name, cover, layout and member order all
+                // change what the source hands back.
+                .then((_) => reloadDetails());
+          },
+        )
+      else
+        MenuEntry(
+          icon: Icons.library_books_outlined,
+          text: "Add to collection".tl,
+          onClick: () {
+            showAddToCollectionDialog(context, [
+              Comic(
+                comic.title,
+                comic.cover,
+                comic.id,
+                comic.subTitle,
+                comic.plainTags,
+                comic.description ?? '',
+                comic.sourceKey,
+                comic.maxPage,
+                null,
+              ),
+            ]);
+          },
+        ),
+      // Not offered for a collection: it has no upstream source to link to or
+      // migrate from, and migrating would rebind it to a search hit, discarding
+      // the grouping. Its members remain individually migratable.
+      if (!_isCollection)
+        MenuEntry(
+          icon: Icons.hub_outlined,
+          text: "Linked entries".tl,
+          onClick: _showRelatedSourcesManager,
+        ),
+      if (!_isCollection)
+        MenuEntry(
+          icon: Icons.move_up_outlined,
+          text: "Migrate Source".tl,
+          onClick: () {
+            showSourceMigrationDialog(context, _toFavoriteItem());
+          },
+        ),
+      // Only offered for a comic whose images are actually on disk: migration
+      // uploads the local pages, so a not-yet-downloaded online comic has
+      // nothing to send. The multi-select list page has the batch entry.
+      if (_localDownloadedComic() != null)
+        MenuEntry(
+          icon: Icons.cloud_upload_outlined,
+          text: "Migrate to WebDAV source".tl,
+          onClick: () {
+            startWebdavMigrationFlow([_localDownloadedComic()!]);
+          },
+        ),
+      // 已下载且存在缺失页：打开缺页列表，可单页/整章/整部补救（S4）。
+      if (() {
+        final local = LocalManager().find(comic.id, comic.comicType);
+        return local != null && MissingPages.missingCount(local.baseDir) > 0;
+      }())
+        MenuEntry(
+          icon: Icons.auto_fix_high,
+          text: "View missing pages".tl,
+          onClick: () {
+            final local = LocalManager().find(comic.id, comic.comicType);
+            if (local != null) showMissingPagesDialog(context, local);
+          },
+        ),
+      MenuEntry(icon: Icons.block, text: "Block".tl, onClick: blockThisComic),
+    ]);
+  }
+
+  /// Block entry for the detail page. The list long-press menu has one too, but
+  /// a list item often carries no tags at all — here the full tag set is loaded,
+  /// so this is the only place a tag can reliably be picked off a comic.
+  void blockThisComic() {
+    showBlockDialog(
+      title: comic.title,
+      subtitle: comic.subTitle,
+      tags: comic.plainTags,
+    );
+  }
+
+  /// The on-disk [LocalComic] for this page's comic when its images are fully
+  /// downloaded, else null. Drives the WebDAV-migration menu entry's visibility.
+  LocalComic? _localDownloadedComic() {
+    var local = LocalManager().find(comic.id, comic.comicType);
+    if (local == null || local.status != LocalComicStatus.downloaded) {
+      return null;
+    }
+    return local;
+  }
+
+  /// Opens a file picker and sets the selected image as the comic's cover.
+  void _setCustomCover(BuildContext context) async {
+    final result = await selectFile(ext: ['jpg', 'jpeg', 'png', 'webp']);
+    if (result == null) return;
+    try {
+      final bytes = await File(result.path).readAsBytes();
+      final success = await BtProjectManager().setCover(comic.id, bytes);
+      if (context.mounted) {
+        if (success) {
+          context.showMessage(message: "Cover updated".tl);
+          refreshLocalComic();
+        } else {
+          context.showMessage(message: "Failed to set cover".tl);
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        context.showMessage(message: "Error".tl);
+      }
+    }
+  }
+
+  /// Long-press menu on the translate button: the fast path (tap) starts a
+  /// pre-translation, while this exposes the less-common "re-translate" action
+  /// for when cached translations came out wrong.
+  void showTranslationMenu() {
+    var context = App.rootContext;
+    if (!ImageTranslationService.isEnabledForComic(comic.id, comic.sourceKey)) {
+      context.showMessage(
+        message: "Enable AI translation in the reader for this comic first".tl,
+      );
+      return;
+    }
+    // No readiness gate here: the glossary and re-translate entries work
+    // without models, and the pre-translate entry prompts on its own.
+    showMenuX(context, Offset(context.width - 16, context.padding.top), [
+      MenuEntry(
+        icon: Icons.translate_rounded,
+        text: "Pre-translate".tl,
+        onClick: preTranslate,
+      ),
+      MenuEntry(
+        icon: Icons.menu_book_outlined,
+        text: "Glossary".tl,
+        onClick: openGlossary,
+      ),
+      MenuEntry(
+        icon: Icons.refresh_rounded,
+        text: "Re-translate".tl,
+        onClick: reTranslate,
+      ),
+    ]);
+  }
+
+  /// Opens the per-comic glossary editor so the user can view or correct the
+  /// learned name translations that keep proper nouns consistent across pages.
+  void openGlossary() {
+    App.rootContext.to(
+      () => GlossaryEditorPage(
+        cid: comic.id,
+        sourceKey: comic.sourceKey,
+        title: comic.title,
+      ),
+    );
+  }
+
+  void showComments() {
+    final source = comicSource;
+    if (source == null) return;
+    showSideBar(App.rootContext, CommentsPage(data: comic, source: source));
+  }
+
+  void starRating() {
+    final source = comicSource;
+    if (source?.isLogged != true || source?.starRatingFunc == null) {
+      return;
+    }
+    var rating = 0.0;
+    var isLoading = false;
+    showDialog(
+      context: App.rootContext,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setState) => SimpleDialog(
+          title: Text("Rating".tl),
+          alignment: Alignment.center,
+          children: [
+            SizedBox(
+              height: 100,
+              child: Center(
+                child: SizedBox(
+                  width: 210,
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 10),
+                      RatingWidget(
+                        padding: 2,
+                        onRatingUpdate: (value) => rating = value,
+                        value: 1,
+                        selectable: true,
+                        size: 40,
+                      ),
+                      const Spacer(),
+                      Button.filled(
+                        isLoading: isLoading,
+                        onPressed: () {
+                          setState(() {
+                            isLoading = true;
+                          });
+                          source!.starRatingFunc!(comic.id, rating.round())
+                              .then((value) {
+                                if (value.success) {
+                                  App.rootContext.showMessage(
+                                    message: "Success".tl,
+                                  );
+                                  Navigator.of(dialogContext).pop();
+                                } else {
+                                  App.rootContext.showMessage(
+                                    message: value.errorMessage!,
+                                  );
+                                  setState(() {
+                                    isLoading = false;
+                                  });
+                                }
+                              });
+                        },
+                        child: Text("Submit".tl),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

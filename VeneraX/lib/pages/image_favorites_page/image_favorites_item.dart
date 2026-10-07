@@ -1,0 +1,497 @@
+part of 'image_favorites_page.dart';
+
+class _ImageFavoritesItem extends StatefulWidget {
+  const _ImageFavoritesItem({
+    super.key,
+    required this.imageFavoritesComic,
+    required this.selectedImageFavorites,
+    required this.addSelected,
+    required this.multiSelectMode,
+    required this.finalImageFavoritesComicList,
+  });
+
+  final ImageFavoritesComic imageFavoritesComic;
+  final Function(ImageFavorite) addSelected;
+  final Map<ImageFavorite, bool> selectedImageFavorites;
+  final List<ImageFavoritesComic> finalImageFavoritesComicList;
+  final bool multiSelectMode;
+
+  @override
+  State<_ImageFavoritesItem> createState() => _ImageFavoritesItemState();
+}
+
+class _ImageFavoritesItemState extends State<_ImageFavoritesItem> {
+  List<ImageFavorite> get imageFavorites =>
+      widget.imageFavoritesComic.images.toList();
+
+  void goComicInfo(ImageFavoritesComic comic) {
+    App.mainNavigatorKey?.currentContext?.to(() => ComicPage(
+          id: comic.id,
+          sourceKey: comic.sourceKey,
+        ));
+  }
+
+  void goReaderPage(ImageFavoritesComic comic, int ep, int page) {
+    App.rootContext.to(
+      () => ReaderWithLoading(
+        id: comic.id,
+        sourceKey: comic.sourceKey,
+        initialEp: ep,
+        initialPage: page,
+      ),
+    );
+  }
+
+  void goPhotoView(ImageFavorite imageFavorite) {
+    Navigator.of(App.rootContext).push(MaterialPageRoute(
+        builder: (context) => ImageFavoritesPhotoView(
+              comic: widget.imageFavoritesComic,
+              imageFavorite: imageFavorite,
+            )));
+  }
+
+  void copyTitle() {
+    Clipboard.setData(ClipboardData(text: widget.imageFavoritesComic.title));
+    App.rootContext.showMessage(message: 'Copy the title successfully'.tl);
+  }
+
+  void onLongPress() {
+    var renderBox = context.findRenderObject() as RenderBox;
+    var size = renderBox.size;
+    var location = renderBox.localToGlobal(
+      Offset((size.width - 242) / 2, size.height / 2),
+    );
+    showMenu(location, context);
+  }
+
+  void onSecondaryTap(TapDownDetails details) {
+    showMenu(details.globalPosition, context);
+  }
+
+  void showMenu(Offset location, BuildContext context) {
+    showMenuX(
+      App.rootContext,
+      location,
+      [
+        MenuEntry(
+          icon: Icons.chrome_reader_mode_outlined,
+          text: 'Details'.tl,
+          onClick: () {
+            goComicInfo(widget.imageFavoritesComic);
+          },
+        ),
+        MenuEntry(
+          icon: Icons.copy,
+          text: 'Copy Title'.tl,
+          onClick: () {
+            copyTitle();
+          },
+        ),
+        MenuEntry(
+          icon: Icons.select_all,
+          text: 'Select All'.tl,
+          onClick: () {
+            for (var ele in widget.imageFavoritesComic.images) {
+              widget.addSelected(ele);
+            }
+          },
+        ),
+        MenuEntry(
+          icon: Icons.read_more,
+          text: 'Photo View'.tl,
+          onClick: () {
+            goPhotoView(widget.imageFavoritesComic.images.first);
+          },
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outlineVariant,
+          width: 0.6,
+        ),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onSecondaryTapDown: onSecondaryTap,
+        onLongPress: onLongPress,
+        onTap: () {
+          if (widget.multiSelectMode) {
+            for (var ele in widget.imageFavoritesComic.images) {
+              widget.addSelected(ele);
+            }
+          } else {
+            // 单击跳转漫画详情
+            goComicInfo(widget.imageFavoritesComic);
+          }
+        },
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            buildTop(),
+            SizedBox(
+              height: 145,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemBuilder: buildItem,
+                itemCount: imageFavorites.length,
+              ),
+            ).paddingHorizontal(8),
+            buildBottom(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildItem(BuildContext context, int index) {
+    var image = imageFavorites[index];
+    bool isSelected = widget.selectedImageFavorites[image] ?? false;
+    int curPage = image.page;
+    String pageText = curPage == firstPage
+        ? '@a Cover'.tlParams({"a": image.epName})
+        : curPage.toString();
+
+    return InkWell(
+      onTap: () {
+        // 单击去阅读页面, 跳转到当前点击的page
+        if (widget.multiSelectMode) {
+          widget.addSelected(image);
+        } else {
+          goReaderPage(widget.imageFavoritesComic, image.ep, curPage);
+        }
+      },
+      onLongPress: () {
+        goPhotoView(image);
+      },
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: 98,
+        height: 128,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          color: isSelected
+              ? Theme.of(context).colorScheme.primaryContainer
+              : null,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Column(
+          children: [
+            Container(
+              height: 128,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                color: Theme.of(context).colorScheme.secondaryContainer,
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Hero(
+                tag:
+                    "${image.sourceKey}${image.id}${image.ep}${image.page}",
+                child: AnimatedImage(
+                  image: ImageFavoritesProvider(image),
+                  width: 96,
+                  height: 128,
+                  fit: BoxFit.cover,
+                  filterQuality: FilterQuality.medium,
+                ),
+              ),
+            ),
+            Text(
+              pageText,
+              style: ts.s10,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            )
+          ],
+        ),
+      ),
+    ).paddingHorizontal(4);
+  }
+
+  Widget buildTop() {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            widget.imageFavoritesComic.title,
+            style: const TextStyle(
+              fontWeight: FontWeight.w500,
+              fontSize: 16.0,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            softWrap: true,
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.secondaryContainer,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+              "${imageFavorites.length}/${widget.imageFavoritesComic.maxPageFromEp}",
+              style: ts.s12),
+        ),
+        // 一键进入本漫画的网格相册页，方便查看与删图
+        IconButton(
+          icon: const Icon(Icons.grid_view),
+          iconSize: 20,
+          visualDensity: VisualDensity.compact,
+          tooltip: "Album View".tl,
+          onPressed: () {
+            App.rootContext.to(
+              () => SingleComicImageFavoritesPage(
+                comic: widget.imageFavoritesComic,
+              ),
+            );
+          },
+        ),
+      ],
+    ).paddingHorizontal(16).paddingVertical(8);
+  }
+
+  Widget buildBottom() {
+    var enableTranslate = App.locale.languageCode == 'zh';
+    String time =
+        DateFormat('yyyy-MM-dd').format(widget.imageFavoritesComic.time);
+    List<String> tags = [];
+    for (var tag in widget.imageFavoritesComic.tags) {
+      var text = enableTranslate ? tag.translateTagsToCN : tag;
+      if (text.contains(':')) {
+        text = text.split(':').last;
+      }
+      tags.add(text);
+      if (tags.length == 5) {
+        break;
+      }
+    }
+    var comicSource = ComicSource.find(widget.imageFavoritesComic.sourceKey);
+    return Row(
+      children: [
+        Text(
+          "$time | ${comicSource?.name ?? "Unknown"}",
+          textAlign: TextAlign.left,
+          style: const TextStyle(
+            fontSize: 12.0,
+          ),
+        ).paddingRight(8),
+        if (tags.isNotEmpty)
+          Expanded(
+            child: Text(
+              tags
+                  .map((e) => enableTranslate ? e.translateTagsToCN : e)
+                  .join(" "),
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                fontSize: 12.0,
+                overflow: TextOverflow.ellipsis,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          )
+      ],
+    ).paddingHorizontal(8).paddingBottom(8);
+  }
+}
+
+/// 网格布局下的单张图片项（图片平铺模式）
+class _ImageFavoritesGridItem extends StatelessWidget {
+  const _ImageFavoritesGridItem({
+    super.key,
+    required this.comic,
+    required this.image,
+    required this.selectedImageFavorites,
+    required this.addSelected,
+    required this.multiSelectMode,
+  });
+
+  final ImageFavoritesComic comic;
+  final ImageFavorite image;
+  final Map<ImageFavorite, bool> selectedImageFavorites;
+  final Function(ImageFavorite) addSelected;
+  final bool multiSelectMode;
+
+  void goReaderPage() {
+    App.rootContext.to(
+      () => ReaderWithLoading(
+        id: comic.id,
+        sourceKey: comic.sourceKey,
+        initialEp: image.ep,
+        initialPage: image.page,
+      ),
+    );
+  }
+
+  void goPhotoView() {
+    Navigator.of(App.rootContext).push(MaterialPageRoute(
+      builder: (context) => ImageFavoritesPhotoView(
+        comic: comic,
+        imageFavorite: image,
+      ),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    bool isSelected = selectedImageFavorites[image] ?? false;
+    String pageText = image.page == firstPage
+        ? '@a Cover'.tlParams({"a": image.epName})
+        : image.page.toString();
+    return InkWell(
+      onTap: () {
+        if (multiSelectMode) {
+          addSelected(image);
+        } else {
+          goReaderPage();
+        }
+      },
+      onLongPress: () {
+        if (multiSelectMode) {
+          addSelected(image);
+        } else {
+          goPhotoView();
+        }
+      },
+      onSecondaryTapDown: (_) => addSelected(image),
+      borderRadius: BorderRadius.circular(8),
+      child: buildContent(context, isSelected, pageText),
+    );
+  }
+
+  Widget buildContent(BuildContext context, bool isSelected, String pageText) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: isSelected
+            ? Theme.of(context).colorScheme.primaryContainer
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Hero(
+                tag: "${image.sourceKey}${image.id}${image.ep}${image.page}",
+                child: AnimatedImage(
+                  image: ImageFavoritesProvider(image),
+                  fit: BoxFit.cover,
+                  filterQuality: FilterQuality.medium,
+                ),
+              ),
+            ),
+          ),
+          Text(
+            comic.title,
+            style: ts.s10,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+          ),
+          Text(
+            pageText,
+            style: ts.s10.copyWith(
+              color: Theme.of(context).colorScheme.outline,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 漫画网格视图下的单部漫画格子：封面 + 标题 + 收藏数角标。
+/// 点击进入该漫画专属的图片收藏网格子页 [SingleComicImageFavoritesPage]。
+class _ImageFavoritesComicGridItem extends StatelessWidget {
+  const _ImageFavoritesComicGridItem({
+    super.key,
+    required this.comic,
+  });
+
+  final ImageFavoritesComic comic;
+
+  @override
+  Widget build(BuildContext context) {
+    var cover = comic.images.first;
+    return InkWell(
+      onTap: () {
+        App.rootContext.to(
+          () => SingleComicImageFavoritesPage(comic: comic),
+        );
+      },
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        color: Theme.of(context).colorScheme.secondaryContainer,
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: AnimatedImage(
+                        image: ImageFavoritesProvider(cover),
+                        fit: BoxFit.cover,
+                        filterQuality: FilterQuality.medium,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 4,
+                    top: 4,
+                    child: Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .secondaryContainer
+                            .toOpacity(0.9),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        "${comic.images.length}/${comic.maxPageFromEp}",
+                        style: ts.s10,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              comic.title,
+              style: ts.s10,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

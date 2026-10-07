@@ -1,0 +1,18 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+Analyzing VeneraX...                                            
+
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._domain') to initialize the field - lib\foundation\comic_state_repository.dart:122:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._localManager') to initialize the field - lib\foundation\comic_state_repository.dart:123:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._historyManager') to initialize the field - lib\foundation\comic_state_repository.dart:124:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._favoritesManager') to initialize the field - lib\foundation\comic_state_repository.dart:125:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._vocab') to initialize the field - lib\foundation\image_translation\hf_tokenizer.dart:22:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._mergeRanks') to initialize the field - lib\foundation\image_translation\hf_tokenizer.dart:23:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._scores') to initialize the field - lib\foundation\image_translation\hf_tokenizer.dart:24:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._addedTokens') to initialize the field - lib\foundation\image_translation\hf_tokenizer.dart:25:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._specialIds') to initialize the field - lib\foundation\image_translation\hf_tokenizer.dart:26:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._isUnigram') to initialize the field - lib\foundation\image_translation\hf_tokenizer.dart:27:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._clientFactory') to initialize the field - lib\network\webdav_library.dart:162:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._prepare') to initialize the field - lib\pages\reader\continuous_page_turn_coordinator.dart:34:8 - prefer_initializing_formals
+   info - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._navigate') to initialize the field - lib\pages\reader\continuous_page_turn_coordinator.dart:35:8 - prefer_initializing_formals
+
+13 issues found. (ran in 1.8s)

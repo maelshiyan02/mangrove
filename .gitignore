@@ -1,0 +1,56 @@
+# ============================================================
+# 顶层 .gitignore —— 只追踪「源码 + 文档」，不追踪素材与产物
+# 取舍标准：能由源码重新生成的、或属于用户数据的，一律忽略。
+# ============================================================
+
+# ---- 1. 大体积目录（合计约 6.8 GB）：第三方实现 / 素材库 / 打包产物 ----
+# 这些要么是别处的源码副本，要么是可重新生成的产物，进了仓库只会让
+# 每次 clone 变成一次大规模下载。
+Ballonstranslator_win_minium/
+Ballonstranslator_store/
+VeneraX-portable/
+ComicLibrary/
+builds/
+
+# ---- 2. VeneraX 构建残留（约 2.2 GB，可由 flutter build 重新生成）----
+# 注意：VeneraX/.gitignore（Flutter 模板自带）已排除 /build/ 与 .dart_tool/，
+# 但它**没有**排除 windows/flutter/ephemeral/ —— 那正是 262 MB 的去处。
+VeneraX/build/
+VeneraX/.dart_tool/
+VeneraX/.dart_tool_empty/
+VeneraX/windows/flutter/ephemeral/
+**/ephemeral/
+
+# ---- 3. 指向 .agent 的目录联接（junction）----
+# 🔴 必须忽略。git 在 Windows 上不把 junction 当符号链接，而是当**普通目录
+#    跟着走进去** —— 于是 .agent/memory/x.md 会以 .workbuddy/memory/x.md、
+#    .trae/memory/x.md、docs/x.md 四种路径各索引一遍：同一份文件存 4 份，
+#    改一次显示 4 处变更。
+#    ⇒ 只追踪真身 .agent/，下面这三处全部忽略。
+#    （.trae/rules/ 是真实目录，不在忽略之列，必须保留。）
+.workbuddy/
+.trae/documents/
+.trae/memory/
+.trae/skills/
+.trae/specs/
+docs
+
+# ---- 4. 工具链安装包与一次性探针输出 ----
+tools/rustup-init.exe
+tools/probe_out/
+tools/spike/
+tools/__pycache__/
+tools/build_out.txt
+__pycache__/
+*.pyc
+
+# ---- 5. 运行时检查报告（每次跑 headless 都会被重写）----
+edit_check.json
+s6_project_check.json
+s7_export_check.json
+studio_scan.json
+
+# ---- 6. 本机数据与备份 ----
+*.bak-*
+appdata.json
+.vscode/settings.json

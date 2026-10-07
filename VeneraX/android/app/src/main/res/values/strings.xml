@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="share_text">Search</string>
+    <string name="app_name" translatable="false">VeneraX</string>
+    <string name="download_channel_name">Downloads</string>
+    <string name="download_channel_desc">Shows progress while comics are downloading.</string>
+    <string name="download_notification_default">Downloading…</string>
+    <string name="download_done_channel_name">Download complete</string>
+    <string name="download_done_default">Download complete</string>
+    <string name="background_channel_name">Background tasks</string>
+    <string name="background_channel_desc">Keeps tasks like update checks, import and export running in the background.</string>
+    <string name="background_notification_default">Running in the background…</string>
+    <string name="background_title_follow_update">Checking updates</string>
+    <string name="background_title_import">Importing data</string>
+    <string name="background_title_export">Exporting comics</string>
+    <string name="background_title_comic_import">Importing comics</string>
+    <string name="background_title_sync">Syncing data</string>
+    <string name="background_title_webdav_migration">Migrating to WebDAV</string>
+</resources>

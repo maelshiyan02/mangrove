@@ -1,0 +1,46 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "BallonsTranslator",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ballontranslator",
+      "python": "${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win/python.exe",
+      "cwd": "${workspaceFolder}/Ballonstranslator_win_minium",
+      "console": "integratedTerminal",
+      "env": {
+        "PATH": "${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win;${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win/Scripts;${env:PATH}",
+        "ERROR_REPORTING": "FALSE"
+      }
+    },
+    {
+      "name": "BallonsTranslator: 打开扫描图片项目",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ballontranslator",
+      "python": "${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win/python.exe",
+      "cwd": "${workspaceFolder}/Ballonstranslator_win_minium",
+      "console": "integratedTerminal",
+      "args": ["--proj-dir", "${workspaceFolder}/Ballonstranslator_store"],
+      "env": {
+        "PATH": "${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win;${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win/Scripts;${env:PATH}",
+        "ERROR_REPORTING": "FALSE"
+      }
+    },
+    {
+      "name": "VeneraX (漫画阅读器)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/Ballonstranslator_win_minium/launch_venerax.py",
+      "python": "${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win/python.exe",
+      "cwd": "${workspaceFolder}/Ballonstranslator_win_minium",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "PATH": "${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win;${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win/Scripts;${env:PATH}"
+      }
+    }
+  ],
+  "compounds": []
+}

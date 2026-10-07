@@ -1,0 +1,470 @@
+part of 'reader.dart';
+
+class _ReaderGestureDetector extends StatefulWidget {
+  const _ReaderGestureDetector({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_ReaderGestureDetector> createState() => _ReaderGestureDetectorState();
+}
+
+class _ReaderGestureDetectorState
+    extends AutomaticGlobalState<_ReaderGestureDetector> {
+  late TapGestureRecognizer _tapGestureRecognizer;
+
+  static const _kDoubleTapMaxTime = Duration(milliseconds: 200);
+
+  static const _kLongPressMinTime = Duration(milliseconds: 250);
+
+  static const _kDoubleTapMaxDistanceSquared = 20.0 * 20.0;
+
+  static const _kTapToTurnPagePercent = 0.3;
+
+  /// 手指移动超过此距离(平方, 逻辑像素)即判定为拖动, 而非点按/长按。
+  /// 这样滑动收藏等手势无需等长按计时器 250ms 就能触发, 快速滑动也能识别 (#96)。
+  static const _kDragStartThresholdSquared = 20.0 * 20.0;
+
+  final _dragListeners = <_DragListener>[];
+
+  int fingers = 0;
+
+  late _ReaderState reader;
+
+  bool ignoreNextTag = false;
+
+  void ignoreNextTap() {
+    ignoreNextTag = true;
+  }
+
+  void clearIgnoreNextTap() {
+    ignoreNextTag = false;
+  }
+
+  @override
+  void initState() {
+    _tapGestureRecognizer = TapGestureRecognizer()
+      ..onTapUp = onTapUp
+      ..onSecondaryTapUp = (details) {
+        onSecondaryTapUp(details.globalPosition);
+      };
+    super.initState();
+    context.readerScaffold._gestureDetectorState = this;
+    reader = context.reader;
+  }
+
+  @override
+  void dispose() {
+    _tapGestureRecognizer.dispose();
+    _dragListeners.clear();
+    _previousEvent = null;
+    _lastTapPointer = null;
+    _lastTapMoveDistance = null;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
+        if (event.position == Offset.zero) {
+          _previousEvent = null;
+          return;
+        }
+        _increaseFingers();
+        if (ignoreNextTag) {
+          ignoreNextTag = false;
+          return;
+        }
+        _lastTapPointer = event.pointer;
+        _lastTapMoveDistance = Offset.zero;
+        _tapGestureRecognizer.addPointer(event);
+        if (_dragInProgress) {
+          for (var dragListener in _dragListeners) {
+            dragListener.onStart?.call(event.position);
+          }
+          _dragInProgress = false;
+        }
+        Future.delayed(_kLongPressMinTime, () {
+          if (!mounted || _lastTapPointer != event.pointer || fingers != 1) {
+            return;
+          }
+          // 拖动可能已在 onPointerMove 里提前判定, 此处不再重复启动, 否则会二次 onStart。
+          if (_dragInProgress) {
+            return;
+          }
+          final moveDistance = _lastTapMoveDistance;
+          if (moveDistance != null) {
+            if (moveDistance.distanceSquared < 20.0 * 20.0) {
+              onLongPressedDown(event.position);
+              _longPressInProgress = true;
+            } else {
+              _dragInProgress = true;
+              for (var dragListener in _dragListeners) {
+                dragListener.onStart?.call(event.position);
+                dragListener.onMove?.call(moveDistance);
+              }
+            }
+          }
+        });
+      },
+      onPointerMove: (event) {
+        if (event.pointer == _lastTapPointer && _lastTapMoveDistance != null) {
+          _lastTapMoveDistance = event.delta + _lastTapMoveDistance!;
+          // 移动越过阈值即立即判定为拖动, 无需等长按计时器 250ms, 使快速滑动
+          // 手势 (如滑动收藏) 也能被识别, 不再要求缓慢长划 (#96)。
+          if (!_dragInProgress &&
+              !_longPressInProgress &&
+              fingers == 1 &&
+              _lastTapMoveDistance!.distanceSquared >
+                  _kDragStartThresholdSquared) {
+            _dragInProgress = true;
+            for (var dragListener in _dragListeners) {
+              dragListener.onStart?.call(event.position);
+              dragListener.onMove?.call(_lastTapMoveDistance!);
+            }
+            // 本次事件的位移已在上面随累计值一起下发, 不再重复下发。
+            return;
+          }
+        }
+        if (_dragInProgress) {
+          for (var dragListener in _dragListeners) {
+            dragListener.onMove?.call(event.delta);
+          }
+        }
+      },
+      onPointerUp: (event) {
+        _decreaseFingers();
+        _finishActivePointer(event.position);
+      },
+      onPointerCancel: (event) {
+        _decreaseFingers();
+        _finishActivePointer(event.position, canceled: true);
+      },
+      onPointerSignal: (event) {
+        if (event is PointerScrollEvent) {
+          onMouseWheel(event.scrollDelta.dy > 0);
+        }
+      },
+      child: widget.child,
+    );
+  }
+
+  void _increaseFingers() {
+    fingers++;
+  }
+
+  void _decreaseFingers() {
+    if (fingers > 0) {
+      fingers--;
+    } else {
+      fingers = 0;
+    }
+  }
+
+  void _finishActivePointer(Offset position, {bool canceled = false}) {
+    if (_longPressInProgress) {
+      onLongPressedUp(position);
+      _longPressInProgress = false;
+      _suppressNextTapUp = !canceled;
+    }
+    if (_dragInProgress) {
+      for (var dragListener in _dragListeners) {
+        dragListener.onEnd?.call();
+      }
+      _dragInProgress = false;
+    }
+    _lastTapPointer = null;
+    _lastTapMoveDistance = null;
+    if (canceled) {
+      _previousEvent = null;
+      _suppressNextTapUp = false;
+    }
+  }
+
+  void onMouseWheel(bool forward) {
+    if (HardwareKeyboard.instance.isControlPressed) {
+      return;
+    }
+    if (context.reader.mode.key.startsWith('gallery')) {
+      if (forward) {
+        if (!context.reader.toNextPage() &&
+            !context.reader.isLastChapterOfGroup) {
+          context.reader.toNextChapter();
+        }
+      } else {
+        if (!context.reader.toPrevPage() &&
+            !context.reader.isFirstChapterOfGroup) {
+          context.reader.toPrevChapter(toLastPage: true);
+        }
+      }
+    }
+  }
+
+  TapUpDetails? _previousEvent;
+
+  int? _lastTapPointer;
+
+  Offset? _lastTapMoveDistance;
+
+  bool _longPressInProgress = false;
+
+  bool _suppressNextTapUp = false;
+
+  bool _dragInProgress = false;
+
+  bool get _enableDoubleTapToZoom => appdata.settings.getReaderSetting(
+    reader.cid,
+    reader.type.sourceKey,
+    'enableDoubleTapToZoom',
+  );
+
+  void onTapUp(TapUpDetails event) {
+    if (event.globalPosition == Offset.zero &&
+        event.localPosition == Offset.zero) {
+      _previousEvent = null;
+      return;
+    }
+    if (_suppressNextTapUp || _longPressInProgress) {
+      _suppressNextTapUp = false;
+      _longPressInProgress = false;
+      _previousEvent = null;
+      return;
+    }
+    final location = event.globalPosition;
+    if (!_enableDoubleTapToZoom) {
+      onTap(location);
+      return;
+    }
+    final previousLocation = _previousEvent?.globalPosition;
+    if (previousLocation != null) {
+      if ((location - previousLocation).distanceSquared <
+          _kDoubleTapMaxDistanceSquared) {
+        onDoubleTap(location);
+        _previousEvent = null;
+        return;
+      } else {
+        onTap(previousLocation);
+      }
+    }
+    _previousEvent = event;
+    Future.delayed(_kDoubleTapMaxTime, () {
+      if (mounted && _previousEvent == event) {
+        onTap(location);
+        _previousEvent = null;
+      }
+    });
+  }
+
+  void onTap(Offset location) {
+    if (reader._imageViewController!.handleOnTap(location)) {
+      return;
+    } else if (context.readerScaffold.isOpen) {
+      context.readerScaffold.openOrClose();
+    } else {
+      // Don't open toolbar on chapter comments page
+      if (reader.isOnChapterCommentsPage) {
+        return;
+      }
+      if (appdata.settings.getReaderSetting(
+        reader.cid,
+        reader.type.sourceKey,
+        'enableTapToTurnPages',
+      )) {
+        bool isLeft = false, isRight = false, isTop = false, isBottom = false;
+        final width = context.width;
+        final height = context.height;
+        final x = location.dx;
+        final y = location.dy;
+        if (x < width * _kTapToTurnPagePercent) {
+          isLeft = true;
+        } else if (x > width * (1 - _kTapToTurnPagePercent)) {
+          isRight = true;
+        }
+        if (y < height * _kTapToTurnPagePercent) {
+          isTop = true;
+        } else if (y > height * (1 - _kTapToTurnPagePercent)) {
+          isBottom = true;
+        }
+        bool isCenter = false;
+        var prev = () => context.reader.toPrevPage();
+        var next = () => context.reader.toNextPage();
+        final customZones = appdata.settings.getReaderSetting(
+          reader.cid,
+          reader.type.sourceKey,
+          'enableCustomTapZones',
+        );
+        if (customZones == true) {
+          // 自定义翻页区域：由用户为四条边缘各自指定动作。角落同属两条边时
+          // 上下优先于左右；若命中边动作为 'none' 则回退到相邻边的非 none 动作。
+          String action = 'none';
+          String? zone(String key) => appdata.settings.getReaderSetting(
+            reader.cid,
+            reader.type.sourceKey,
+            key,
+          );
+          for (final a in <String?>[
+            if (isTop) zone('tapZoneTop'),
+            if (isBottom) zone('tapZoneBottom'),
+            if (isLeft) zone('tapZoneLeft'),
+            if (isRight) zone('tapZoneRight'),
+          ]) {
+            if (a != null && a != 'none') {
+              action = a;
+              break;
+            }
+          }
+          if (action == 'prev') {
+            prev();
+            return;
+          } else if (action == 'next') {
+            next();
+            return;
+          }
+          // 'none' 或点在中心区域：落到打开/关闭工具栏
+          isCenter = true;
+        } else {
+          if (appdata.settings.getReaderSetting(
+            reader.cid,
+            reader.type.sourceKey,
+            'reverseTapToTurnPages',
+          )) {
+            prev = () => context.reader.toNextPage();
+            next = () => context.reader.toPrevPage();
+          }
+          switch (context.reader.mode) {
+            case ReaderMode.galleryLeftToRight:
+            case ReaderMode.continuousLeftToRight:
+              if (isLeft) {
+                prev();
+              } else if (isRight) {
+                next();
+              } else {
+                isCenter = true;
+              }
+            case ReaderMode.galleryRightToLeft:
+            case ReaderMode.continuousRightToLeft:
+              if (isLeft) {
+                next();
+              } else if (isRight) {
+                prev();
+              } else {
+                isCenter = true;
+              }
+            case ReaderMode.galleryTopToBottom:
+            case ReaderMode.continuousTopToBottom:
+              if (isTop) {
+                prev();
+              } else if (isBottom) {
+                next();
+              } else {
+                isCenter = true;
+              }
+          }
+        }
+        if (!isCenter) {
+          return;
+        }
+      }
+      context.readerScaffold.openOrClose();
+    }
+  }
+
+  void onDoubleTap(Offset location) {
+    context.reader._imageViewController?.handleDoubleTap(location);
+  }
+
+  void onSecondaryTapUp(Offset location) {
+    showMenuX(context, location, [
+      MenuEntry(
+        icon: Icons.settings,
+        text: "Settings".tl,
+        onClick: () {
+          context.readerScaffold.openSetting();
+        },
+      ),
+      MenuEntry(
+        icon: Icons.menu,
+        text: "Chapters".tl,
+        onClick: () {
+          context.readerScaffold.openChapterDrawer();
+        },
+      ),
+      MenuEntry(
+        icon: Icons.fullscreen,
+        text: "Fullscreen".tl,
+        onClick: () {
+          context.reader.fullscreen();
+        },
+      ),
+      MenuEntry(
+        icon: Icons.exit_to_app,
+        text: "Exit".tl,
+        onClick: () {
+          context.pop();
+        },
+      ),
+      if (App.isDesktop && !reader.isLoading)
+        MenuEntry(
+          icon: Icons.copy,
+          text: "Copy Image".tl,
+          onClick: () => copyImage(location),
+        ),
+      if (!reader.isLoading)
+        MenuEntry(
+          icon: Icons.download_outlined,
+          text: "Save Image".tl,
+          onClick: () => saveImage(location),
+        ),
+    ]);
+  }
+
+  void onLongPressedUp(Offset location) {
+    context.reader._imageViewController?.handleLongPressUp(location);
+  }
+
+  void onLongPressedDown(Offset location) {
+    context.reader._imageViewController?.handleLongPressDown(location);
+  }
+
+  void addDragListener(_DragListener listener) {
+    _dragListeners.add(listener);
+  }
+
+  void removeDragListener(_DragListener listener) {
+    _dragListeners.remove(listener);
+  }
+
+  @override
+  Object? get key => "reader_gesture";
+
+  void copyImage(Offset location) async {
+    var controller = reader._imageViewController;
+    var image = await controller!.getImageByOffset(location);
+    if (image != null) {
+      writeImageToClipboard(image);
+    } else {
+      context.showMessage(message: "No Image");
+    }
+  }
+
+  void saveImage(Offset location) async {
+    var controller = reader._imageViewController;
+    var image = await controller!.getImageByOffset(location);
+    if (image != null) {
+      var filetype = detectFileType(image);
+      saveFile(filename: "image${filetype.ext}", data: image);
+    } else {
+      context.showMessage(message: "No Image");
+    }
+  }
+}
+
+class _DragListener {
+  void Function(Offset point)? onStart;
+  void Function(Offset offset)? onMove;
+  void Function()? onEnd;
+
+  _DragListener({this.onStart, this.onMove, this.onEnd});
+}

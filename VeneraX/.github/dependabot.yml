@@ -1,0 +1,58 @@
+version: 2
+
+updates:
+  - package-ecosystem: "pub"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
+    groups:
+      pub-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+      # Version 0.6.0+eol is an empty marker for sqlite3 3.x migrations.
+      - dependency-name: "sqlite3_flutter_libs"
+        versions:
+          - ">=0.6.0"
+      # Keep the native HTTP stack on its tested bridge and Rust toolchain pair.
+      - dependency-name: "rhttp"
+        versions:
+          - ">=0.16.0"
+      - dependency-name: "flutter_rust_bridge"
+        versions:
+          - ">=2.12.0"
+      # Version 0.5.x adds a second Cargokit plugin that races rhttp's rustup setup.
+      - dependency-name: "syntax_highlight"
+        versions:
+          - ">=0.5.0"
+      # Keep the Xcode 16.4 compatibility pin documented in pubspec.yaml.
+      - dependency-name: "connectivity_plus"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:15"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
+    groups:
+      github-actions-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

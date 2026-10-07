@@ -1,0 +1,3386 @@
+import 'dart:async';
+import 'dart:ui';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:photo_view/photo_view.dart';
+import 'package:shimmer_animation/shimmer_animation.dart';
+import 'package:sliver_tools/sliver_tools.dart';
+import 'package:url_launcher/url_launcher_string.dart';
+import 'package:venera/components/components.dart';
+import 'package:venera/components/related_sources_dialog.dart';
+import 'package:venera/components/rich_comment_content.dart';
+import 'package:venera/foundation/app.dart';
+import 'package:venera/foundation/appdata.dart';
+import 'package:venera/foundation/bt_project/bt_project_manager.dart';
+import 'package:venera/foundation/chapter_directory.dart';
+import 'package:venera/foundation/chapter_title_parser.dart';
+import 'package:venera/foundation/chapter_duplicates.dart';
+import 'package:venera/foundation/comic_collection_store.dart';
+import 'package:venera/foundation/comic_details_cache.dart';
+import 'package:venera/foundation/comic_source/comic_source.dart';
+import 'package:venera/foundation/comic_state_repository.dart';
+import 'package:venera/foundation/comic_type.dart';
+import 'package:venera/foundation/domain_database.dart';
+import 'package:venera/foundation/favorites.dart';
+import 'package:venera/foundation/favorites_meta.dart';
+import 'package:venera/foundation/history.dart';
+import 'package:venera/foundation/image_translation/pre_translation_tasks.dart';
+import 'package:venera/foundation/image_translation/llm_translator.dart';
+import 'package:venera/foundation/image_translation/translation_config.dart';
+import 'package:venera/foundation/image_translation/translation_models.dart';
+import 'package:venera/foundation/image_translation/translation_service.dart';
+import 'package:venera/foundation/image_translation/translation_store.dart';
+import 'package:venera/foundation/log.dart';
+import 'package:venera/foundation/read_later.dart';
+import 'package:venera/foundation/image_provider/cached_image.dart';
+import 'package:venera/foundation/image_provider/local_comic_image.dart';
+import 'package:venera/foundation/local.dart';
+import 'package:venera/foundation/missing_pages.dart';
+import 'package:venera/foundation/res.dart';
+import 'package:venera/network/download.dart';
+import 'package:venera/network/repair_download.dart';
+import 'package:venera/pages/missing_pages_dialog.dart';
+import 'package:venera/network/cache.dart';
+import 'package:venera/pages/aggregated_search_page.dart';
+import 'package:venera/pages/comic_collection_edit_page.dart';
+import 'package:venera/pages/comic_details_page/chapter_order_editor.dart';
+import 'package:venera/pages/comic_details_page/glossary_editor.dart';
+import 'package:venera/pages/comic_details_page/related_sources_section.dart';
+import 'package:venera/pages/favorites/favorites_page.dart';
+import 'package:venera/pages/reader/reader.dart';
+import 'package:venera/pages/webdav_migration_dialog.dart';
+import 'package:venera/pages/search_result_page.dart';
+import 'package:venera/pages/settings/settings_page.dart';
+import 'package:venera/utils/file_type.dart';
+import 'package:venera/utils/io.dart';
+import 'package:venera/utils/local_comic_scanner.dart';
+import 'package:venera/utils/tags_translation.dart';
+import 'package:venera/utils/translations.dart';
+import 'dart:math' as math;
+
+part 'comments_page.dart';
+
+part 'chapters.dart';
+
+part 'thumbnails.dart';
+
+part 'favorite.dart';
+
+part 'comments_preview.dart';
+
+part 'actions.dart';
+
+part 'cover_viewer.dart';
+
+const double _comicDetailsWideBreakpoint = 760;
+
+double _comicDetailsPageInset(BuildContext context) {
+  // 主区域自适应窗口宽度：只保留基础边距，不再把内容夹在固定最大宽度内，
+  // 避免宽屏/大分辨率下两侧留出大片空白。
+  return context.width < 700 ? 12.0 : 24.0;
+}
+
+/// Chooses the cover image provider for the comic detail header / viewer.
+///
+/// A pure local import ([ComicType.local]) stores a relative cover path such as
+/// "cover.jpg" and has no network source able to turn it into a URL, so routing
+/// it through the cached/network loader fails with "relative URL without a
+/// base" (issue #38). Such covers load straight from the comic's own files —
+/// the same way the local library grid does. Downloaded comics keep a
+/// resolvable network source, so they continue using the cached/network path.
+/// A collection's cover always comes from its configuration, never from the
+/// cover the caller navigated with: that one was frozen when the tile was built
+/// (or when the comic was favourited), so changing the custom cover — or
+/// reordering members, which changes whose cover is borrowed — left the detail
+/// page showing a different image than the list it was opened from.
+ImageProvider comicDetailCoverProvider({
+  required String sourceKey,
+  required String id,
+  required String cover,
+  required LocalComic? localComic,
+}) {
+  if (ComicCollectionStore.isCollectionSourceKey(sourceKey)) {
+    final current = ComicCollectionStore.find(id)?.displayCover;
+    return CachedImageProvider(
+      current?.isNotEmpty == true ? current! : cover,
+      sourceKey: sourceKey,
+      cid: id,
+    );
+  }
+  if (localComic != null && localComic.comicType == ComicType.local) {
+    return LocalComicImageProvider(localComic);
+  }
+  return CachedImageProvider(cover, sourceKey: sourceKey, cid: id);
+}
+
+class ComicPage extends StatefulWidget {
+  const ComicPage({
+    super.key,
+    required this.id,
+    required this.sourceKey,
+    this.cover,
+    this.title,
+    this.heroID,
+  });
+
+  final String id;
+
+  final String sourceKey;
+
+  final String? cover;
+
+  final String? title;
+
+  final int? heroID;
+
+  @override
+  State<ComicPage> createState() => _ComicPageState();
+}
+
+class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
+    with _ComicPageActions {
+  @override
+  History? history;
+
+  bool showAppbarTitle = false;
+
+  var scrollController = ScrollController();
+
+  bool isDownloaded = false;
+
+  bool showFAB = false;
+
+  String? detailsLoadError;
+
+  bool _detailsRefreshing = false;
+
+  Future<bool>? _detailsRefreshFuture;
+
+  int _detailsRefreshGeneration = 0;
+
+  @override
+  bool get isDetailsLoading => _detailsRefreshing;
+
+  /// The backing local-library comic for this page, when there is one. Lets the
+  /// cover load directly from disk for pure local imports (issue #38).
+  LocalComic? _localComic;
+
+  bool descriptionExpanded = false;
+
+  /// Set when the user chooses to view a comic that matched their tag blocklist,
+  /// so the notice doesn't come back while the page is open.
+  bool _blockOverridden = false;
+
+  final ComicStateRepository _comicStateRepository =
+      const ComicStateRepository();
+
+  List<DomainComicSourceLink> _relatedSourceLinks = const [];
+  bool _relatedSourcesLoaded = false;
+
+  @override
+  void onReadEnd() {
+    history ??= _comicStateRepository.load(widget.sourceKey, widget.id).history;
+    update();
+  }
+
+  @override
+  Widget buildLoading() {
+    return _ComicPageLoadingPlaceHolder(
+      cover: widget.cover,
+      title: widget.title,
+      sourceKey: widget.sourceKey,
+      cid: widget.id,
+      heroID: widget.heroID,
+    );
+  }
+
+  @override
+  Widget buildError() {
+    final isDownloaded = LocalManager().isDownloaded(
+      widget.id,
+      ComicType.fromKey(widget.sourceKey),
+    );
+
+    // 构建基本的操作按钮
+    final actions = <Widget>[];
+
+    // 如果已下载，显示阅读按钮
+    if (isDownloaded) {
+      actions.add(
+        FilledButton.tonal(
+          child: Text("Read".tl),
+          onPressed: () {
+            final localComic = _comicStateRepository
+                .load(widget.sourceKey, widget.id)
+                .localComic;
+            if (localComic == null) {
+              context.showMessage(message: "Local comic not found".tl);
+              return;
+            }
+            localComic.read();
+          },
+        ),
+      );
+    }
+
+    // 查询已关联的源
+    List<DomainComicSourceLink> relatedLinks = [];
+    if (_comicStateRepository.isDomainReady) {
+      try {
+        // 构建一个临时的 Comic 对象用于查询
+        final tempComic = Comic(
+          widget.title ?? '',
+          widget.cover ?? '',
+          widget.id,
+          null,
+          null,
+          '',
+          widget.sourceKey,
+          null,
+          null,
+        );
+        relatedLinks = _comicStateRepository
+            .relatedSourcesFor(tempComic)
+            .where((link) => link.status == 'accepted')
+            .toList();
+      } catch (e) {
+        // 忽略错误，继续显示基本错误页面
+      }
+    }
+
+    return NetworkError(
+      message: error!,
+      retry: retry,
+      action: actions.isEmpty
+          ? null
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: actions
+                  .map(
+                    (action) => Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: action,
+                    ),
+                  )
+                  .toList(),
+            ),
+      relatedLinks: relatedLinks,
+      comic: widget.title != null || widget.cover != null
+          ? Comic(
+              widget.title ?? widget.id,
+              widget.cover ?? '',
+              widget.id,
+              null,
+              null,
+              '',
+              widget.sourceKey,
+              null,
+              null,
+            )
+          : null,
+    );
+  }
+
+  @override
+  void initState() {
+    scrollController.addListener(onScroll);
+    ComicCollectionStore.changes.addListener(_onCollectionChanged);
+    PreTranslationTaskManager.instance.addListener(update);
+    // The per-comic translation toggle lives in the service; listen so the
+    // pre-translate button appears/disappears the moment it changes.
+    ImageTranslationService.instance.addListener(update);
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    scrollController.removeListener(onScroll);
+    ComicCollectionStore.changes.removeListener(_onCollectionChanged);
+    PreTranslationTaskManager.instance.removeListener(update);
+    ImageTranslationService.instance.removeListener(update);
+    super.dispose();
+  }
+
+  @override
+  void update() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  @override
+  void refreshLocalComic() {
+    final refreshed = LocalManager().find(comic.id, ComicType.local);
+    if (refreshed != null) {
+      _localComic = refreshed;
+    }
+    update();
+  }
+
+  void _onCollectionChanged() {
+    if (mounted &&
+        ComicCollectionStore.isCollectionSourceKey(widget.sourceKey)) {
+      setState(() {});
+    }
+  }
+
+  ComicCollection? get _collection => ComicCollectionStore.find(widget.id);
+
+  void _toggleCollectionDetailMode() {
+    final collection = _collection;
+    if (collection == null) return;
+    final mode =
+        ComicCollectionStore.detailDisplayMode ==
+            CollectionDetailDisplayMode.chapters
+        ? CollectionDetailDisplayMode.covers
+        : CollectionDetailDisplayMode.chapters;
+    ComicCollectionStore.setDetailDisplayMode(mode);
+    ComicSourceManager().refreshCollectionSources();
+  }
+
+  @override
+  void reloadDetails() {
+    if (!mounted) return;
+    final source = ComicSource.find(widget.sourceKey);
+    if (source == null || source.loadComicInfo == null) return;
+    unawaited(_refreshNetworkDetails(source, supersede: true));
+  }
+
+  @override
+  ComicDetails get comic => data!;
+
+  void onScroll() {
+    var offset =
+        scrollController.position.pixels -
+        scrollController.position.minScrollExtent;
+    var showFAB = offset > 0;
+    if (showFAB != this.showFAB) {
+      setState(() {
+        this.showFAB = showFAB;
+      });
+    }
+    if (offset > 100) {
+      if (!showAppbarTitle) {
+        setState(() {
+          showAppbarTitle = true;
+        });
+      }
+    } else {
+      if (showAppbarTitle) {
+        setState(() {
+          showAppbarTitle = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget buildContent(BuildContext context, ComicDetails data) {
+    // The comic grids can only filter on the tags a list item happens to carry,
+    // and most sources send none — tags arrive with the details request. This is
+    // the first point where the full tag set is known, so it is where a blocked
+    // tag actually takes effect.
+    if (!_blockOverridden) {
+      var blockedTag = blockedTagOf(data.plainTags);
+      if (blockedTag != null) {
+        return _buildBlockedGate(blockedTag);
+      }
+    }
+
+    final horizontalInset = _comicDetailsPageInset(context);
+
+    Widget inset(Widget sliver) {
+      return SliverPadding(
+        padding: EdgeInsets.symmetric(horizontal: horizontalInset),
+        sliver: sliver,
+      );
+    }
+
+    return Scaffold(
+      floatingActionButton: showFAB
+          ? FloatingActionButton(
+              onPressed: () {
+                scrollController.animateTo(
+                  0,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.ease,
+                );
+              },
+              child: const Icon(Icons.arrow_upward),
+            )
+          : null,
+      body: RefreshIndicator(
+        onRefresh: _refreshComicDetails,
+        child: SmoothCustomScrollView(
+          controller: scrollController,
+          physics: App.isDesktop ? null : const AlwaysScrollableScrollPhysics(),
+          // The SliverAppbar scrolls with the content, so inset the thumb by the
+          // top bar height to clear it.
+          scrollbarTopPadding: context.padding.top + 56,
+          slivers: [
+            ...buildTitle(horizontalInset),
+            inset(buildActions()),
+            inset(buildRelatedSources()),
+            inset(buildDescription()),
+            inset(buildChapters()),
+            inset(buildComments()),
+            inset(buildThumbnails()),
+            inset(buildRecommend()),
+            SliverPadding(
+              padding: EdgeInsets.only(
+                bottom: context.padding.bottom + 80,
+              ), // Add additional padding for FAB
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildRelatedSources() {
+    if (ComicCollectionStore.isCollectionSourceKey(comic.sourceKey) ||
+        !_comicStateRepository.isDomainReady) {
+      return const SliverToBoxAdapter(child: SizedBox.shrink());
+    }
+    if (!_relatedSourcesLoaded) {
+      _loadRelatedSources();
+    }
+    final currentComicId = _comicStateRepository
+        .identityFor(comic.sourceKey, comic.id)
+        .comicId;
+    return SliverToBoxAdapter(
+      child: ComicRelatedSourcesSection(
+        links: _relatedSourceLinks,
+        currentComicId: currentComicId,
+        onManage: _showRelatedSourcesManager,
+        onOpenSource: _openRelatedSource,
+      ),
+    );
+  }
+
+  Comic _relatedSourcesComic() => Comic(
+    comic.title,
+    comic.cover,
+    comic.id,
+    comic.subTitle,
+    comic.plainTags,
+    comic.description ?? '',
+    comic.sourceKey,
+    comic.maxPage,
+    null,
+  );
+
+  void _loadRelatedSources() {
+    _relatedSourcesLoaded = true;
+    if (ComicCollectionStore.isCollectionSourceKey(comic.sourceKey) ||
+        !_comicStateRepository.isDomainReady) {
+      _relatedSourceLinks = const [];
+      return;
+    }
+    _relatedSourceLinks = _comicStateRepository.relatedSourcesFor(
+      _relatedSourcesComic(),
+    );
+  }
+
+  @override
+  Future<void> _showRelatedSourcesManager() async {
+    await showRelatedSourcesDialog(context, _relatedSourcesComic());
+    if (!mounted) return;
+    setState(_loadRelatedSources);
+  }
+
+  void _openRelatedSource(DomainComicSourceLink link) {
+    final sourceKey = sourceKeyFromRelatedPlatformId(link.platformId);
+    context.to(
+      () => ComicPage(
+        id: link.sourceComicId,
+        sourceKey: sourceKey,
+        cover: link.comicCoverUri,
+        title: link.comicTitle,
+      ),
+    );
+  }
+
+  /// Shown in place of the details when one of the comic's tags is on the
+  /// blocklist. It is a gate rather than a hard refusal: the user set the rule
+  /// and may still have opened the comic on purpose.
+  Widget _buildBlockedGate(String tag) {
+    return Scaffold(
+      appBar: Appbar(title: const Text("")),
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.block, size: 48, color: context.colorScheme.outline),
+            const SizedBox(height: 16),
+            Text("Blocked comic".tl, style: ts.s18),
+            const SizedBox(height: 8),
+            Text(
+              "Matched blocked tag: @tag".tlParams({
+                "tag": tag.translateTagIfNeed,
+              }),
+              style: ts.s14.withColor(context.colorScheme.outline),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            Button.outlined(
+              onPressed: () => setState(() => _blockOverridden = true),
+              child: Text("View anyway".tl),
+            ),
+          ],
+        ).paddingHorizontal(32),
+      ),
+    );
+  }
+
+  @override
+  Future<Res<ComicDetails>> loadData() async {
+    var state = _comicStateRepository.load(widget.sourceKey, widget.id);
+    var localComic = state.localComic;
+
+    // Local-first: if the comic is already in the local library (whether a
+    // purely local import or downloaded from a source), show its details
+    // immediately so it opens instantly and can be read offline. The network
+    // fetch (if a source is available) still runs in the background to enrich
+    // comments/recommendations.
+    if (localComic != null) {
+      _comicStateRepository.mirrorLocalComic(localComic);
+      _localComic = localComic;
+      isAddToLocalFav = state.isLocalFavorite;
+      history = state.history;
+      isDownloaded = true;
+      detailsLoadError = null;
+      // 缺页标记（红色徽标 / 章节上的计数 / "修复"入口）整条链路都读
+      // `missing_pages.json`，而那个文件会和磁盘脱节：下载在末轮之前被取消、
+      // 目录被外部改动、表被清空……都会出现"页文件明明少了却没有任何红色
+      // 报错、修复入口也列不出来"。打开详情页时用磁盘现状对一次账。
+      //
+      // 同一次对账还负责另一半：磁盘上真实存在、但没被 `completeTask` 登记过的
+      // 章节目录（半截下载、修复补完）并回 `downloadedChapters`，否则会出现
+      // "磁盘里有这一话、下载页却显示未下载"（见 LocalManager.reconcileDiskState）。
+      scheduleMicrotask(() => _reconcileDiskState(localComic));
+      var comicSource = ComicSource.find(widget.sourceKey);
+      if (comicSource != null && comicSource.loadComicInfo != null) {
+        scheduleMicrotask(() => _refreshNetworkDetails(comicSource));
+      }
+      return Res(_localDetails(localComic, state));
+    }
+
+    if (widget.sourceKey == 'local') {
+      return const Res.error('Local comic not found');
+    }
+
+    isAddToLocalFav = state.isLocalFavorite;
+    history = state.history;
+    detailsLoadError = null;
+    var comicSource = ComicSource.find(widget.sourceKey);
+    if (comicSource == null || comicSource.loadComicInfo == null) {
+      detailsLoadError = 'Comic source not found';
+      return Res(_fallbackDetails(state));
+    }
+    // Return local data immediately, fetch network data in background
+    scheduleMicrotask(() => _refreshNetworkDetails(comicSource));
+    // Cached details from an earlier visit render the chapter list (and group
+    // tabs) instantly; the background fetch above refreshes them.
+    final cached = ComicDetailsCache().find(widget.sourceKey, widget.id);
+    if (cached != null) {
+      return Res(cached);
+    }
+    return Res(_fallbackDetails(state));
+  }
+
+  /// 用磁盘现状校对库状态：补缺页表 + 把磁盘上真实存在的章节目录并回
+  /// `downloadedChapters`（见 `LocalManager.reconcileDiskState`）。纯本地、
+  /// 只读一次章节目录；有改写时刷新一次界面，让红色标记与"已下载"立刻对上。
+  Future<void> _reconcileDiskState(LocalComic comic) async {
+    try {
+      final changed = await LocalManager().reconcileDiskState(comic);
+      if (!changed || !mounted) return;
+      final refreshed = LocalManager().find(comic.id, comic.comicType);
+      setState(() {
+        if (refreshed != null) _localComic = refreshed;
+      });
+    } catch (e, s) {
+      Log.error('Disk Reconcile', e, s);
+    }
+  }
+
+  ComicDetails _localDetails(LocalComic localComic, ComicState state) {
+    var tagsMap = <String, List<String>>{};
+    for (var tag in localComic.tags) {
+      var parts = tag.split(':');
+      var key = parts.length > 1 ? parts.first : 'Tags';
+      var value = parts.length > 1 ? parts.sublist(1).join(':') : tag;
+      tagsMap.putIfAbsent(key, () => []).add(value);
+    }
+    return ComicDetails.fromJson({
+      'title': localComic.title,
+      'subtitle': localComic.subtitle,
+      'cover': localComic.cover,
+      'description': localComic.description,
+      'tags': tagsMap,
+      // 已下载的版本提到每话首位：详情页的章节 chips、阅读器、以及"已下载"
+      // 判定都只认首个版本，不这么做的话"下载了非首选组"的章节会显示为
+      // 未下载且点开是空白。
+      'chapters': localComic.effectiveChapters?.toJson(),
+      'sourceKey': widget.sourceKey,
+      'comicId': widget.id,
+      'thumbnails': null,
+      'recommend': null,
+      'isFavorite': state.isLocalFavorite,
+      'subId': null,
+      'likesCount': null,
+      'isLiked': null,
+      'commentCount': null,
+      'uploader': null,
+      'uploadTime': null,
+      'updateTime': null,
+      'url': null,
+      'stars': null,
+      'maxPage': null,
+      'comments': null,
+    });
+  }
+
+  /// Re-attempt the background network fetch after it failed (issue #105).
+  /// Useful when the user switched networks and wants to reload chapters
+  /// without leaving and re-entering the page.
+  void retryLoadDetails() {
+    var source = ComicSource.find(widget.sourceKey);
+    if (source == null || source.loadComicInfo == null) return;
+    unawaited(_refreshNetworkDetails(source));
+  }
+
+  Future<void> _refreshComicDetails() async {
+    final localComic =
+        _localComic ??
+        _comicStateRepository.load(widget.sourceKey, widget.id).localComic;
+    final bool success;
+    if (widget.sourceKey == 'local' ||
+        localComic?.comicType == ComicType.local) {
+      success = localComic != null && await _refreshLocalDetails(localComic);
+    } else {
+      final source = ComicSource.find(widget.sourceKey);
+      success =
+          source != null &&
+          source.loadComicInfo != null &&
+          await _refreshNetworkDetails(source);
+    }
+    if (!success && mounted) {
+      context.showMessage(message: 'Refresh Failed'.tl);
+    }
+  }
+
+  Future<bool> _startDetailsRefresh(
+    Future<bool> Function(int generation) operation, {
+    bool supersede = false,
+  }) {
+    final running = _detailsRefreshFuture;
+    if (running != null && !supersede) return running;
+
+    final generation = ++_detailsRefreshGeneration;
+    if (mounted) {
+      setState(() {
+        detailsLoadError = null;
+        _detailsRefreshing = true;
+      });
+    } else {
+      detailsLoadError = null;
+      _detailsRefreshing = true;
+    }
+
+    late Future<bool> future;
+    future = operation(generation).whenComplete(() {
+      if (!mounted || generation != _detailsRefreshGeneration) return;
+      _detailsRefreshFuture = null;
+      setState(() {
+        _detailsRefreshing = false;
+      });
+    });
+    _detailsRefreshFuture = future;
+    return future;
+  }
+
+  Future<bool> _refreshNetworkDetails(
+    ComicSource source, {
+    bool supersede = false,
+  }) {
+    return _startDetailsRefresh(
+      (generation) => _fetchNetworkDetails(source, generation),
+      supersede: supersede,
+    );
+  }
+
+  Future<bool> _refreshLocalDetails(LocalComic current) {
+    return _startDetailsRefresh((generation) async {
+      try {
+        // BT projects are owned by the imgtrans json; the raw-comic scanner
+        // would reject (or misread) the BT directory layout, so refreshing
+        // means re-running the BT scan, not rescanning the directory.
+        if (BtProjectManager.isBtComic(current.id)) {
+          await BtProjectManager().scan();
+          final refreshed = LocalManager().find(current.id, current.comicType);
+          if (refreshed == null) {
+            detailsLoadError = 'Local path not found'.tl;
+            return false;
+          }
+          if (!mounted || generation != _detailsRefreshGeneration) return false;
+          setState(() {
+            _localComic = refreshed;
+            data = _localDetails(
+              refreshed,
+              _comicStateRepository.load(widget.sourceKey, widget.id),
+            );
+            detailsLoadError = null;
+          });
+          return true;
+        }
+        final directory = Directory(current.baseDir);
+        if (!await directory.exists()) {
+          detailsLoadError = 'Local path not found'.tl;
+          return false;
+        }
+        final refreshed = await scanLocalComicDirectory(
+          directory,
+          previous: current,
+          rejectExisting: false,
+        );
+        if (refreshed == null) {
+          detailsLoadError = 'Invalid Comic'.tl;
+          return false;
+        }
+        if (!mounted || generation != _detailsRefreshGeneration) return false;
+
+        await LocalComicImageProvider(current).evict();
+        LocalManager().replaceLocalComic(refreshed);
+        final state = _comicStateRepository.load(widget.sourceKey, widget.id);
+        if (!mounted || generation != _detailsRefreshGeneration) return false;
+        setState(() {
+          _localComic = refreshed;
+          data = _localDetails(refreshed, state);
+          detailsLoadError = null;
+        });
+        return true;
+      } catch (error, stackTrace) {
+        Log.error('Local Comic Refresh', error, stackTrace);
+        if (generation == _detailsRefreshGeneration) {
+          detailsLoadError = error.toString();
+        }
+        return false;
+      }
+    });
+  }
+
+  /// Folds an online response into what is already on screen.
+  ///
+  /// A comic that lives in the local library is the **library's** record, not a
+  /// cache of the source page: its `chapters` table is what the reader opens and
+  /// what `downloadedChapters` is matched against, and its title/cover are the
+  /// user's own naming (a scanlation group name, a volume suffix). Replacing all
+  /// of that with the source payload is what made merely *opening* a downloaded
+  /// comic silently refetch and relabel its whole chapter list. Online data is
+  /// therefore treated as **enrichment only** — comments, recommendations, tags,
+  /// counters and timestamps.
+  ///
+  /// ⚠️ 唯一的例外是 `chapters`，而且只走**并集**（[ComicChapters.mergedWith]）：
+  /// 库里的矩阵一旦被信息更少的写入源覆盖过（见 `LocalManager.add`），丢掉的
+  /// 翻译组就再也回不来，连已下载目录都会变成算不出目录名的孤儿。源这边是完整
+  /// 矩阵，据它补全属于"变多"，不违反上面那条"本地优先"原则。
+  ComicDetails _mergeOnlineMetadata(ComicDetails online) {
+    final current = data;
+    if (_localComic == null || current == null) return online;
+    final tags = <String, List<String>>{};
+    for (final entry in current.tags.entries) {
+      tags[entry.key] = List<String>.from(entry.value);
+    }
+    for (final entry in online.tags.entries) {
+      final existing = tags.putIfAbsent(entry.key, () => []);
+      for (final tag in entry.value) {
+        if (!existing.contains(tag)) existing.add(tag);
+      }
+    }
+    return current.copyWith(
+      chapters: current.chapters?.mergedWith(online.chapters) ?? online.chapters,
+      description: online.description ?? current.description,
+      tags: tags,
+      recommend: online.recommend ?? current.recommend,
+      comments: online.comments ?? current.comments,
+      subId: online.subId,
+      isLiked: online.isLiked,
+      likesCount: online.likesCount ?? current.likesCount,
+      commentCount: online.commentCount ?? current.commentCount,
+      uploader: online.uploader,
+      uploadTime: online.uploadTime,
+      updateTime: online.updateTime,
+      url: online.url,
+      stars: online.stars,
+      maxPage: online.maxPage ?? current.maxPage,
+    );
+  }
+
+  Future<bool> _fetchNetworkDetails(ComicSource source, int generation) async {
+    int retryCount = 0;
+    String lastError = 'Load failed';
+    while (retryCount < 3) {
+      try {
+        final res = await source.loadComicInfo!(widget.id);
+        if (!mounted || generation != _detailsRefreshGeneration) return false;
+        if (res.success) {
+          detailsLoadError = null;
+          final merged = _mergeOnlineMetadata(res.data);
+          setState(() {
+            data = merged;
+          });
+          ComicDetailsCache().update(widget.sourceKey, widget.id, res.data);
+          // 源这边是完整矩阵：把它并回本地记录，让被覆盖过的（丢组、丢话的）
+          // 记录自愈。只增不减，未变少时不会产生写入。
+          await _persistEnrichedChapters(merged);
+          await onDataLoaded();
+          return true;
+        }
+        lastError = res.errorMessage ?? lastError;
+        retryCount++;
+        if (retryCount < 3) {
+          await Future.delayed(const Duration(milliseconds: 200));
+        }
+      } catch (error) {
+        if (!mounted || generation != _detailsRefreshGeneration) return false;
+        lastError = error.toString();
+        retryCount++;
+        if (retryCount < 3) {
+          await Future.delayed(const Duration(milliseconds: 200));
+        }
+      }
+    }
+    if (!mounted || generation != _detailsRefreshGeneration) return false;
+    detailsLoadError = lastError;
+    return false;
+  }
+
+  /// 把刷新到的完整章节矩阵**并回**本地库记录（只增不减），成功后刷新页面。
+  ///
+  /// 补全后 `downloadedChapters` 里那些 key 又能算出正确的章节目录名，缺页对账
+  /// 与"修复"入口才找得到它们。
+  Future<void> _persistEnrichedChapters(ComicDetails merged) async {
+    final local = _localComic;
+    if (local == null) return;
+    try {
+      final changed = await LocalManager().enrichComicChapters(
+        local.id,
+        local.comicType,
+        merged.chapters,
+      );
+      if (!changed || !mounted) return;
+      final refreshed = LocalManager().find(local.id, local.comicType);
+      if (refreshed == null) return;
+      setState(() {
+        _localComic = refreshed;
+        data = (data ?? merged).copyWith(chapters: refreshed.chapters);
+      });
+      // 章节矩阵变了 → 目录名解析方式跟着变，立刻重跑一次磁盘对账。
+      await _reconcileDiskState(refreshed);
+    } catch (e, s) {
+      Log.error('Chapter Enrich', e, s);
+    }
+  }
+
+  ComicDetails _fallbackDetails(ComicState state) {
+    return ComicDetails.fromJson({
+      'title': state.title ?? widget.title ?? widget.id,
+      'subtitle': null,
+      'cover': state.cover ?? widget.cover ?? '',
+      'description': null,
+      'tags': <String, List<String>>{},
+      'chapters': null,
+      'sourceKey': widget.sourceKey,
+      'comicId': widget.id,
+      'thumbnails': null,
+      'recommend': null,
+      'isFavorite': state.isLocalFavorite,
+      'subId': null,
+      'likesCount': null,
+      'isLiked': null,
+      'commentCount': null,
+      'uploader': null,
+      'uploadTime': null,
+      'updateTime': null,
+      'url': null,
+      'stars': null,
+      'maxPage': null,
+      'comments': null,
+    });
+  }
+
+  @override
+  Future<void> onDataLoaded() async {
+    _comicStateRepository.mirrorComicDetails(comic);
+    _loadRelatedSources();
+    TranslationStore().updateComicMetadata(
+      comic.sourceKey,
+      comic.comicId,
+      comicTitle: comic.title,
+      comicCover: comic.cover,
+      chapterTitles: comic.chapters?.allChapters ?? const {},
+    );
+    isLiked = comic.isLiked ?? false;
+    isFavorite = comic.isFavorite ?? false;
+    // For sources with multi-folder favorites, prefer querying folders to get accurate favorite status
+    // Some sources may not set isFavorite reliably when multi-folder is enabled
+    final source = ComicSource.find(comic.sourceKey);
+    if (source?.favoriteData?.loadFolders != null && source!.isLogged) {
+      var res = await source.favoriteData!.loadFolders!(comic.id);
+      if (!res.error) {
+        if (res.subData is List) {
+          var list = List<String>.from(res.subData);
+          isFavorite = list.isNotEmpty;
+          update();
+        }
+      }
+    }
+    if (comic.chapters == null) {
+      isDownloaded = LocalManager().isDownloaded(comic.id, comic.comicType, 0);
+    }
+  }
+
+  Iterable<Widget> buildTitle(double horizontalInset) sync* {
+    yield SliverAppbar(
+      title: AnimatedOpacity(
+        opacity: showAppbarTitle ? 1.0 : 0.0,
+        duration: const Duration(milliseconds: 200),
+        child: Text(comic.title),
+      ),
+      actions: [
+        if (ComicCollectionStore.isCollectionSourceKey(widget.sourceKey))
+          IconButton(
+            icon: Icon(
+              ComicCollectionStore.detailDisplayMode ==
+                      CollectionDetailDisplayMode.covers
+                  ? Icons.view_list_outlined
+                  : Icons.grid_view_outlined,
+            ),
+            tooltip:
+                (ComicCollectionStore.detailDisplayMode ==
+                            CollectionDetailDisplayMode.covers
+                        ? 'Show chapters'
+                        : 'Show covers')
+                    .tl,
+            onPressed: _toggleCollectionDetailMode,
+          ),
+        // ⚠️ 下载按钮不能按"已下载"隐藏（#P5.1 用户反馈）：漫画只要下载过
+        // 一章，isDownloaded 就是 true，按钮整个消失，用户无法再下载其余
+        // 章节。正确条件是"有网络源可下载"——纯本地导入（sourceKey=local）
+        // 才不显示，点了也只会得到 "Comic source not found"。
+        if (comicSource != null)
+          IconButton(
+            onPressed: download,
+            icon: const Icon(Icons.download_outlined),
+            tooltip: 'Download'.tl,
+          ),
+        // 已下载且存在缺失页的漫画：直接从此入口整部补救（S4）。
+        if (_localComic != null &&
+            MissingPages.missingCount(_localComic!.baseDir) > 0)
+          IconButton(
+            onPressed: () => RepairDownloadTask.repairComic(_localComic!),
+            icon: const Icon(Icons.auto_fix_high),
+            tooltip: 'Repair missing'.tl,
+          ),
+        IconButton(
+          onPressed: share,
+          icon: const Icon(Icons.share),
+          tooltip: 'Share'.tl,
+        ),
+        if (widget.sourceKey == 'local' ||
+            ComicSource.find(widget.sourceKey)?.loadComicInfo != null)
+          IconButton(
+            onPressed: _detailsRefreshing
+                ? null
+                : () => unawaited(_refreshComicDetails()),
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh'.tl,
+          ),
+        IconButton(
+          onPressed: showMoreActions,
+          icon: const Icon(Icons.more_horiz),
+        ),
+      ],
+    );
+
+    yield SliverPadding(
+      padding: EdgeInsets.fromLTRB(horizontalInset, 12, horizontalInset, 0),
+      sliver: SliverLazyToBoxAdapter(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isWide = constraints.maxWidth >= _comicDetailsWideBreakpoint;
+            // 宽屏/大分辨率下封面缩小 10%（180 → 162）。
+            final coverWidth = isWide
+                ? 162.0
+                : constraints.maxWidth < 400
+                ? 96.0
+                : 112.0;
+            final coverHeight = coverWidth / 0.72;
+            final cover = _buildDetailsCover(coverWidth);
+            final summary = _buildComicSummary(isWide);
+            // 宽屏时把阅读按钮的高度对齐封面高度，多按钮竖排时均分该高度。
+            final readingActions = _buildReadingActions(
+              isWide: isWide,
+              maxHeight: coverHeight,
+            );
+
+            return isWide
+                ? Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      cover,
+                      const SizedBox(width: 24),
+                      Expanded(child: summary),
+                      const SizedBox(width: 24),
+                      SizedBox(width: 220, child: readingActions),
+                    ],
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          cover,
+                          const SizedBox(width: 16),
+                          Expanded(child: summary),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      readingActions,
+                    ],
+                  );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailsCover(double width) {
+    Widget cover = AnimatedImage(
+      image: comicDetailCoverProvider(
+        sourceKey: comic.sourceKey,
+        id: comic.id,
+        cover: widget.cover ?? comic.cover,
+        localComic: _localComic,
+      ),
+      fit: BoxFit.cover,
+      width: double.infinity,
+      height: double.infinity,
+    );
+    // Same marker the list tiles carry, for the page the user actually opens to
+    // check before filing a comic a second time (#279).
+    if (!_isCollection &&
+        appdata.settings['showCollectionStatusOnTile'] == true) {
+      cover = Stack(
+        fit: StackFit.expand,
+        children: [
+          cover,
+          Positioned(
+            right: 6,
+            top: 6,
+            child: CollectionMemberMarker(
+              sourceKey: comic.sourceKey,
+              comicId: comic.id,
+              size: 16,
+              padding: 4,
+            ),
+          ),
+        ],
+      );
+    }
+    return GestureDetector(
+      onTap: () => _viewCover(context),
+      onLongPress: () => _saveCover(context),
+      child: Hero(
+        tag: "cover${widget.heroID}",
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: SizedBox(width: width, height: width / 0.72, child: cover),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildComicSummary(bool isWide) {
+    final chapterProgress = _comicStateRepository.chapterProgressFromDetails(
+      comic,
+      history,
+    );
+    final titleStyle =
+        (isWide
+                ? Theme.of(context).textTheme.titleLarge
+                : Theme.of(context).textTheme.titleMedium)
+            ?.copyWith(height: 1.2);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SelectableText(comic.title, style: titleStyle),
+        if (comic.subTitle?.trim().isNotEmpty == true) ...[
+          const SizedBox(height: 6),
+          SelectableText(
+            comic.subTitle!,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: context.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        ComicDescription(
+          title: comic.title,
+          subtitle:
+              comic.findAuthor() ?? comic.subTitle ?? comic.uploader ?? '',
+          description: comic.description ?? '',
+          badge: ComicSource.find(comic.sourceKey)?.name,
+          tags: comic.plainTags,
+          maxLines: isWide ? 5 : 4,
+          enableTranslate:
+              ComicSource.find(comic.sourceKey)?.enableTagsTranslate ?? false,
+          rating: comic.stars,
+          updateText: comic.findUpdateTime() ?? comic.updateTime,
+          progressText: chapterProgress.currentTitle ?? history?.description,
+          pagesText: comic.maxPage?.toString(),
+          showTitle: false,
+          onTapAuthor: (author, namespace) {
+            onTapTag(author, namespace ?? 'author');
+          },
+          onTapTag: onTapTag,
+          enableLongPressCopy: true,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildReadingActions({bool isWide = false, double? maxHeight}) {
+    // 按钮拉高后 M3 默认 StadiumBorder 会变成椭圆/胶囊，统一用矩形圆角。
+    final buttonShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(14),
+    );
+    // 宽屏按钮被拉到封面高度，默认 14/19 的字号图标偏小、比例失衡；
+    // 宽屏统一放大一档（16/24），窄屏保持原样。
+    final double labelSize = isWide ? 16 : 14;
+    final double iconSize = isWide ? 24 : 19;
+    final filledStyle = FilledButton.styleFrom(
+      shape: buttonShape,
+      textStyle: TextStyle(fontSize: labelSize, fontWeight: FontWeight.w600),
+      iconSize: iconSize,
+    );
+    final outlinedStyle = OutlinedButton.styleFrom(
+      shape: buttonShape,
+      textStyle: TextStyle(fontSize: labelSize, fontWeight: FontWeight.w600),
+      iconSize: iconSize,
+    );
+    // Any recorded progress counts — a comic left at chapter 1 page 1 still
+    // has a history entry, and the user expects a Continue button whenever
+    // the history list shows one (issue #135).
+    final hasHistory =
+        history != null && (history!.ep > 0 || history!.page > 0);
+    if (!hasHistory) {
+      // 单按钮：宽屏下独占整个封面高度（100%），窄屏保持固定高度。
+      return SizedBox(
+        height: isWide && maxHeight != null ? maxHeight : 52,
+        child: FilledButton.icon(
+          onPressed: read,
+          style: filledStyle,
+          icon: const Icon(Icons.play_arrow_rounded),
+          label: Text("Read".tl),
+        ),
+      );
+    }
+    // With reading history: "Start" (from the beginning) sits on top and
+    // "Continue" (resume progress) below it. Continue keeps the filled/primary
+    // emphasis despite being the lower button.
+    final startButton = OutlinedButton.icon(
+      onPressed: read,
+      style: outlinedStyle,
+      icon: const Icon(Icons.restart_alt_rounded),
+      label: Text("Start".tl),
+    );
+    final continueButton = FilledButton.icon(
+      onPressed: continueRead,
+      style: filledStyle,
+      icon: const Icon(Icons.menu_book_rounded),
+      label: Text("Continue".tl),
+    );
+    // 宽屏且多按钮竖排：把封面高度均分给两个按钮，填满整列。
+    if (isWide && maxHeight != null) {
+      return SizedBox(
+        height: maxHeight,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: startButton),
+            const SizedBox(height: 10),
+            Expanded(child: continueButton),
+          ],
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(height: 52, child: startButton),
+        const SizedBox(height: 10),
+        SizedBox(height: 52, child: continueButton),
+      ],
+    );
+  }
+
+  Widget buildActions() {
+    final source = ComicSource.find(comic.sourceKey);
+    return SliverLazyToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(0, 12, 0, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (data!.isLiked != null)
+                  _ActionButton(
+                    icon: const Icon(Icons.favorite_border_rounded),
+                    activeIcon: const Icon(Icons.favorite_rounded),
+                    isActive: isLiked,
+                    text:
+                        ((data!.likesCount != null)
+                                ? (data!.likesCount! + (isLiked ? 1 : 0))
+                                : (isLiked ? 'Liked'.tl : 'Like'.tl))
+                            .toString(),
+                    isLoading: isLiking,
+                    onPressed: likeOrUnlike,
+                  ),
+                _ActionButton(
+                  icon: const Icon(Icons.bookmark_border_rounded),
+                  activeIcon: const Icon(Icons.bookmark_rounded),
+                  isActive: isFavorite || isAddToLocalFav,
+                  text: 'Favorite'.tl,
+                  onPressed: openFavPanel,
+                  onLongPressed: quickFavorite,
+                ),
+                _ActionButton(
+                  icon: const Icon(Icons.schedule_rounded),
+                  activeIcon: const Icon(Icons.watch_later_rounded),
+                  isActive: isInReadLater,
+                  text: 'Read Later'.tl,
+                  onPressed: toggleReadLater,
+                ),
+                if (source?.commentsLoader != null)
+                  _ActionButton(
+                    icon: const Icon(Icons.chat_bubble_outline_rounded),
+                    text: (comic.commentCount ?? 'Comments'.tl).toString(),
+                    onPressed: showComments,
+                  ),
+                // Only the per-comic switch gates visibility. Readiness (OCR
+                // models on this device, a configured LLM) deliberately does
+                // not: neither rides the backup, so a comic enabled on one
+                // device showed no button at all on another, with nothing to
+                // tap and no hint why. preTranslate explains and offers to fix.
+                if (ImageTranslationService.isEnabledForComic(
+                  comic.id,
+                  comic.sourceKey,
+                ))
+                  Builder(
+                    builder: (context) {
+                      var manager = PreTranslationTaskManager.instance;
+                      var task = manager.runningTaskFor(
+                        comic.id,
+                        comic.sourceKey,
+                      );
+                      if (task != null) {
+                        // Same live figure the tasks page shows: committed
+                        // counters alone sit still for minutes while a group
+                        // is in flight.
+                        var progress =
+                            manager.activityOf(task.id)?.liveProgress(task) ??
+                            task.progress;
+                        var pct = task.total == 0
+                            ? null
+                            : (progress * 100).clamp(0, 100).toStringAsFixed(0);
+                        return _ActionButton(
+                          icon: const Icon(Icons.translate_rounded),
+                          activeIcon: const Icon(Icons.translate_rounded),
+                          isActive: true,
+                          text: pct == null
+                              ? 'Translating'.tl
+                              : '${'Translating'.tl} $pct%',
+                          onPressed: preTranslate,
+                          onLongPressed: showTranslationMenu,
+                        );
+                      }
+                      return _ActionButton(
+                        icon: const Icon(Icons.translate_rounded),
+                        text: 'Pre-translate'.tl,
+                        onPressed: preTranslate,
+                        onLongPressed: showTranslationMenu,
+                      );
+                    },
+                  ),
+              ],
+            ),
+            if (history != null) ...[
+              const SizedBox(height: 12),
+              _buildHistorySummary(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHistorySummary() {
+    final page = history!.page;
+    final ep = history!.ep;
+    final group = history!.group;
+    String text;
+    if (comic.chapters != null) {
+      final groupName = group == null
+          ? null
+          : comic.chapters!.groupTitleAt(group);
+      final chapterTitle = comic.chapters!.titleAt(ep, group: group);
+      final epName = chapterTitle?.isNotEmpty == true ? chapterTitle! : "E$ep";
+      text = groupName == null
+          ? "${"Last Reading".tl}: $epName P$page"
+          : "${"Last Reading".tl}: $groupName $epName P$page";
+    } else {
+      text = "${"Last Reading".tl}: P$page";
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: context.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.history_rounded,
+            size: 18,
+            color: context.colorScheme.primary,
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildDescription() {
+    final description = comic.description?.trim() ?? '';
+    if (description.isEmpty) {
+      return const SliverPadding(padding: EdgeInsets.zero);
+    }
+    final textStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
+      height: 1.55,
+      color: context.colorScheme.onSurfaceVariant,
+    );
+    // Horizontal padding around the description text (see the Padding below);
+    // subtracted from the card width when measuring whether it overflows.
+    const textHPadding = 0.0;
+    return SliverLazyToBoxAdapter(
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Only surface the expand/collapse toggle when the text actually
+            // spills past a single line. Previously the toggle was always shown
+            // yet did nothing for short descriptions: SelectableText ignores
+            // maxLines' ellipsis, so a "collapsed" description still rendered in
+            // full. Measure the real line count up front and drive both the
+            // toggle's visibility and the collapsed rendering from it.
+            final painter = TextPainter(
+              text: TextSpan(text: description, style: textStyle),
+              maxLines: 1,
+              textDirection: Directionality.of(context),
+            )..layout(maxWidth: constraints.maxWidth - textHPadding);
+            final overflows = painter.didExceedMaxLines;
+            final collapsed = overflows && !descriptionExpanded;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _ComicSectionHeader(
+                  icon: Icons.notes_rounded,
+                  title: "Description".tl,
+                  horizontalPadding: 0,
+                  trailing: overflows
+                      ? TextButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              descriptionExpanded = !descriptionExpanded;
+                            });
+                          },
+                          icon: Icon(
+                            descriptionExpanded
+                                ? Icons.expand_less_rounded
+                                : Icons.expand_more_rounded,
+                          ),
+                          label: Text(
+                            descriptionExpanded ? 'Collapse'.tl : 'Expand'.tl,
+                          ),
+                        )
+                      : null,
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 2, 0, 12),
+                  child: AnimatedSize(
+                    duration: const Duration(milliseconds: 180),
+                    alignment: Alignment.topCenter,
+                    child: collapsed
+                        // Truncated preview: a plain Text renders the ellipsis
+                        // SelectableText can't. Selection isn't useful on
+                        // clipped text anyway — the full text below is
+                        // selectable once expanded.
+                        ? Text(
+                            description,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: textStyle,
+                          )
+                        : SelectableText(
+                            description,
+                            style: textStyle,
+                          ).fixWidth(double.infinity),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget buildInfo() {
+    if (comic.tags.isEmpty &&
+        comic.uploader == null &&
+        comic.uploadTime == null &&
+        comic.uploadTime == null &&
+        comic.maxPage == null) {
+      return const SliverPadding(padding: EdgeInsets.zero);
+    }
+
+    int i = 0;
+
+    Widget buildTag({
+      required String text,
+      VoidCallback? onTap,
+      bool isTitle = false,
+    }) {
+      Color color;
+      if (isTitle) {
+        const colors = [
+          Colors.blue,
+          Colors.cyan,
+          Colors.red,
+          Colors.pink,
+          Colors.purple,
+          Colors.indigo,
+          Colors.teal,
+          Colors.green,
+          Colors.lime,
+          Colors.yellow,
+        ];
+        color = context.useBackgroundColor(colors[(i++) % (colors.length)]);
+      } else {
+        color = context.colorScheme.surfaceContainerLow;
+      }
+
+      final borderRadius = BorderRadius.circular(12);
+
+      const padding = EdgeInsets.symmetric(horizontal: 16, vertical: 6);
+
+      if (onTap != null) {
+        return Material(
+          color: color,
+          borderRadius: borderRadius,
+          child: InkWell(
+            borderRadius: borderRadius,
+            onTap: onTap,
+            onLongPress: () {
+              Clipboard.setData(ClipboardData(text: text));
+              context.showMessage(message: "Copied".tl);
+            },
+            onSecondaryTapDown: (details) {
+              showMenuX(context, details.globalPosition, [
+                MenuEntry(
+                  icon: Icons.remove_red_eye,
+                  text: "View".tl,
+                  onClick: onTap,
+                ),
+                MenuEntry(
+                  icon: Icons.copy,
+                  text: "Copy".tl,
+                  onClick: () {
+                    Clipboard.setData(ClipboardData(text: text));
+                    context.showMessage(message: "Copied".tl);
+                  },
+                ),
+              ]);
+            },
+            child: Text(text).padding(padding),
+          ),
+        );
+      } else {
+        Widget tag = Container(
+          decoration: BoxDecoration(color: color, borderRadius: borderRadius),
+          child: Text(text).padding(padding),
+        );
+        // Namespace headers (isTitle) are just labels — only the actual values
+        // are worth copying.
+        if (!isTitle) {
+          tag = GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onLongPress: () {
+              Clipboard.setData(ClipboardData(text: text));
+              context.showMessage(message: "Copied".tl);
+            },
+            child: tag,
+          );
+        }
+        return tag;
+      }
+    }
+
+    String formatTime(String time) {
+      if (int.tryParse(time) != null) {
+        var t = int.tryParse(time);
+        if (t! > 1000000000000) {
+          return DateTime.fromMillisecondsSinceEpoch(
+            t,
+          ).toString().substring(0, 19);
+        } else {
+          return DateTime.fromMillisecondsSinceEpoch(
+            t * 1000,
+          ).toString().substring(0, 19);
+        }
+      }
+      if (time.contains('T') || time.contains('Z')) {
+        var t = DateTime.parse(time);
+        return t.toString().substring(0, 19);
+      }
+      return time;
+    }
+
+    Widget buildWrap({required List<Widget> children}) {
+      return Wrap(
+        runSpacing: 8,
+        spacing: 8,
+        children: children,
+      ).paddingHorizontal(16).paddingBottom(8);
+    }
+
+    final source = comicSource;
+    bool enableTranslation =
+        App.locale.languageCode == 'zh' && source?.enableTagsTranslate == true;
+
+    return SliverLazyToBoxAdapter(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(title: Text("Information".tl)),
+          if (comic.stars != null)
+            Row(
+              children: [
+                StarRating(value: comic.stars!, size: 24, onTap: starRating),
+                const SizedBox(width: 8),
+                Text(comic.stars!.toStringAsFixed(2)),
+              ],
+            ).paddingLeft(16).paddingVertical(8),
+          for (var e in comic.tags.entries)
+            buildWrap(
+              children: [
+                if (e.value.isNotEmpty)
+                  buildTag(
+                    text: source == null ? e.key : e.key.ts(source.key),
+                    isTitle: true,
+                  ),
+                for (var tag in e.value)
+                  buildTag(
+                    text: enableTranslation
+                        ? TagsTranslation.translationTagWithNamespace(
+                            tag,
+                            e.key.toLowerCase(),
+                          )
+                        : tag,
+                    onTap: () => onTapTag(tag, e.key),
+                  ),
+              ],
+            ),
+          if (comic.uploader != null)
+            buildWrap(
+              children: [
+                buildTag(text: 'Uploader'.tl, isTitle: true),
+                buildTag(text: comic.uploader!),
+              ],
+            ),
+          if (comic.uploadTime != null)
+            buildWrap(
+              children: [
+                buildTag(text: 'Upload Time'.tl, isTitle: true),
+                buildTag(text: formatTime(comic.uploadTime!)),
+              ],
+            ),
+          if (comic.updateTime != null)
+            buildWrap(
+              children: [
+                buildTag(text: 'Update Time'.tl, isTitle: true),
+                buildTag(text: formatTime(comic.updateTime!)),
+              ],
+            ),
+          if (comic.maxPage != null)
+            buildWrap(
+              children: [
+                buildTag(text: 'Pages'.tl, isTitle: true),
+                buildTag(text: comic.maxPage.toString()),
+              ],
+            ),
+          const SizedBox(height: 12),
+          const Divider(),
+        ],
+      ),
+    );
+  }
+
+  Widget buildChapters() {
+    if (ComicCollectionStore.isCollectionSourceKey(comic.sourceKey) &&
+        ComicCollectionStore.detailDisplayMode ==
+            CollectionDetailDisplayMode.covers) {
+      return _buildCollectionCovers();
+    }
+    if (comic.chapters == null) {
+      if (detailsLoadError != null) {
+        return SliverLazyToBoxAdapter(
+          child: Container(
+            margin: const EdgeInsets.only(top: 16, bottom: 8),
+            decoration: BoxDecoration(
+              color: context.colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _ComicSectionHeader(
+                  icon: Icons.view_list_rounded,
+                  title: "Chapters".tl,
+                ),
+                Container(
+                  margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: context.colorScheme.errorContainer,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "Chapter load failed: @message".tlParams({
+                          "message": detailsLoadError!,
+                        }),
+                        style: TextStyle(
+                          color: context.colorScheme.onErrorContainer,
+                        ),
+                      ),
+                      if (comicSource?.loadComicInfo != null) ...[
+                        const SizedBox(height: 10),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: FilledButton.tonal(
+                            onPressed: retryLoadDetails,
+                            child: Text("Retry".tl),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+      if (_detailsRefreshing) {
+        return SliverLazyToBoxAdapter(
+          child: Container(
+            margin: const EdgeInsets.only(top: 16, bottom: 8),
+            decoration: BoxDecoration(
+              color: context.colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              children: [
+                _ComicSectionHeader(
+                  icon: Icons.view_list_rounded,
+                  title: "Chapters".tl,
+                ),
+                const Center(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(0, 12, 0, 28),
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+      return const SliverPadding(padding: EdgeInsets.zero);
+    }
+    return _ComicChapters(
+      history: history,
+      groupedMode: comic.chapters!.isGrouped,
+    );
+  }
+
+  Widget _buildCollectionCovers() {
+    final collection = _collection;
+    if (collection == null || collection.members.isEmpty) {
+      return const SliverPadding(padding: EdgeInsets.zero);
+    }
+    final comics = [
+      for (final member in collection.members)
+        Comic(
+          member.label,
+          member.cachedCover,
+          member.comicId,
+          member.cachedSubtitle.isEmpty ? null : member.cachedSubtitle,
+          const ['Collection member'],
+          '',
+          member.sourceKey,
+          null,
+          null,
+        ),
+    ];
+    return SliverMainAxisGroup(
+      slivers: [
+        SliverToBoxAdapter(
+          child: _ComicSectionHeader(
+            icon: Icons.collections_bookmark_outlined,
+            title: 'Comics in collection'.tl,
+            trailing: Text(
+              '${comics.length}',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: context.colorScheme.outline,
+              ),
+            ),
+          ),
+        ),
+        SliverGridComics(
+          comics: comics,
+          onTap: (comic, heroID) {
+            final member = collection.members.firstWhere(
+              (item) =>
+                  item.sourceKey == comic.sourceKey && item.comicId == comic.id,
+            );
+            context.to(
+              () => ComicPage(
+                id: member.comicId,
+                sourceKey: member.sourceKey,
+                cover: member.cachedCover,
+                title: member.label,
+                heroID: heroID,
+              ),
+            );
+          },
+          badgeBuilder: (comic) => ComicSource.find(comic.sourceKey)?.name,
+        ),
+        const SliverPadding(padding: EdgeInsets.only(bottom: 12)),
+      ],
+    );
+  }
+
+  Widget buildThumbnails() {
+    final source = comicSource;
+    if (comic.thumbnails == null &&
+        (source == null || source.loadComicThumbnail == null)) {
+      return const SliverPadding(padding: EdgeInsets.zero);
+    }
+    return const _ComicThumbnails();
+  }
+
+  Widget buildRecommend() {
+    if (comic.recommend == null || comic.recommend!.isEmpty) {
+      return const SliverPadding(padding: EdgeInsets.zero);
+    }
+    return SliverMainAxisGroup(
+      slivers: [
+        SliverToBoxAdapter(
+          child: _ComicSectionHeader(
+            icon: Icons.auto_awesome_mosaic_outlined,
+            title: "Related".tl,
+          ).paddingTop(20),
+        ),
+        SliverGridComics(comics: comic.recommend!),
+        const SliverPadding(padding: EdgeInsets.only(bottom: 12)),
+      ],
+    );
+  }
+
+  Widget buildComments() {
+    if (comic.comments == null || comic.comments!.isEmpty) {
+      return const SliverPadding(padding: EdgeInsets.zero);
+    }
+    return _CommentsPart(comments: comic.comments!, showMore: showComments);
+  }
+
+  void _viewCover(BuildContext context) {
+    final imageProvider = comicDetailCoverProvider(
+      sourceKey: comic.sourceKey,
+      id: comic.id,
+      cover: widget.cover ?? comic.cover,
+      localComic: _localComic,
+    );
+
+    final localComic = _localComic;
+    String? coverFilePath;
+    bool isLocal = false;
+    if (localComic != null && localComic.comicType == ComicType.local) {
+      isLocal = true;
+      coverFilePath = localComic.coverFile.path;
+    }
+
+    context
+        .to(
+          () => _CoverViewer(
+            imageProvider: imageProvider,
+            title: comic.title,
+            heroTag: "cover${widget.heroID}",
+            isLocal: isLocal,
+            coverFilePath: coverFilePath,
+            comicId: isLocal ? comic.id : null,
+          ),
+        )
+        .then((result) {
+          // Refresh after returning from cover viewer (e.g. custom cover set)
+          if (mounted && result == true) {
+            refreshLocalComic();
+          }
+        });
+  }
+
+  void _saveCover(BuildContext context) async {
+    try {
+      final imageProvider = comicDetailCoverProvider(
+        sourceKey: comic.sourceKey,
+        id: comic.id,
+        cover: widget.cover ?? comic.cover,
+        localComic: _localComic,
+      );
+
+      final imageStream = imageProvider.resolve(const ImageConfiguration());
+      final completer = Completer<Uint8List>();
+
+      imageStream.addListener(
+        ImageStreamListener((ImageInfo info, bool _) async {
+          final byteData = await info.image.toByteData(
+            format: ImageByteFormat.png,
+          );
+          if (byteData != null) {
+            completer.complete(byteData.buffer.asUint8List());
+          }
+        }),
+      );
+
+      final data = await completer.future;
+      final fileType = detectFileType(data);
+      await saveFile(filename: "cover${fileType.ext}", data: data);
+    } catch (e) {
+      if (context.mounted) {
+        context.showMessage(message: "Error".tl);
+      }
+    }
+  }
+}
+
+class _ComicSectionHeader extends StatelessWidget {
+  const _ComicSectionHeader({
+    required this.icon,
+    required this.title,
+    this.titleBadge,
+    this.trailing,
+    this.horizontalPadding,
+  });
+
+  final IconData icon;
+  final String title;
+
+  /// Small inline status widget right after the title, e.g. the chapters
+  /// background-refresh indicator.
+  final Widget? titleBadge;
+
+  final Widget? trailing;
+
+  /// Overrides the header's left/right padding when provided. Defaults keep the
+  /// original asymmetric inset (12 / 8) used by the thumbnail & comment panels.
+  final double? horizontalPadding;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        horizontalPadding ?? 12,
+        10,
+        horizontalPadding ?? 8,
+        6,
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: context.colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              icon,
+              size: 19,
+              color: context.colorScheme.onPrimaryContainer,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                if (titleBadge != null) ...[
+                  const SizedBox(width: 8),
+                  titleBadge!,
+                ],
+              ],
+            ),
+          ),
+          if (trailing != null) trailing!,
+        ],
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.icon,
+    required this.text,
+    required this.onPressed,
+    this.onLongPressed,
+    this.activeIcon,
+    this.isActive,
+    this.isLoading,
+  });
+
+  final Widget icon;
+
+  final Widget? activeIcon;
+
+  final bool? isActive;
+
+  final String text;
+
+  final void Function() onPressed;
+
+  final bool? isLoading;
+
+  final void Function()? onLongPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = isActive ?? false;
+    final foreground = active
+        ? context.colorScheme.primary
+        : context.colorScheme.onSurfaceVariant;
+    return Material(
+      color: active
+          ? context.colorScheme.primaryContainer
+          : context.colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: () {
+          if (!(isLoading ?? false)) {
+            onPressed();
+          }
+        },
+        onLongPress: onLongPressed,
+        borderRadius: BorderRadius.circular(12),
+        child: IconTheme.merge(
+          data: IconThemeData(size: 19, color: foreground),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isLoading ?? false)
+                    SizedBox(
+                      width: 19,
+                      height: 19,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.8,
+                        color: foreground,
+                      ),
+                    )
+                  else
+                    active ? (activeIcon ?? icon) : icon,
+                  const SizedBox(width: 8),
+                  Text(
+                    text,
+                    style: TextStyle(
+                      color: active
+                          ? context.colorScheme.onPrimaryContainer
+                          : context.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 下载选章器里的一行：一个**版本**（同一话的不同翻译组是不同行）。
+///
+/// 勾选的是 `version.chapterKey` 而不是索引 —— 索引空间只有"话号"那么大，
+/// 而 [ComicChapters.ids] 在版本化模式下只 yield `versions.first`，选了 B 组
+/// 会静默下成 A 组（U3 要修的正就是这个）。
+class _DownloadChapterItem {
+  const _DownloadChapterItem({
+    required this.chapterKey,
+    required this.title,
+    this.downloaded = false,
+  });
+
+  final String chapterKey;
+  final String title;
+  final bool downloaded;
+}
+
+/// 下载选章器的一节。 [group] 为 null 表示不分节（扁平/分组章节）。
+class _DownloadChapterSection {
+  const _DownloadChapterSection({this.group, required this.items});
+
+  final String? group;
+  final List<_DownloadChapterItem> items;
+}
+
+class _SelectDownloadChapter extends StatefulWidget {
+  const _SelectDownloadChapter(this.sections, this.finishSelect);
+
+  /// 按翻译组分好节的候选章节。顺序即展示顺序。
+  final List<_DownloadChapterSection> sections;
+
+  /// 用户选中的 chapterKey 列表。
+  final void Function(List<String>) finishSelect;
+
+  @override
+  State<_SelectDownloadChapter> createState() => _SelectDownloadChapterState();
+}
+
+class _SelectDownloadChapterState extends State<_SelectDownloadChapter> {
+  final Set<String> selected = {};
+
+  /// 折叠的分组名。默认**只展开第一组**（最近有更新的那个组）：
+  /// 列表一屏能看到全部组名与话数（这正是"显示不全"要解的），但
+  /// "下载全部"只作用于展开的组 —— 否则 comix.to 上 11 组 × 7 话会
+  /// 一次排 59 话，比改动前的 7 话放大了 8 倍。
+  final Set<String> collapsed = {};
+
+  @override
+  void initState() {
+    super.initState();
+    final groups = widget.sections.map((s) => s.group).whereType<String>();
+    if (groups.length > 1) collapsed.addAll(groups.skip(1));
+  }
+
+  /// 当前可见（未折叠）的所有条目。
+  Iterable<_DownloadChapterItem> get _visibleItems sync* {
+    for (final section in widget.sections) {
+      if (section.group != null && collapsed.contains(section.group)) continue;
+      yield* section.items;
+    }
+  }
+
+  void _toggleGroup(String group, bool expand) {
+    setState(() {
+      if (expand) {
+        collapsed.remove(group);
+      } else {
+        collapsed.add(group);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sections = widget.sections;
+    return Scaffold(
+      appBar: Appbar(
+        title: Text("Download".tl),
+        backgroundColor: context.colorScheme.surfaceContainerLow,
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: ListView.builder(
+              padding: EdgeInsets.zero,
+              itemCount: _itemCount(sections),
+              itemBuilder: (context, index) => _buildSlot(context, index),
+            ),
+          ),
+          Container(
+            height: 50,
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(color: context.colorScheme.outlineVariant),
+              ),
+            ),
+            child: Row(
+              children: [
+                const SizedBox(width: 16),
+                Expanded(
+                  child: TextButton(
+                    onPressed: () {
+                      widget.finishSelect([
+                        for (final item in _visibleItems)
+                          if (!item.downloaded) item.chapterKey,
+                      ]);
+                      context.pop();
+                    },
+                    child: Text("Download All".tl),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: selected.isEmpty
+                        ? null
+                        : () {
+                            widget.finishSelect([
+                              for (final item in _visibleItems)
+                                if (selected.contains(item.chapterKey))
+                                  item.chapterKey,
+                            ]);
+                            context.pop();
+                          },
+                    child: Text("Download Selected".tl),
+                  ),
+                ),
+                const SizedBox(width: 16),
+              ],
+            ),
+          ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom),
+        ],
+      ),
+    );
+  }
+
+  int _itemCount(List<_DownloadChapterSection> sections) {
+    var count = 0;
+    for (final section in sections) {
+      if (section.group != null) count++; // 分组头
+      if (section.group != null && collapsed.contains(section.group)) continue;
+      count += section.items.length;
+    }
+    return count;
+  }
+
+  Widget _buildSlot(BuildContext context, int index) {
+    var slot = index;
+    for (final section in widget.sections) {
+      final group = section.group;
+      if (group != null) {
+        if (slot == 0) return _buildSectionHeader(group, section.items.length);
+        slot--;
+        if (collapsed.contains(group)) continue;
+      }
+      if (slot < section.items.length) {
+        return _buildItem(section.items[slot]);
+      }
+      slot -= section.items.length;
+    }
+    return const SizedBox.shrink();
+  }
+
+  /// `组名(N)` + 展开/折叠。`N` 是该组的章节数 —— 用户挑组之前需要知道
+  /// 哪个组更全（comix.to 上同一话各组进度并不一致）。
+  Widget _buildSectionHeader(String group, int count) {
+    final isCollapsed = collapsed.contains(group);
+    final selectedCount = widget.sections
+        .where((s) => s.group == group)
+        .expand((s) => s.items)
+        .where((i) => selected.contains(i.chapterKey))
+        .length;
+    return ListTile(
+      dense: true,
+      onTap: () => _toggleGroup(group, isCollapsed),
+      leading: Icon(
+        isCollapsed ? Icons.chevron_right : Icons.expand_more,
+        size: 20,
+      ),
+      title: Text(
+        "$group ($count)",
+        style: ts.s14.copyWith(fontWeight: FontWeight.w600),
+      ),
+      trailing: selectedCount == 0
+          ? null
+          : Text(
+              "@n selected".tlParams({'n': selectedCount}),
+              style: ts.s12.copyWith(color: context.colorScheme.outline),
+            ),
+    );
+  }
+
+  Widget _buildItem(_DownloadChapterItem item) {
+    final checked = item.downloaded || selected.contains(item.chapterKey);
+    return CheckboxListTile(
+      title: Text(item.title),
+      value: checked,
+      // 已下载的行不可取消：这里只负责"下载"，删除走本地库的删除章节。
+      onChanged: item.downloaded
+          ? null
+          : (v) {
+              setState(() {
+                if (v == true) {
+                  selected.add(item.chapterKey);
+                } else {
+                  selected.remove(item.chapterKey);
+                }
+              });
+            },
+    );
+  }
+}
+
+/// Chapter multi-select for background pre-translation. Mirrors
+/// [_SelectDownloadChapter] but has no "already done" disabled rows — a
+/// chapter can always be re-queued (cached pages are skipped at run time).
+void openTranslatedChaptersPage(
+  BuildContext context,
+  StoredTranslationComic comic,
+) {
+  Future<void> open({ComicDetails? details}) async {
+    var stored = TranslationStore().chaptersFor(
+      comic.sourceKey,
+      comic.comicId,
+      sourceLang: comic.sourceLang,
+      targetLang: comic.targetLang,
+    );
+
+    var title = comic.title.isEmpty ? comic.comicId : comic.title;
+    var cover = comic.cover;
+    var chapterTitles = <String, String>{};
+    if (details != null) {
+      title = details.title.isEmpty ? title : details.title;
+      cover = details.cover.isEmpty ? cover : details.cover;
+      chapterTitles = details.chapters?.allChapters ?? {};
+      TranslationStore().updateComicMetadata(
+        comic.sourceKey,
+        comic.comicId,
+        comicTitle: details.title,
+        comicCover: details.cover,
+        chapterTitles: chapterTitles,
+      );
+      stored = TranslationStore().chaptersFor(
+        comic.sourceKey,
+        comic.comicId,
+        sourceLang: comic.sourceLang,
+        targetLang: comic.targetLang,
+      );
+    }
+
+    // The details cache is the chapter-list source of truth. The durable
+    // translation index only tells us which of those chapters have pages.
+    // Keep indexed chapters that disappeared from a stale source response so
+    // an old translation is never hidden from the user.
+    final storedById = <String, StoredTranslationChapter>{
+      for (var chapter in stored) chapter.identity.chapterId: chapter,
+    };
+    final sourceChapters =
+        details?.chapters?.allChapters ?? const <String, String>{};
+    final entries = <(String, String)>[];
+    final seenIds = <String>{};
+    for (var entry in sourceChapters.entries) {
+      seenIds.add(entry.key);
+      final storedTitle = storedById[entry.key]?.identity.chapterTitle ?? '';
+      entries.add((
+        entry.key,
+        entry.value.isNotEmpty
+            ? entry.value
+            : (storedTitle.isNotEmpty ? storedTitle : entry.key),
+      ));
+    }
+    for (var chapter in stored) {
+      if (seenIds.add(chapter.identity.chapterId)) {
+        entries.add((
+          chapter.identity.chapterId,
+          chapter.identity.chapterTitle.isEmpty
+              ? chapter.identity.chapterId
+              : chapter.identity.chapterTitle,
+        ));
+      }
+    }
+    if (entries.isEmpty) {
+      context.showMessage(message: 'No items'.tl);
+      return;
+    }
+
+    // A legacy page row may predate the chapter index. Hydrating it here makes
+    // the status tabs accurate without requiring a new translation run.
+    final translatedIds = <String>{...storedById.keys};
+    for (var entry in entries) {
+      if (translatedIds.contains(entry.$1)) continue;
+      final pages = ImageTranslationService.storedPageCount(
+        comic.comicId,
+        comic.sourceKey,
+        entry.$1,
+        comicTitle: title,
+        comicCover: cover,
+        chapterTitle: entry.$2,
+      );
+      if (pages > 0) translatedIds.add(entry.$1);
+    }
+    stored = TranslationStore().chaptersFor(
+      comic.sourceKey,
+      comic.comicId,
+      sourceLang: comic.sourceLang,
+      targetLang: comic.targetLang,
+    );
+    translatedIds.addAll(stored.map((chapter) => chapter.identity.chapterId));
+
+    List<(String, List<int>)>? groups;
+    if (details?.chapters?.isGrouped == true) {
+      var grouped = <(String, List<int>)>[];
+      final groupedIndices = <int>{};
+      for (var groupName in details!.chapters!.groups) {
+        var ids = details.chapters!.getGroup(groupName).keys.toSet();
+        var indices = [
+          for (var index = 0; index < entries.length; index++)
+            if (ids.contains(entries[index].$1)) index,
+        ];
+        if (indices.isNotEmpty) {
+          grouped.add((groupName, indices));
+          groupedIndices.addAll(indices);
+        }
+      }
+      final ungrouped = [
+        for (var index = 0; index < entries.length; index++)
+          if (!groupedIndices.contains(index)) index,
+      ];
+      if (ungrouped.isNotEmpty) {
+        grouped.add(('Other'.tl, ungrouped));
+      }
+      groups = grouped.isEmpty ? null : grouped;
+    }
+
+    void startJob(List<int> selected) {
+      var task = PreTranslationTaskManager.instance.start(
+        cid: comic.comicId,
+        sourceKey: comic.sourceKey,
+        comicType: ComicType.fromKey(comic.sourceKey),
+        title: title,
+        cover: cover,
+        chapters: [
+          for (var index in selected)
+            PreTranslationChapter(
+              eid: entries[index].$1,
+              title: entries[index].$2,
+            ),
+        ],
+      );
+      App.rootContext.showMessage(
+        message: task == null
+            ? (ImageTranslationService.isReadyForComic(
+                    comic.comicId,
+                    comic.sourceKey,
+                  )
+                  ? 'A pre-translation task is already running'.tl
+                  : 'Configure AI translation first'.tl)
+            : 'Pre-translation started'.tl,
+      );
+    }
+
+    context.to(
+      () => _SelectPreTranslateChapter(
+        cid: comic.comicId,
+        sourceKey: comic.sourceKey,
+        comicType: ComicType.fromKey(comic.sourceKey),
+        title: title,
+        cover: cover,
+        entries: entries,
+        groups: groups,
+        translatedChapterIds: translatedIds,
+        translatedView: true,
+        finishSelect: startJob,
+      ),
+    );
+  }
+
+  Future<void> hydrateAndOpen() async {
+    var cached = ComicDetailsCache().find(comic.sourceKey, comic.comicId);
+    if (cached != null) {
+      await open(details: cached);
+      return;
+    }
+    var source = ComicSource.find(comic.sourceKey);
+    if (source?.loadComicInfo != null) {
+      try {
+        var details = (await source!.loadComicInfo!(comic.comicId)).data;
+        ComicDetailsCache().update(comic.sourceKey, comic.comicId, details);
+        await open(details: details);
+        return;
+      } catch (e, s) {
+        Log.error('Translated Comics', 'Failed to load comic metadata: $e', s);
+      }
+    }
+    await open();
+  }
+
+  unawaited(hydrateAndOpen());
+}
+
+class _SelectPreTranslateChapter extends StatefulWidget {
+  const _SelectPreTranslateChapter({
+    required this.cid,
+    required this.sourceKey,
+    required this.comicType,
+    required this.title,
+    required this.cover,
+    required this.entries,
+    this.translatedChapterIds = const {},
+    this.groups,
+    this.translatedView = false,
+    required this.finishSelect,
+  });
+
+  final String cid;
+  final String sourceKey;
+  final ComicType comicType;
+  final String title;
+  final String cover;
+
+  /// Ordered list of chapter entries (eid, display title).
+  final List<(String, String)> entries;
+
+  /// Chapter ids that already have at least one durable translated page.
+  /// Used by the translated-comics view to split the picker into status tabs.
+  final Set<String> translatedChapterIds;
+
+  /// When the source groups chapters (e.g. comick's English/Latin editions),
+  /// each entry is (group name, flat indices into [entries]) so the picker can
+  /// show a tab per group. Null when the comic has no groups.
+  final List<(String, List<int>)>? groups;
+
+  final bool translatedView;
+
+  final void Function(List<int>) finishSelect;
+
+  @override
+  State<_SelectPreTranslateChapter> createState() =>
+      _SelectPreTranslateChapterState();
+}
+
+class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
+    with TickerProviderStateMixin {
+  List<int> selected = [];
+  final Set<String> _removedChapterIds = {};
+  late final Set<String> _translatedChapterIds;
+
+  /// Entry indices hidden because their title repeats an earlier entry of the
+  /// SAME group, and the comic's "hide duplicate chapters" switch is on. Scoping
+  /// by group matches the detail page: separate editions may each carry a
+  /// "第一话". Computed once — the switch lives in the detail page menu, which
+  /// cannot be reached while this picker is on top.
+  late final Set<int> _hiddenEntryIndices;
+
+  late final TabController? _statusTabController;
+  TabController? _groupTabController;
+
+  bool get _hasStatusTabs => widget.translatedView;
+
+  bool get _showTranslated =>
+      !_hasStatusTabs || _statusTabController!.index == 0;
+
+  /// Whether entry [index] is offered to the user at all: not deleted this
+  /// session, not hidden as a duplicate, and matching the active status tab.
+  bool _isVisible(int index) =>
+      !_removedChapterIds.contains(widget.entries[index].$1) &&
+      !_hiddenEntryIndices.contains(index) &&
+      _matchesStatus(index);
+
+  @override
+  void initState() {
+    super.initState();
+    _translatedChapterIds = {...widget.translatedChapterIds};
+    _hiddenEntryIndices =
+        ChapterDuplicatePrefs.isHidden(widget.cid, widget.sourceKey)
+        ? findDuplicateTitleIndices(
+            count: widget.entries.length,
+            titleOf: (i) => widget.entries[i].$2,
+            scopes: widget.groups?.map((g) => g.$2).toList(),
+          )
+        : const {};
+    _statusTabController = _hasStatusTabs
+        ? (TabController(length: 2, vsync: this)
+            ..addListener(_onStatusTabChanged))
+        : null;
+    _resetGroupTabController();
+    PreTranslationTaskManager.instance.addListener(_onTaskUpdate);
+    TranslationStore().addListener(_onStoreUpdate);
+  }
+
+  @override
+  void dispose() {
+    _statusTabController
+      ?..removeListener(_onStatusTabChanged)
+      ..dispose();
+    _groupTabController
+      ?..removeListener(_onGroupTabChanged)
+      ..dispose();
+    PreTranslationTaskManager.instance.removeListener(_onTaskUpdate);
+    TranslationStore().removeListener(_onStoreUpdate);
+    super.dispose();
+  }
+
+  void _onStatusTabChanged() {
+    if (!mounted || _statusTabController!.indexIsChanging) return;
+    // A selection belongs to one status action. Do not accidentally re-run a
+    // translated chapter that was selected before switching to pending.
+    _resetGroupTabController();
+    setState(() {
+      selected.clear();
+    });
+  }
+
+  void _onGroupTabChanged() {
+    if (mounted && !_groupTabController!.indexIsChanging) setState(() {});
+  }
+
+  List<(String, List<int>)> get _displayGroups {
+    final groups = widget.groups;
+    if (groups == null) return const [];
+    return [
+      for (var group in groups)
+        if (group.$2.any(_isVisible)) group,
+    ];
+  }
+
+  void _resetGroupTabController() {
+    final groups = _displayGroups;
+    final previousIndex = _groupTabController?.index ?? 0;
+    _groupTabController
+      ?..removeListener(_onGroupTabChanged)
+      ..dispose();
+    if (groups.isEmpty) {
+      _groupTabController = null;
+      return;
+    }
+    _groupTabController = TabController(
+      length: groups.length,
+      initialIndex: previousIndex.clamp(0, groups.length - 1),
+      vsync: this,
+    )..addListener(_onGroupTabChanged);
+  }
+
+  /// Flat entry indices the visible tab covers — the scope select-all acts on.
+  /// A grouped comic shows one tab per edition, and selecting every chapter of
+  /// every edition is virtually never what the user means, so the action stays
+  /// inside the tab they are looking at.
+  List<int> get _visibleIndices => widget.groups != null
+      ? _displayGroups.isEmpty
+            ? const []
+            : _displayGroups[_groupTabController!.index].$2
+                  .where(_isVisible)
+                  .toList()
+      : [
+          for (int i = 0; i < widget.entries.length; i++)
+            if (_isVisible(i)) i,
+        ];
+
+  bool _matchesStatus(int index) {
+    if (!_hasStatusTabs) return true;
+    final isTranslated = _translatedChapterIds.contains(
+      widget.entries[index].$1,
+    );
+    return isTranslated == _showTranslated;
+  }
+
+  bool get _allVisibleSelected {
+    var visible = _visibleIndices;
+    return visible.isNotEmpty && visible.every(selected.contains);
+  }
+
+  /// Ticks or clears just the visible tab's chapters, leaving any selection in
+  /// the other tabs alone. Ticking never starts translation — only Start does.
+  void _toggleSelectVisible() {
+    var visible = _visibleIndices;
+    setState(() {
+      if (_allVisibleSelected) {
+        selected.removeWhere(visible.contains);
+      } else {
+        for (var i in visible) {
+          if (!selected.contains(i)) selected.add(i);
+        }
+      }
+    });
+  }
+
+  void _onTaskUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  void _onStoreUpdate() {
+    if (!mounted) return;
+    final config = TranslationConfig.of(widget.cid, widget.sourceKey);
+    final current = TranslationStore()
+        .chaptersFor(
+          widget.sourceKey,
+          widget.cid,
+          sourceLang: config.sourceLang,
+          targetLang: config.targetLang,
+        )
+        .map((chapter) => chapter.identity.chapterId)
+        .toSet();
+    setState(() {
+      _translatedChapterIds
+        ..clear()
+        ..addAll(current);
+      selected.removeWhere((index) => !_matchesStatus(index));
+    });
+    _resetGroupTabController();
+  }
+
+  /// Opens the per-comic glossary editor from the pre-translate menu.
+  void _openGlossary() {
+    App.rootContext.to(
+      () => GlossaryEditorPage(
+        cid: widget.cid,
+        sourceKey: widget.sourceKey,
+        title: widget.title,
+      ),
+    );
+  }
+
+  /// Resets the translations of the chapters the user checked and translates
+  /// them again. Only the selected chapters' stored text + rendered pages are
+  /// dropped (the learned glossary is kept, so other chapters stay consistent),
+  /// their pre-translation status is cleared so the ticks go away, and a fresh
+  /// job is queued for exactly those chapters. Nothing checked = a prompt, since
+  /// re-translation is intentionally opt-in per chapter.
+  void _reTranslate() {
+    if (selected.isEmpty) {
+      App.rootContext.showMessage(
+        message: "Select chapters to re-translate first".tl,
+      );
+      return;
+    }
+    if (!ImageTranslationService.isReadyForComic(
+      widget.cid,
+      widget.sourceKey,
+    )) {
+      App.rootContext.showMessage(message: 'Configure AI translation first'.tl);
+      return;
+    }
+    var picked = List<int>.from(selected)..sort();
+    showConfirmDialog(
+      context: context,
+      title: "Re-translate selected chapters?".tl,
+      content:
+          "This clears the translations of the @count selected chapters, then translates them again."
+              .tlParams({'count': picked.length}),
+      onConfirm: () async {
+        var service = ImageTranslationService.instance;
+        var eids = <String>{};
+        for (var i in picked) {
+          var eid = widget.entries[i].$1;
+          eids.add(eid);
+          await service.retranslate(widget.cid, widget.sourceKey, eid: eid);
+        }
+        PreTranslationTaskManager.instance.resetChapterStatus(
+          widget.cid,
+          widget.sourceKey,
+          eids,
+        );
+        widget.finishSelect(picked);
+        if (mounted) {
+          context.pop();
+        }
+      },
+    );
+  }
+
+  /// The trailing status widget for chapter [index]: nothing when idle, a
+  /// "waiting" chip when queued but not started, a live progress bar while
+  /// translating, or a "translated" tick when done. Distinguishes an active
+  /// (running-job) chapter from one merely finished in history.
+  Widget? _buildChapterStatus(int index) {
+    var eid = widget.entries[index].$1;
+    var manager = PreTranslationTaskManager.instance;
+    var chapter = manager.chapterProgressFor(widget.cid, widget.sourceKey, eid);
+
+    // No task record for this chapter on THIS device — but its translations may
+    // have arrived from another device over WebDAV. Task records are per-device
+    // and deliberately not synced (#106), so fall back to the durable, synced
+    // translation store: any stored page means the chapter was translated
+    // somewhere. Show a "translated" tick with the page count so the user sees
+    // it needn't be re-run. Total page count is not stored, so this reports how
+    // many pages carry a result rather than a percentage.
+    if (chapter == null) {
+      var stored = ImageTranslationService.storedPageCount(
+        widget.cid,
+        widget.sourceKey,
+        eid,
+        comicTitle: widget.title,
+        comicCover: widget.cover,
+        chapterTitle: widget.entries[index].$2,
+      );
+      if (stored <= 0) return null;
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.check_circle_outline,
+            size: 16,
+            color: context.colorScheme.primary,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            "@count pages".tlParams({'count': stored}),
+            style: ts.s12.withColor(context.colorScheme.primary),
+          ),
+        ],
+      );
+    }
+
+    var active = manager.isChapterActive(widget.cid, widget.sourceKey, eid);
+    // Live counts: committed pages plus the running job's finished-but-buffered
+    // groups, so the bar tracks work actually done instead of the deliberately
+    // conservative resume cursor. Processed (success + failed) keeps the number
+    // in step with the bar when a page fails.
+    var processed = manager
+        .livePagesOf(widget.cid, widget.sourceKey, chapter)
+        .processed;
+    var isCompleted = chapter.total > 0 && processed >= chapter.total;
+
+    if (isCompleted) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.check_circle_outline,
+            size: 16,
+            color: context.colorScheme.primary,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            "Translated".tl,
+            style: ts.s12.withColor(context.colorScheme.primary),
+          ),
+        ],
+      );
+    }
+
+    if (!active) return null;
+
+    // Active but nothing processed yet (page count unknown or not started):
+    // show a "waiting" state so the user knows it is queued.
+    if (chapter.total == 0 || processed == 0) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            "Waiting".tl,
+            style: ts.s12.withColor(context.colorScheme.onSurfaceVariant),
+          ),
+        ],
+      );
+    }
+
+    var pct = (processed / chapter.total).clamp(0.0, 1.0);
+    return SizedBox(
+      width: 120,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$processed/${chapter.total}',
+            style: ts.s12.withColor(context.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 2),
+          LinearProgressIndicator(value: pct),
+        ],
+      ),
+    );
+  }
+
+  /// Confirms before starting: a multi-chapter run against a paid AI endpoint
+  /// can be costly (the offline engine is free).
+  /// Small selections start straight away; larger ones ask first.
+  void _confirmAndStart() {
+    selected.sort();
+    void start() {
+      widget.finishSelect(selected);
+      context.pop();
+    }
+
+    // A single chapter is cheap enough to skip the prompt.
+    if (selected.length < 2) {
+      start();
+      return;
+    }
+    showConfirmDialog(
+      context: context,
+      title: "Start pre-translation?".tl,
+      content:
+          "About to translate @count chapters. If your configured LLM "
+                  "endpoint is paid, this may cost money."
+              .tlParams({'count': selected.length}),
+      onConfirm: start,
+    );
+  }
+
+  /// Whether chapter [index] has translation content the user could delete or
+  /// re-run, and is NOT currently being translated. Any stored page (including
+  /// an empty "no text" result) counts as translated content — this catches
+  /// both fully translated and partially translated chapters, while excluding
+  /// an active chapter so a per-chapter action can't collide with a live job.
+  bool _chapterHasIdleTranslation(int index) {
+    var eid = widget.entries[index].$1;
+    var manager = PreTranslationTaskManager.instance;
+    if (manager.isChapterActive(widget.cid, widget.sourceKey, eid)) {
+      return false;
+    }
+    return ImageTranslationService.storedPageCount(
+          widget.cid,
+          widget.sourceKey,
+          eid,
+          comicTitle: widget.title,
+          comicCover: widget.cover,
+          chapterTitle: widget.entries[index].$2,
+        ) >
+        0;
+  }
+
+  /// Clears just this chapter's stored text + rendered pages (the comic's
+  /// learned glossary is kept, other chapters still rely on it) and drops its
+  /// recorded pre-translation status so the "translated" marker goes away. No
+  /// new job is started — use "Re-translate" for that.
+  void _deleteChapterTranslation(int index) {
+    var eid = widget.entries[index].$1;
+    var title = widget.entries[index].$2;
+    showConfirmDialog(
+      context: context,
+      title: "Delete this chapter's translation?".tl,
+      content:
+          "This removes the stored translation and rendered pages of \"@title\". The original images are unaffected."
+              .tlParams({'title': title}),
+      onConfirm: () async {
+        await ImageTranslationService.instance.retranslate(
+          widget.cid,
+          widget.sourceKey,
+          eid: eid,
+        );
+        PreTranslationTaskManager.instance.resetChapterStatus(
+          widget.cid,
+          widget.sourceKey,
+          {eid},
+        );
+        if (mounted) {
+          App.rootContext.showMessage(
+            message: "Translation results cleared".tl,
+          );
+          if (widget.translatedView) {
+            setState(() {
+              selected.remove(index);
+              _removedChapterIds.add(eid);
+            });
+            if (_visibleIndices.isEmpty && mounted) context.pop();
+          } else {
+            setState(() {});
+          }
+        }
+      },
+    );
+  }
+
+  /// Clears this chapter's translation and immediately queues a fresh job for
+  /// just this chapter (the glossary is kept so it stays consistent with the
+  /// rest of the comic).
+  void _reTranslateChapter(int index) {
+    if (!ImageTranslationService.isReadyForComic(
+      widget.cid,
+      widget.sourceKey,
+    )) {
+      App.rootContext.showMessage(message: 'Configure AI translation first'.tl);
+      return;
+    }
+    var eid = widget.entries[index].$1;
+    var title = widget.entries[index].$2;
+    showConfirmDialog(
+      context: context,
+      title: "Re-translate this chapter?".tl,
+      content:
+          "This clears the translation of \"@title\" and translates it again."
+              .tlParams({'title': title}),
+      onConfirm: () async {
+        await ImageTranslationService.instance.retranslate(
+          widget.cid,
+          widget.sourceKey,
+          eid: eid,
+        );
+        PreTranslationTaskManager.instance.resetChapterStatus(
+          widget.cid,
+          widget.sourceKey,
+          {eid},
+        );
+        widget.finishSelect([index]);
+        if (mounted) setState(() {});
+      },
+    );
+  }
+
+  /// Cancels just this chapter's slice of a running pre-translation job,
+  /// leaving the rest of the job going. Only meaningful while the chapter is
+  /// active (queued or translating).
+  void _cancelChapter(int index) {
+    var eid = widget.entries[index].$1;
+    var manager = PreTranslationTaskManager.instance;
+    var task = manager.runningTaskFor(widget.cid, widget.sourceKey);
+    if (task == null) return;
+    manager.cancelChapter(task.id, eid);
+    if (mounted) {
+      setState(() {});
+      App.rootContext.showMessage(message: "Chapter translation canceled".tl);
+    }
+  }
+
+  /// Clears every stored translation and rendered page of this whole comic
+  /// (the learned glossary too, matching the detail page's whole-comic
+  /// re-translate) without starting a new job. Reached from the picker's menu.
+  void _deleteComicTranslation() {
+    showConfirmDialog(
+      context: context,
+      title: "Delete all translations for this comic?".tl,
+      content:
+          "This removes every stored translation and rendered page of this comic. The original images are unaffected."
+              .tl,
+      onConfirm: () async {
+        // Stop any running job for this comic first, so it doesn't keep
+        // repopulating the cache we're about to clear.
+        var running = PreTranslationTaskManager.instance.runningTaskFor(
+          widget.cid,
+          widget.sourceKey,
+        );
+        if (running != null) {
+          PreTranslationTaskManager.instance.cancel(running.id);
+        }
+        await ImageTranslationService.instance.retranslate(
+          widget.cid,
+          widget.sourceKey,
+        );
+        PreTranslationTaskManager.instance.resetComicStatus(
+          widget.cid,
+          widget.sourceKey,
+        );
+        if (mounted) {
+          App.rootContext.showMessage(
+            message: "Translation results cleared".tl,
+          );
+          if (widget.translatedView) {
+            context.pop();
+          } else {
+            setState(() {});
+          }
+        }
+      },
+    );
+  }
+
+  /// One checkbox row for the flat chapter index [i].
+  Widget _buildChapterTile(int i) {
+    var title = widget.entries[i].$2;
+    var eid = widget.entries[i].$1;
+    var progress = _buildChapterStatus(i);
+    var isActive = PreTranslationTaskManager.instance.isChapterActive(
+      widget.cid,
+      widget.sourceKey,
+      eid,
+    );
+    var hasIdleTranslation = _chapterHasIdleTranslation(i);
+    return CheckboxListTile(
+      title: Row(
+        children: [
+          Expanded(child: Text(title)),
+          if (progress != null) ...[const SizedBox(width: 8), progress],
+          if (isActive)
+            IconButton(
+              icon: const Icon(Icons.close_rounded),
+              iconSize: 20,
+              tooltip: "Cancel translation".tl,
+              color: context.colorScheme.error,
+              onPressed: () => _cancelChapter(i),
+            )
+          else if (hasIdleTranslation)
+            MenuButton(
+              entries: [
+                MenuEntry(
+                  icon: Icons.refresh_rounded,
+                  text: "Re-translate".tl,
+                  onClick: () => _reTranslateChapter(i),
+                ),
+                MenuEntry(
+                  icon: Icons.delete_outline_rounded,
+                  text: "Delete translation".tl,
+                  color: context.colorScheme.error,
+                  onClick: () => _deleteChapterTranslation(i),
+                ),
+              ],
+            ),
+        ],
+      ),
+      value: selected.contains(i),
+      onChanged: (v) {
+        setState(() {
+          if (selected.contains(i)) {
+            selected.remove(i);
+          } else {
+            selected.add(i);
+          }
+        });
+      },
+    );
+  }
+
+  /// The chapter list. When the source groups chapters (e.g. comick's
+  /// English/Latin editions) it becomes a set of tabs, one per group, so the
+  /// user can find the edition they want instead of scrolling one merged list.
+  Widget _buildChapterList() {
+    final groups = _displayGroups;
+    final visible = _visibleIndices;
+    if (widget.groups == null || groups.isEmpty) {
+      if (widget.groups != null && visible.isEmpty) {
+        return _emptyChapterMessage();
+      }
+      return ListView.builder(
+        padding: EdgeInsets.zero,
+        itemCount: visible.length,
+        itemBuilder: (context, i) => _buildChapterTile(visible[i]),
+      );
+    }
+    return Column(
+      children: [
+        AppTabBar(
+          key: ValueKey(_groupTabController),
+          controller: _groupTabController,
+          tabs: groups.map((g) => Tab(text: g.$1)).toList(),
+        ),
+        Expanded(
+          child: TabViewBody(
+            key: ValueKey(_groupTabController),
+            controller: _groupTabController,
+            children: [
+              for (var g in groups)
+                Builder(
+                  builder: (context) {
+                    var visible = g.$2.where(_isVisible).toList();
+                    return visible.isEmpty
+                        ? _emptyChapterMessage()
+                        : ListView.builder(
+                            padding: EdgeInsets.zero,
+                            itemCount: visible.length,
+                            itemBuilder: (context, index) =>
+                                _buildChapterTile(visible[index]),
+                          );
+                  },
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _emptyChapterMessage() {
+    return Center(
+      child: Text(
+        _showTranslated
+            ? 'No translated chapters'.tl
+            : 'No chapters to translate'.tl,
+        style: ts.s16,
+      ),
+    );
+  }
+
+  Widget _buildStatusTabs() {
+    if (!_hasStatusTabs) return const SizedBox.shrink();
+    return Material(
+      color: context.colorScheme.surfaceContainerLow,
+      child: AppTabBar(
+        controller: _statusTabController,
+        tabs: [
+          Tab(text: 'Translated'.tl),
+          Tab(text: 'To translate'.tl),
+        ],
+      ),
+    );
+  }
+
+  List<MenuEntry> _menuEntries() {
+    return [
+      MenuEntry(
+        icon: Icons.menu_book_outlined,
+        text: "Glossary".tl,
+        onClick: _openGlossary,
+      ),
+      MenuEntry(
+        icon: _showTranslated
+            ? Icons.refresh_rounded
+            : Icons.play_arrow_rounded,
+        text: _showTranslated ? "Re-translate selected".tl : "Start".tl,
+        onClick: _showTranslated ? _reTranslate : _confirmAndStart,
+      ),
+      MenuEntry(
+        icon: Icons.delete_outline_rounded,
+        text: "Delete all translations".tl,
+        color: context.colorScheme.error,
+        onClick: _deleteComicTranslation,
+      ),
+    ];
+  }
+
+  void _openComicDetails() {
+    context.to(
+      () => ComicPage(
+        id: widget.cid,
+        sourceKey: widget.sourceKey,
+        title: widget.title,
+        cover: widget.cover,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canStart = selected.isNotEmpty;
+    final usesRetranslate = widget.translatedView && _showTranslated;
+    return Scaffold(
+      appBar: Appbar(
+        title: Text(
+          widget.translatedView ? 'Comic Translation'.tl : "Pre-translate".tl,
+        ),
+        backgroundColor: context.colorScheme.surfaceContainerLow,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.info_outline_rounded),
+            tooltip: 'Open comic details'.tl,
+            onPressed: _openComicDetails,
+          ),
+          MenuButton(entries: _menuEntries()),
+        ],
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildStatusTabs(),
+          Expanded(child: _buildChapterList()),
+          Container(
+            height: 50,
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(color: context.colorScheme.outlineVariant),
+              ),
+            ),
+            child: Row(
+              children: [
+                const SizedBox(width: 16),
+                Expanded(
+                  child: TextButton(
+                    onPressed: _toggleSelectVisible,
+                    child: Text(
+                      _allVisibleSelected ? "Deselect All".tl : "Select All".tl,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: canStart
+                        ? (usesRetranslate ? _reTranslate : _confirmAndStart)
+                        : null,
+                    child: Text(
+                      usesRetranslate ? 'Re-translate'.tl : "Start".tl,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+              ],
+            ),
+          ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComicPageLoadingPlaceHolder extends StatelessWidget {
+  const _ComicPageLoadingPlaceHolder({
+    this.cover,
+    this.title,
+    required this.sourceKey,
+    required this.cid,
+    this.heroID,
+  });
+
+  final String? cover;
+
+  final String? title;
+
+  final String sourceKey;
+
+  final String cid;
+
+  final int? heroID;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget buildContainer(
+      double? width,
+      double? height, {
+      Color? color,
+      double? radius,
+    }) {
+      return Container(
+        height: height,
+        width: width,
+        decoration: BoxDecoration(
+          color: color ?? context.colorScheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(radius ?? 10),
+        ),
+      );
+    }
+
+    return Shimmer(
+      color: context.isDarkMode ? Colors.grey.shade700 : Colors.white,
+      child: Column(
+        children: [
+          Appbar(title: Text(""), backgroundColor: context.colorScheme.surface),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(width: _comicDetailsPageInset(context)),
+              buildImage(context, context.width >= 840 ? 162 : 112),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (title != null)
+                      Text(title ?? "", style: ts.s18)
+                    else
+                      buildContainer(200, 25),
+                    const SizedBox(height: 8),
+                    buildContainer(80, 20),
+                  ],
+                ),
+              ),
+              if (context.width >= 840) ...[
+                const SizedBox(width: 24),
+                SizedBox(
+                  width: 220,
+                  child: Column(
+                    children: [
+                      buildContainer(null, 52, radius: 14),
+                      const SizedBox(height: 10),
+                      buildContainer(null, 52, radius: 14),
+                    ],
+                  ),
+                ),
+              ],
+              SizedBox(width: _comicDetailsPageInset(context)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (context.width < 840)
+            Column(
+              children: [
+                buildContainer(null, 52, radius: 14),
+                const SizedBox(height: 10),
+                buildContainer(null, 52, radius: 14),
+              ],
+            ).paddingHorizontal(_comicDetailsPageInset(context)),
+          const SizedBox(height: 20),
+          Center(
+            child: CircularProgressIndicator(
+              strokeWidth: 2.4,
+            ).fixHeight(24).fixWidth(24),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildImage(BuildContext context, double width) {
+    Widget child;
+    if (cover != null) {
+      child = AnimatedImage(
+        image: comicDetailCoverProvider(
+          sourceKey: sourceKey,
+          id: cid,
+          cover: cover!,
+          localComic: LocalManager().find(cid, ComicType.local),
+        ),
+        width: double.infinity,
+        height: double.infinity,
+        fit: BoxFit.cover,
+      );
+    } else {
+      child = const SizedBox();
+    }
+
+    return Hero(
+      tag: "cover$heroID",
+      child: Container(
+        decoration: BoxDecoration(
+          color: context.colorScheme.primaryContainer,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        height: width / 0.72,
+        width: width,
+        clipBehavior: Clip.antiAlias,
+        child: child,
+      ),
+    );
+  }
+}

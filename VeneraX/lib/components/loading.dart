@@ -1,0 +1,617 @@
+part of 'components.dart';
+
+/// 已自动尝试过无窗口验证的 CloudflareException URL（防重入循环）。
+final _headlessVerifyAttempted = <String>{};
+
+class NetworkError extends StatelessWidget {
+  const NetworkError({
+    super.key,
+    required this.message,
+    this.retry,
+    this.withAppbar = true,
+    this.buttonText,
+    this.action,
+    this.relatedLinks = const <DomainComicSourceLink>[],
+    this.comic,
+  });
+
+  final String message;
+
+  final void Function()? retry;
+
+  final bool withAppbar;
+
+  final String? buttonText;
+
+  final Widget? action;
+
+  final List<DomainComicSourceLink> relatedLinks;
+
+  final Comic? comic;
+
+  @override
+  Widget build(BuildContext context) {
+    var cfe = CloudflareException.fromString(message);
+    // 挑战异常自动触发一次无窗口验证（Cloudflare JS 挑战 / gatekeeper PoW
+    // 都可在离屏 webview 里自动通过）。成功后自动 retry，无需用户点"验证"；
+    // 失败（如交互式验证码）则保留手动按钮。每个 URL 只自动尝试一次。
+    if (cfe != null && retry != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final cfeHost = Uri.tryParse(cfe.url)?.host ?? '';
+        // 该站点簇最近已验证过（cookie 已缓存并会在请求阶段注入）→ 直接
+        // 重试，不再跑第二次 2 分钟 PoW（"每章都要重新验证"的根因）。
+        if (isClusterVerified(cfeHost)) {
+          Log.info(
+            "Cloudflare",
+            "cluster already verified, retry without headless: $cfeHost",
+          );
+          retry!();
+          return;
+        }
+        if (_headlessVerifyAttempted.contains(cfe.url)) {
+          return;
+        }
+        _headlessVerifyAttempted.add(cfe.url);
+        Log.info("Cloudflare", "auto headless verification: ${cfe.url}");
+        tryHeadlessVerification(cfe).then((ok) {
+          if (ok) {
+            retry!();
+          } else {
+            Log.info(
+              "Cloudflare",
+              "headless verification failed — manual 'Verify' still available",
+            );
+          }
+        });
+      });
+    }
+    Widget body = Center(
+      child: SingleChildScrollView(
+        // Give this scroll view its own PageStorage slot. Without a key it
+        // inherits the nearest ancestor PageStorageKey chain, which can match
+        // the identifier a parent uses to persist its own state map; the scroll
+        // position would then read that map and crash casting it to double? in
+        // ScrollPosition.restoreScrollOffset.
+        key: const PageStorageKey('network_error_scroll'),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    size: 28,
+                    color: context.colorScheme.error,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    "Error".tl,
+                    style: ts.withColor(context.colorScheme.error).s16,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              cfe == null ? message : "Cloudflare verification required".tl,
+              textAlign: TextAlign.center,
+              maxLines: 3,
+            ),
+            // 显示已关联的源
+            if (relatedLinks.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: context.colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.info_outline,
+                          size: 20,
+                          color: context.colorScheme.onPrimaryContainer,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'This comic has linked sources available'.tl,
+                            style: TextStyle(
+                              color: context.colorScheme.onPrimaryContainer,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    for (final link in relatedLinks.take(3))
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor:
+                                context.colorScheme.onPrimaryContainer,
+                            side: BorderSide(
+                              color: context.colorScheme.onPrimaryContainer
+                                  .withValues(alpha: 0.5),
+                            ),
+                          ),
+                          onPressed: () {
+                            final sourceKey = _sourceKeyFromPlatformId(
+                              link.platformId,
+                            );
+                            App.mainNavigatorKey?.currentContext?.to(
+                              () => ComicPage(
+                                id: link.sourceComicId,
+                                sourceKey: sourceKey,
+                                cover: link.comicCoverUri,
+                                title: link.comicTitle,
+                              ),
+                            );
+                          },
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      link.sourceName,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    if (link.comicAuthor != null)
+                                      Text(
+                                        link.comicAuthor!,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: context
+                                              .colorScheme
+                                              .onPrimaryContainer
+                                              .withValues(alpha: 0.7),
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              Icon(
+                                Icons.arrow_forward,
+                                size: 18,
+                                color: context.colorScheme.onPrimaryContainer,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    if (relatedLinks.length > 3)
+                      Text(
+                        'And @count more linked sources...'.tlParams({
+                          'count': relatedLinks.length - 3,
+                        }),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: context.colorScheme.onPrimaryContainer
+                              .withValues(alpha: 0.7),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              // 迁移按钮
+              if (comic != null)
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.swap_horiz),
+                  label: Text('Migrate to another source'.tl),
+                  onPressed: () {
+                    final favoriteItem = favoriteItemFromComic(comic!);
+                    showSourceMigrationDialog(context, favoriteItem);
+                  },
+                ),
+            ],
+            TextButton(
+              onPressed: () {
+                saveFile(
+                  data: utf8.encode(Log().toString()),
+                  filename: 'log.txt',
+                );
+              },
+              child: Text("Export logs".tl),
+            ),
+            const SizedBox(height: 8),
+            if (retry != null)
+              if (cfe != null)
+                FilledButton(
+                  onPressed: () => passCloudflare(
+                    CloudflareException.fromString(message)!,
+                    retry!,
+                  ),
+                  child: Text('Verify'.tl),
+                )
+              else
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (action != null) action!.paddingRight(8),
+                    FilledButton(
+                      onPressed: retry,
+                      child: Text(buttonText ?? 'Retry'.tl),
+                    ),
+                  ],
+                ),
+          ],
+        ),
+      ),
+    );
+    if (withAppbar) {
+      body = Column(
+        children: [
+          const Appbar(title: Text("")),
+          Expanded(child: body),
+        ],
+      );
+    }
+    return Material(child: body);
+  }
+}
+
+String _sourceKeyFromPlatformId(String platformId) {
+  const remotePrefix = 'remote:';
+  if (platformId.startsWith(remotePrefix)) {
+    return platformId.substring(remotePrefix.length);
+  }
+  return platformId;
+}
+
+class ListLoadingIndicator extends StatelessWidget {
+  const ListLoadingIndicator({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: double.infinity,
+      height: 80,
+      child: Center(child: FiveDotLoadingAnimation()),
+    );
+  }
+}
+
+class SliverListLoadingIndicator extends StatelessWidget {
+  const SliverListLoadingIndicator({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // SliverToBoxAdapter can not been lazy loaded.
+    // Use SliverList to make sure the animation can be lazy loaded.
+    return SliverList.list(
+      children: const [SizedBox(), ListLoadingIndicator()],
+    );
+  }
+}
+
+abstract class LoadingState<T extends StatefulWidget, S extends Object>
+    extends State<T> {
+  bool isLoading = false;
+
+  S? data;
+
+  String? error;
+
+  Future<Res<S>> loadData();
+
+  Future<Res<S>> loadDataWithRetry() async {
+    int retry = 0;
+    while (true) {
+      var res = await loadData();
+      if (res.success) {
+        return res;
+      } else {
+        if (!mounted) return res;
+        if (retry >= 3) {
+          return res;
+        }
+        retry++;
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (!mounted) return res;
+      }
+    }
+  }
+
+  FutureOr<void> onDataLoaded() {}
+
+  Widget buildContent(BuildContext context, S data);
+
+  Widget? buildFrame(BuildContext context, Widget child) => null;
+
+  Widget buildLoading() {
+    return Center(
+      child: const CircularProgressIndicator(
+        strokeWidth: 2,
+      ).fixWidth(32).fixHeight(32),
+    );
+  }
+
+  void retry() {
+    setState(() {
+      isLoading = true;
+      error = null;
+    });
+    loadDataWithRetry().then((value) async {
+      if (!mounted) return;
+      if (value.success) {
+        data = value.data;
+        await onDataLoaded();
+        if (!mounted) return;
+        setState(() {
+          isLoading = false;
+        });
+      } else {
+        if (!mounted) return;
+        setState(() {
+          isLoading = false;
+          error = value.errorMessage!;
+        });
+      }
+    });
+  }
+
+  Widget buildError() {
+    return NetworkError(message: error!, retry: retry);
+  }
+
+  @override
+  @mustCallSuper
+  void initState() {
+    isLoading = true;
+    Future.microtask(() {
+      loadDataWithRetry().then((value) async {
+        if (!mounted) return;
+        if (value.success) {
+          data = value.data;
+          await onDataLoaded();
+          if (!mounted) return;
+          setState(() {
+            isLoading = false;
+          });
+        } else {
+          setState(() {
+            isLoading = false;
+            error = value.errorMessage!;
+          });
+        }
+      });
+    });
+    super.initState();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Widget child;
+
+    if (isLoading) {
+      child = buildLoading();
+    } else if (error != null) {
+      child = buildError();
+    } else {
+      child = buildContent(context, data!);
+    }
+
+    return buildFrame(context, child) ?? child;
+  }
+}
+
+abstract class MultiPageLoadingState<T extends StatefulWidget, S extends Object>
+    extends State<T> {
+  bool _isFirstLoading = true;
+
+  bool _isLoading = false;
+
+  List<S>? data;
+
+  String? _error;
+
+  int _page = 1;
+
+  int? _maxPage;
+
+  Future<Res<List<S>>> loadData(int page);
+
+  Widget? buildFrame(BuildContext context, Widget child) => null;
+
+  Widget buildContent(BuildContext context, List<S> data);
+
+  bool get isLoading => _isLoading || _isFirstLoading;
+
+  bool get isFirstLoading => _isFirstLoading;
+
+  bool get haveNextPage => _maxPage == null || _page <= _maxPage!;
+
+  void nextPage() {
+    if (_maxPage != null && _page > _maxPage!) return;
+    if (_isLoading) return;
+    _isLoading = true;
+    loadData(_page).then((value) {
+      _isLoading = false;
+      if (mounted) {
+        if (value.success) {
+          _page++;
+          if (value.subData is int) {
+            _maxPage = value.subData as int;
+          }
+          setState(() {
+            data!.addAll(value.data);
+          });
+        } else {
+          var message = value.errorMessage ?? "Network Error";
+          if (message.length > 20) {
+            message = "${message.substring(0, 20)}...";
+          }
+          context.showMessage(message: message);
+        }
+      }
+    });
+  }
+
+  void reset() {
+    setState(() {
+      _isFirstLoading = true;
+      _isLoading = false;
+      data = null;
+      _error = null;
+      _page = 1;
+    });
+    firstLoad();
+  }
+
+  void firstLoad() {
+    Future.microtask(() {
+      loadData(_page).then((value) {
+        if (!mounted) return;
+        if (value.success) {
+          _page++;
+          if (value.subData is int) {
+            _maxPage = value.subData as int;
+          }
+          setState(() {
+            _isFirstLoading = false;
+            data = value.data;
+          });
+        } else {
+          setState(() {
+            _isFirstLoading = false;
+            _error = value.errorMessage!;
+          });
+        }
+      });
+    });
+  }
+
+  @override
+  void initState() {
+    firstLoad();
+    super.initState();
+  }
+
+  Widget buildLoading(BuildContext context) {
+    return Center(
+      child: const CircularProgressIndicator().fixWidth(32).fixHeight(32),
+    );
+  }
+
+  Widget buildError(BuildContext context, String error) {
+    return NetworkError(withAppbar: false, message: error, retry: reset);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Widget child;
+
+    if (_isFirstLoading) {
+      child = buildLoading(context);
+    } else if (_error != null) {
+      child = buildError(context, _error!);
+    } else {
+      child = NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          if (notification.metrics.pixels ==
+              notification.metrics.maxScrollExtent) {
+            nextPage();
+          }
+          return false;
+        },
+        child: buildContent(context, data!),
+      );
+    }
+
+    return buildFrame(context, child) ?? child;
+  }
+}
+
+class FiveDotLoadingAnimation extends StatefulWidget {
+  const FiveDotLoadingAnimation({super.key});
+
+  @override
+  State<FiveDotLoadingAnimation> createState() =>
+      _FiveDotLoadingAnimationState();
+}
+
+class _FiveDotLoadingAnimationState extends State<FiveDotLoadingAnimation>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+      upperBound: 6,
+    )..repeat(min: 0, max: 5.2, period: const Duration(milliseconds: 1200));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  static const _colors = [
+    Colors.red,
+    Colors.green,
+    Colors.blue,
+    Colors.yellow,
+    Colors.purple,
+  ];
+
+  static const _padding = 12.0;
+
+  static const _dotSize = 12.0;
+
+  static const _height = 24.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return SizedBox(
+          width: _dotSize * 5 + _padding * 6,
+          height: _height,
+          child: Stack(children: List.generate(5, (index) => buildDot(index))),
+        );
+      },
+    );
+  }
+
+  Widget buildDot(int index) {
+    var value = _controller.value;
+    var startValue = index * 0.8;
+    return Positioned(
+      left: index * _dotSize + (index + 1) * _padding,
+      bottom:
+          (math.sin(math.pi / 2 * (value - startValue).clamp(0, 2))) *
+          (_height - _dotSize),
+      child: Container(
+        width: _dotSize,
+        height: _dotSize,
+        decoration: BoxDecoration(
+          color: _colors[index],
+          shape: BoxShape.circle,
+        ),
+      ),
+    );
+  }
+}

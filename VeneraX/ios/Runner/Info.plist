@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>VeneraX</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>venera</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+  <string>Choose images</string>
+	<key>NSCameraUsageDescription</key>
+  <string>Scan a QR code to import sync configuration.</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>NSFaceIDUsageDescription</key>
+  <string>Ensure that the operation is being performed by the user themselves.</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.books</string>
+	<!-- Alternate launcher icons, switched at runtime from AppDelegate's
+	     venera/method_channel handler ("setLauncherIcon").
+	     Keys (IconOrig / IconFlat) are the names passed to setAlternateIconName;
+	     CFBundleIconFiles point to the loose PNG base names (AltIcon*@2x/@3x.png),
+	     which must live outside Assets.xcassets. The primary icon stays in the
+	     asset catalog. Both iPhone and iPad blocks are required. -->
+	<key>CFBundleIcons</key>
+	<dict>
+		<key>CFBundleAlternateIcons</key>
+		<dict>
+			<key>IconOrig</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>AltIconOrig</string>
+				</array>
+				<key>UIPrerenderedIcon</key>
+				<false/>
+			</dict>
+			<key>IconFlat</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>AltIconFlat</string>
+				</array>
+				<key>UIPrerenderedIcon</key>
+				<false/>
+			</dict>
+			<key>IconMono</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>AltIconMono</string>
+				</array>
+				<key>UIPrerenderedIcon</key>
+				<false/>
+			</dict>
+			<key>IconIllust</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>AltIconIllust</string>
+				</array>
+				<key>UIPrerenderedIcon</key>
+				<false/>
+			</dict>
+		</dict>
+	</dict>
+	<key>CFBundleIcons~ipad</key>
+	<dict>
+		<key>CFBundleAlternateIcons</key>
+		<dict>
+			<key>IconOrig</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>AltIconOrig</string>
+				</array>
+				<key>UIPrerenderedIcon</key>
+				<false/>
+			</dict>
+			<key>IconFlat</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>AltIconFlat</string>
+				</array>
+				<key>UIPrerenderedIcon</key>
+				<false/>
+			</dict>
+			<key>IconMono</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>AltIconMono</string>
+				</array>
+				<key>UIPrerenderedIcon</key>
+				<false/>
+			</dict>
+			<key>IconIllust</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>AltIconIllust</string>
+				</array>
+				<key>UIPrerenderedIcon</key>
+				<false/>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>
