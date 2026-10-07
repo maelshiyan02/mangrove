@@ -5,7 +5,7 @@
 检查内容：
   1. 9 条目录联接是否存在、是否为联接、目标是否正确；
   2. 主记忆 MEMORY.md 是否超出注入上限（默认 7200 字符，静默截断阈值）；
-  3. 关键文件/目录是否齐全（附录 A01~A08、W00、kb 索引、入口文件）；
+  3. 关键文件/目录是否齐全（附录 A01~A09、W00、kb 索引、入口文件）；
   4. 是否存在"重复副本"隐患（某侧目录是真目录而非联接）。
 
 用法：
@@ -46,6 +46,7 @@ REQUIRED = [
     r".agent\memory\appendices\A06-翻译组与下载语义.md",
     r".agent\memory\appendices\A07-comix源.md",
     r".agent\memory\appendices\A08-排期与阶段现状.md",
+    r".agent\memory\appendices\A09-网络与代理.md",
     r".agent\memory\appendices\W00-工作日志索引.md",
     r".agent\kb\INDEX.md",
     r".agent\README.md",
