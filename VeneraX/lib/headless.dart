@@ -2025,7 +2025,7 @@ Future<void> runEditCheck(List<String> args, int commandIndex) async {
         check,
         packageRoot: packageRoot,
         reverseVerified: const [
-          // font.*
+          // font.* —— 12 条，全部实测确认 FAIL
           'font.files_present',
           'font.license_embedded',
           'font.registry_matches_pubspec',
@@ -2038,7 +2038,7 @@ Future<void> runEditCheck(List<String> args, int commandIndex) async {
           'font.selector_lists_unbundled',
           'font.renderer_resolves_family',
           'font.preview_matches_output',
-          // cluster.*
+          // cluster.* —— 15 条，全部实测确认 FAIL
           'cluster.merges_lines_of_one_balloon',
           'cluster.splits_separate_balloons',
           'cluster.reading_order_right_to_left',
@@ -2054,7 +2054,7 @@ Future<void> runEditCheck(List<String> args, int commandIndex) async {
           'cluster.reports_median_line_height',
           'cluster.bridge_keeps_per_line_erase_rects',
           'cluster.detector_extension_point_exists',
-          // pipeline.*
+          // pipeline.* —— 8 条里的 7 条（余 1 条见下）
           'pipeline.batch_landing_is_one_undo_step',
           'pipeline.landing_registers_dirty_page',
           'pipeline.undo_after_save_clears_dirty',
@@ -2062,6 +2062,12 @@ Future<void> runEditCheck(List<String> args, int commandIndex) async {
           'pipeline.blocks_become_letterable',
           'pipeline.cancel_token_works',
           'pipeline.report_counts_failures',
+        ],
+        // 🔴 尚未做过故障注入的那一条。故障 `pipeline_studio_uses_legacy` 在
+        // 43/54 那一轮的"从未开始"名单里（见 `docs/P9.6 §5.3`、`A08 §4`）。
+        // 断言本身在跑，只是**没有一次故障真的把它打红过** —— 显式列在这里，
+        // 免得它冒充已验证（那正是本项目最忌的"假的 ✅"）。
+        pendingVerification: const [
           'pipeline.studio_does_not_use_legacy_engine',
         ],
       );
@@ -2070,7 +2076,24 @@ Future<void> runEditCheck(List<String> args, int commandIndex) async {
         check,
         packageRoot: packageRoot,
         reverseVerified: const [
-          // snap.*
+          // font.*（韩文）—— 6 条，全部实测确认 FAIL
+          'font.korean_registered',
+          'font.korean_alias_mapped',
+          'font.korean_files_are_cff',
+          'font.korean_cmap_has_hangul',
+          'font.fallback_chain_excludes_own_family',
+          'font.renderer_uses_fallback_chain',
+          // leave.* —— 2 条
+          'leave.close_always_intercepted',
+          'leave.single_exit_call_site',
+          // harness.* —— 1 条
+          'harness.truncates_output_before_run',
+        ],
+        // 🔴 尚未做过故障注入的 10 条。它们对应的故障在 43/54 那一轮里
+        // 全部属于"从未开始 / 在飞被打断"（`docs/P9.7 §6.5`、`A08 §4`）。
+        // 断言在跑，但**没有一次故障真的把它们打红过**。
+        pendingVerification: const [
+          // snap.* —— 7 条（故障 `snap_*` 全部从未开始）
           'snap.edge_within_tolerance',
           'snap.edge_outside_tolerance',
           'snap.resize_only_moves_dragged_edge',
@@ -2078,21 +2101,11 @@ Future<void> runEditCheck(List<String> args, int commandIndex) async {
           'snap.move_prefers_smaller_adjustment',
           'snap.no_targets_is_noop',
           'snap.targets_include_page_bounds',
-          // font.*（韩文）
-          'font.korean_registered',
-          'font.korean_alias_mapped',
-          'font.korean_files_are_cff',
-          'font.korean_cmap_has_hangul',
-          'font.fallback_chain_excludes_own_family',
-          'font.renderer_uses_fallback_chain',
-          // leave.*
-          'leave.close_always_intercepted',
-          'leave.single_exit_call_site',
-          // studio.* / pipeline.* / harness.*
+          // studio.* —— 1 条（`studio_marquee_survives_page_change` 未开始）
           'studio.marquee_reset_on_page_change',
+          // pipeline.resume.* —— 2 条（1 条未开始、1 条在飞被打断）
           'pipeline.resume_returns_tail',
           'pipeline.resume_unknown_page_is_empty',
-          'harness.truncates_output_before_run',
         ],
       );
     }

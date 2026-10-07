@@ -33,14 +33,23 @@ typedef CheckSink = void Function(String name, bool passed, String detail);
 /// [reverseVerified] is the list of assertion names the caller confirmed FAIL
 /// under an injected fault (see `docs/P9.6` §五). It is asserted against, so
 /// "I ran them once by hand" becomes a checkable claim rather than a promise.
+///
+/// [pendingVerification] names the assertions in the same batch that are **not**
+/// fault-verified yet. They must be listed rather than quietly dropped: a
+/// missing name fails the coverage check, so the honest options are "verified"
+/// or "pending". Reporting a pending item does **not** fail the check — failing
+/// it would make the cheapest fix "delete the name", which buys a green run by
+/// throwing away the coverage guarantee. The lie to prevent is a name claimed
+/// as verified when no fault ever turned it red.
 void runP1Checks(
   CheckSink check, {
   required Directory packageRoot,
   required List<String> reverseVerified,
+  List<String> pendingVerification = const [],
 }) {
   _fontChecks(check, packageRoot);
   _clusterChecks(check);
-  _pipelineChecks(check, reverseVerified, packageRoot);
+  _pipelineChecks(check, reverseVerified, pendingVerification, packageRoot);
 }
 
 // ---------------------------------------------------------------------------
@@ -598,6 +607,7 @@ void _clusterChecks(CheckSink check) {
 void _pipelineChecks(
   CheckSink check,
   List<String> reverseVerified,
+  List<String> pendingVerification,
   Directory root,
 ) {
   // --- 1) 批量落地必须走 `pages[key]` 且能被一次撤销 ----------------------
@@ -868,27 +878,47 @@ void _pipelineChecks(
     'pipeline.report_counts_failures',
     'pipeline.studio_does_not_use_legacy_engine',
   };
-  // 🔴 空清单判 FAIL。一个没做过反向验证的清单等于没做。
+  // 🔴 两个清单**合起来**必须覆盖 `known`，互不相交，且 `reverseVerified` 非空。
+  //
+  // 这里刻意**不**因"存在 pending"判 FAIL。要防的是**假的 ✅**：一个清单声称
+  // 某条断言验证过、而它其实没被任何故障打红过。把 pending 显式列出来就已经消除
+  // 了那个谎言。反过来若 pending 也判 FAIL，最省事的修法会变成"把未验证的名字从
+  // 清单里删掉" —— 那会连带丢掉覆盖检查，让"漏了一条断言"重新变得看不出来。
+  // **失效的清单比不完整的清单危险得多**，所以判据是"覆盖完整 + 分类无歧义"。
+  final stated = [...reverseVerified, ...pendingVerification];
   final notVerified = [
-    for (final name in reverseVerified)
+    for (final name in stated)
       if (!known.contains(name)) name,
   ];
   final notClaimed = [
     for (final name in known)
-      if (!reverseVerified.contains(name)) name,
+      if (!stated.contains(name)) name,
   ];
+  final overlap = [
+    for (final name in reverseVerified)
+      if (pendingVerification.contains(name)) name,
+  ];
+  final unverified = pendingVerification.isEmpty
+      ? ''
+      : ' — ${pendingVerification.length} NOT fault-verified yet '
+          '(${pendingVerification.join(", ")})';
   check(
     'assertions.reverse_verification_recorded',
-    reverseVerified.isNotEmpty && notVerified.isEmpty && notClaimed.isEmpty,
+    reverseVerified.isNotEmpty &&
+        notVerified.isEmpty &&
+        notClaimed.isEmpty &&
+        overlap.isEmpty,
     reverseVerified.isEmpty
-        ? 'reverse-verification list is EMPTY — every assertion above is '
-            'unverified and may be decorative (this must FAIL)'
+        ? 'verified list is EMPTY — every assertion above is unverified and '
+            'may be decorative (this must FAIL)'
         : notVerified.isNotEmpty
-        ? 'list names assertions that do not exist: ${notVerified.join(", ")}'
+        ? 'lists name assertions that do not exist: ${notVerified.join(", ")}'
         : notClaimed.isNotEmpty
-        ? 'no reverse verification recorded for: ${notClaimed.join(", ")}'
+        ? 'no verification status recorded for: ${notClaimed.join(", ")}'
+        : overlap.isNotEmpty
+        ? 'listed as both verified and pending: ${overlap.join(", ")}'
         : '${reverseVerified.length} assertions confirmed FAIL under an '
-            'injected fault',
+            'injected fault$unverified',
   );
 }
 

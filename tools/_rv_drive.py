@@ -99,6 +99,35 @@ def tree_is_clean():
     return hits
 
 
+def write_results(results, baseline=None):
+    """Persist the report — **after every fault**, not only at the end.
+
+    This file used to be written once, after the loop. The 43/54 batch was
+    cancelled mid-flight (these batches take hours and the user stops them),
+    so its entire report was lost and `builds/reverse_verification.json` kept
+    the *previous* run's numbers — a report that describes a different tree
+    and reads as if it were current. That is the failure mode this project
+    keeps hitting: a stale number that looks like a measurement.
+
+    Writing per fault costs nothing and makes an interrupted batch partly
+    usable instead of actively misleading. `baseline` is recorded so a reader
+    can tell whether a target was green *before* the fault.
+    """
+    undetected = [r['fault'] for r in results if not r['detected']]
+    off_target = {r['fault']: r.get('off_target_breakage')
+                  for r in results if r.get('off_target_breakage')}
+    payload = {'total': len(results), 'undetected': undetected,
+               'off_target_breakage': off_target, 'results': results}
+    if baseline is not None:
+        payload['baseline'] = {
+            'checks': len(baseline),
+            'fails': [n for n, e in baseline.items() if not e['passed']],
+        }
+    with io.open(RESULTS, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return undetected, off_target
+
+
 def main(argv):
     sys.path.insert(0, TOOLS)
     import _reverse_verify as rv
@@ -150,6 +179,7 @@ def main(argv):
             print(f'  APPLY FAILED ({rc}) — skipped: {note}', flush=True)
             results.append({'fault': fault_id, 'target': target,
                             'detected': False, 'note': note})
+            write_results(results, baseline)
             continue
         try:
             build()
@@ -198,6 +228,9 @@ def main(argv):
             leftover = tree_is_clean()
             if leftover:
                 print('  TREE NOT CLEAN AFTER REVERT:', leftover, flush=True)
+            # 🔴 Per-fault persist — see `write_results`. A run killed here
+            # keeps every fault measured so far.
+            write_results(results, baseline)
 
     # Restore a clean build so the next headless run is not on a faulted binary.
     print('\n== restoring clean build ==', flush=True)
@@ -206,13 +239,7 @@ def main(argv):
     if final_dirty:
         print('WARNING — tree still dirty:', final_dirty, flush=True)
 
-    undetected = [r['fault'] for r in results if not r['detected']]
-    off_target = {r['fault']: r.get('off_target_breakage')
-                  for r in results if r.get('off_target_breakage')}
-    payload = {'total': len(results), 'undetected': undetected,
-               'off_target_breakage': off_target, 'results': results}
-    with io.open(RESULTS, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+    undetected, off_target = write_results(results, baseline)
     print('\n==== reverse verification summary ====')
     print(f'{len(results) - len(undetected)}/{len(results)} faults detected')
     if undetected:

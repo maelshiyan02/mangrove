@@ -28,10 +28,16 @@ import 'headless_p1_checks.dart' show CheckSink;
 /// [reverseVerified] 是调用方确认"注入故障后真的 FAIL"过的断言名（见
 /// `docs/P9.7`）。它被当成一条断言来检查 —— "我手工跑过一次"要变成可复算的
 /// 事实，而不是一个承诺。
+///
+/// [pendingVerification] 是同一批里**尚未**做故障注入的断言名。必须列出来而不是
+/// 悄悄丢掉：漏一个名字会让覆盖检查失败，所以诚实的选择只有"已验证"或"待验证"。
+/// **报出待验证项本身不判 FAIL** —— 判 FAIL 的话最省事的修法就变成"把名字删掉"，
+/// 用一次绿跑换掉覆盖保证。要防的是**假的 ✅**。
 void runP2Checks(
   CheckSink check, {
   required Directory packageRoot,
   required List<String> reverseVerified,
+  List<String> pendingVerification = const [],
 }) {
   _snapChecks(check);
   _koreanFontChecks(check, packageRoot);
@@ -39,7 +45,7 @@ void runP2Checks(
   _studioSourceChecks(check, packageRoot);
   _resumeChecks(check);
   _harnessChecks(check, packageRoot);
-  _p2ReverseVerification(check, reverseVerified);
+  _p2ReverseVerification(check, reverseVerified, pendingVerification);
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +399,11 @@ void _harnessChecks(CheckSink check, Directory root) {
 ///
 /// 抄的是 P1 的机制，理由也一样：一个空清单会让上面每一条都变成装饰品，
 /// 所以空清单本身判 FAIL。
-void _p2ReverseVerification(CheckSink check, List<String> reverseVerified) {
+void _p2ReverseVerification(
+  CheckSink check,
+  List<String> reverseVerified,
+  List<String> pendingVerification,
+) {
   const known = <String>{
     'snap.edge_within_tolerance',
     'snap.edge_outside_tolerance',
@@ -415,26 +425,42 @@ void _p2ReverseVerification(CheckSink check, List<String> reverseVerified) {
     'pipeline.resume_unknown_page_is_empty',
     'harness.truncates_output_before_run',
   };
+  // 同 `headless_p1_checks` 的 §9：两个清单合起来覆盖 `known`、互不相交、
+  // `reverseVerified` 非空。**不因存在 pending 判 FAIL** —— 理由见那边的注释。
+  final stated = [...reverseVerified, ...pendingVerification];
   final notVerified = [
-    for (final name in reverseVerified)
+    for (final name in stated)
       if (!known.contains(name)) name,
   ];
   final notClaimed = [
     for (final name in known)
-      if (!reverseVerified.contains(name)) name,
+      if (!stated.contains(name)) name,
   ];
+  final overlap = [
+    for (final name in reverseVerified)
+      if (pendingVerification.contains(name)) name,
+  ];
+  final unverified = pendingVerification.isEmpty
+      ? ''
+      : ' — ${pendingVerification.length} NOT fault-verified yet '
+          '(${pendingVerification.join(", ")})';
   check(
     'assertions.p2_reverse_verification_recorded',
-    reverseVerified.isNotEmpty && notVerified.isEmpty && notClaimed.isEmpty,
+    reverseVerified.isNotEmpty &&
+        notVerified.isEmpty &&
+        notClaimed.isEmpty &&
+        overlap.isEmpty,
     reverseVerified.isEmpty
-        ? 'reverse-verification list is EMPTY — every P2 assertion above is '
-            'unverified and may be decorative (this must FAIL)'
+        ? 'verified list is EMPTY — every P2 assertion above is unverified '
+            'and may be decorative (this must FAIL)'
         : notVerified.isNotEmpty
-        ? 'list names assertions that do not exist: ${notVerified.join(", ")}'
+        ? 'lists name assertions that do not exist: ${notVerified.join(", ")}'
         : notClaimed.isNotEmpty
-        ? 'no reverse verification recorded for: ${notClaimed.join(", ")}'
+        ? 'no verification status recorded for: ${notClaimed.join(", ")}'
+        : overlap.isNotEmpty
+        ? 'listed as both verified and pending: ${overlap.join(", ")}'
         : '${reverseVerified.length} P2 assertions confirmed FAIL under an '
-            'injected fault',
+            'injected fault$unverified',
   );
 }
 
