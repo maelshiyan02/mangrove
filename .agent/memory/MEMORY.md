@@ -2,6 +2,8 @@
 
 > 🔖 **项目正式名 = Mangrove**（2026-10-07 定；*manga* + *grove*，漫画成林）。
 > 代码与目录**暂时仍叫 `VeneraX`**，待集成完成后统一改名；**GitHub 仓库用 `mangrove`**。
+> 远程：`origin` = `https://github.com/maelshiyan02/mangrove`（**public** · 分支 `main`）——
+> 2026-10-07 首推完成（3 提交 / 903 文件 / `.git` 36 MB）；`.gitignore` 排除 9 GB 素材与构建产物。
 > 命名依据：本工程与 BallonTranslator 合并后，主体是**漫画 AI 汉化流水线**（下载→检测→OCR→翻译→擦除→排版→导出），
 > 阅读只是外壳 ⇒ 名字落在「翻译/对白/分镜」一侧，不落在「阅读/书架」一侧。
 
