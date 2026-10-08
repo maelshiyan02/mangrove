@@ -1,0 +1,383 @@
+// 工作室「运行自动管线」的确认弹窗（S-N2 · P10.6 §七）。
+//
+// 🔴 **为什么要有这个弹窗**：`Run this page` / `Run chapter` 两个按钮此前
+// 直接进 `_runPipeline` —— 整章重跑是"点一下就好几分钟 + 一整个章节的翻译
+// 请求"，而这恰恰是最容易点错的按钮。更要紧的是**它此前无处可改语向**：
+// 语言只能来自全局 `TranslationConfig`，为一个日文工程临时改成日语得先去
+// 设置页改全局，再记得改回来。
+//
+// 因此本弹窗只做两件事：**让人在按下开始之前看清这一轮会做什么**，以及
+// **让语向/阶段在这个运行级别上可覆盖**。
+//
+// ## 🔴 选择不落盘
+//
+// 这里的一切都只作用于本次运行。[StudioRunChoice] 是一份纯数据，调用方
+// 拿它去构造 `StudioRunOptions`；本文件**不碰任何持久化设置** —— 写进设置
+// 会把"为这一本临时改的语言"变成所有漫画的默认（`TranslationConfig` 的
+// 注释里记着 #178 就是这条路径踩出来的）。
+//
+// ## 🔴 文案纪律（P9.3 的教训）
+//
+// 本目录的**每一个** `'…'.tl` / `'…'.tlParams` 字面量都会被
+// `edit-check` 的 `i18n.studio_tooltips_registered` 扫到并核对
+// `assets/translation.json` 的 `zh_CN` 表；漏登记不会报错，只会**显示英文**
+// —— 之前加按钮就反复栽在这上面。所以：
+//
+// * 绝不写成两个相邻字面量再对第二个调 `.tl`（Dart 在**解析期**就拼接了，
+//   查表用的键是拼完的长句，而扫描匹配到的是后半截 ⇒ 扫描要求登记的键
+//   与真正查表的键不是同一个，绿灯亮在英文标签上）；
+// * 绝不把标签藏进扫描看不见的 `Map` 常量里 —— 那是同一种错的变体。
+//   ⇒ 选项表在 `build()` 里现搭，每个标签都是**字面量挨着 `.tl`**。
+//
+// ## 🔴 图标
+//
+// 按钮/标题用的都是 Flutter **内置**图标（`Icons.play_arrow` 等），
+// 不引外部图标字体：本应用的图标字体是**裁剪过的子集**，随手挑一个没进
+// 子集的 codepoint 会渲染成方框（`studio_page.dart` 里 `Icons.crop` /
+// `Icons.crop_outlined` 那条注释记着这件事）。
+library;
+
+import 'package:flutter/material.dart';
+
+import 'package:mangrove/components/components.dart';
+// `context.pop(value)`（`Navigation` 扩展）住在 `foundation/context.dart`；
+// `components.dart` 只是自己 import 了它，**没有**把它 export 出去
+// ⇒ 这里必须显式 import，否则报的错读起来像"拼错了方法名"。
+import 'package:mangrove/foundation/context.dart';
+import 'package:mangrove/foundation/translation_project/run_plan.dart';
+import 'package:mangrove/foundation/widget_utils.dart';
+import 'package:mangrove/utils/translations.dart';
+
+/// 打开确认弹窗。返回 `null` 表示用户取消（含点遮罩/返回键）——
+/// 调用方必须把 `null` 当作"不要跑"，而不是"用户没说不要"。
+Future<StudioRunChoice?> showStudioRunDialog({
+  required BuildContext context,
+  required List<String> pageKeys,
+  required int initialStart,
+  required int initialEnd,
+  required String sourceLang,
+  required String targetLang,
+  required bool translate,
+  required bool rightToLeft,
+}) {
+  if (pageKeys.isEmpty) return Future.value(null);
+  return showDialog<StudioRunChoice>(
+    context: context,
+    builder: (_) => _StudioRunDialog(
+      pageKeys: pageKeys,
+      initialStart: initialStart,
+      initialEnd: initialEnd,
+      sourceLang: sourceLang,
+      targetLang: targetLang,
+      translate: translate,
+      rightToLeft: rightToLeft,
+    ),
+  );
+}
+
+class _StudioRunDialog extends StatefulWidget {
+  const _StudioRunDialog({
+    required this.pageKeys,
+    required this.initialStart,
+    required this.initialEnd,
+    required this.sourceLang,
+    required this.targetLang,
+    required this.translate,
+    required this.rightToLeft,
+  });
+
+  final List<String> pageKeys;
+
+  /// 1 起的闭区间。
+  final int initialStart;
+  final int initialEnd;
+
+  final String sourceLang;
+  final String targetLang;
+  final bool translate;
+  final bool rightToLeft;
+
+  @override
+  State<_StudioRunDialog> createState() => _StudioRunDialogState();
+}
+
+class _StudioRunDialogState extends State<_StudioRunDialog> {
+  late int _start;
+  late int _end;
+  late final TextEditingController _startCtl;
+  late final TextEditingController _endCtl;
+  late String _sourceLang;
+  late String _targetLang;
+  late bool _translate;
+  late bool _rightToLeft;
+
+  int get _total => widget.pageKeys.length;
+
+  @override
+  void initState() {
+    super.initState();
+    _start = clampPageNumber(widget.initialStart, _total);
+    _end = clampPageNumber(widget.initialEnd, _total);
+    if (_start > _end) {
+      final swap = _start;
+      _start = _end;
+      _end = swap;
+    }
+    _startCtl = TextEditingController(text: '$_start');
+    _endCtl = TextEditingController(text: '$_end');
+    _sourceLang = widget.sourceLang;
+    _targetLang = widget.targetLang;
+    _translate = widget.translate;
+    _rightToLeft = widget.rightToLeft;
+  }
+
+  @override
+  void dispose() {
+    _startCtl.dispose();
+    _endCtl.dispose();
+    super.dispose();
+  }
+
+  /// 把两个数字框里的内容夹取回合法区间，并**写回框里**。
+  ///
+  /// 写回是刻意的：用户打了一个越界的页码而框里还留着那个数字，他会以为
+  /// 那个数字生效了；让它立刻变成夹取后的值，"我打的 999 被改成了 94"这件事
+  /// 就是看得见的。
+  void _applyFields() {
+    final start = clampPageNumber(_read(_startCtl, _start), _total);
+    final end = clampPageNumber(_read(_endCtl, _end), _total);
+    setState(() {
+      if (start <= end) {
+        _start = start;
+        _end = end;
+      } else {
+        // 起止写反了：交换而不是留一个空区间（`resolvePageRange` 同一条契约）。
+        _start = end;
+        _end = start;
+      }
+      _startCtl.text = '$_start';
+      _endCtl.text = '$_end';
+    });
+  }
+
+  int _read(TextEditingController controller, int fallback) {
+    return int.tryParse(controller.text.trim()) ?? fallback;
+  }
+
+  void _setRange(int start, int end) {
+    setState(() {
+      _start = start;
+      _end = end;
+      _startCtl.text = '$_start';
+      _endCtl.text = '$_end';
+    });
+  }
+
+  /// 按下「开始」时把选择打包出去。
+  ///
+  /// 🔴 页码**从输入框现读**，而不是用 `_start` / `_end`：用户完全可能打完
+  /// 数字直接点开始（不按回车、不点别处），此时 `_start` 还是旧值 —— 拿它去
+  /// 跑就是"框里写着 12、实际跑的是 3"。夹取与排序一律交给
+  /// `resolvePageRange`，本方法只管读。
+  void _confirm() {
+    final choice = StudioRunChoice(
+      pages: resolvePageRange(
+        widget.pageKeys,
+        _read(_startCtl, _start),
+        _read(_endCtl, _end),
+      ),
+      sourceLang: _sourceLang,
+      targetLang: _targetLang,
+      translate: _translate,
+      rightToLeft: _rightToLeft,
+    );
+    context.pop(choice);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // 🔴 选项表在 build 里现搭：把标签写在这里，每个字面量都紧挨着 `.tl`，
+    // `i18n.studio_tooltips_registered` 才扫得到它们。
+    final sourceLabels = <String, String>{
+      'auto': 'Auto detect'.tl,
+      'ja': 'Japanese'.tl,
+      'en': 'English'.tl,
+      'ko': 'Korean'.tl,
+      'zh': 'Chinese'.tl,
+      'es': 'Spanish'.tl,
+      'la': 'Latin'.tl,
+    };
+    final targetLabels = <String, String>{
+      'zh': 'Simplified Chinese'.tl,
+      'zh-TW': 'Traditional Chinese'.tl,
+      'en': 'English'.tl,
+      'ja': 'Japanese'.tl,
+      'ko': 'Korean'.tl,
+      'fr': 'French'.tl,
+      'de': 'German'.tl,
+      'es': 'Spanish'.tl,
+      'ru': 'Russian'.tl,
+      'la': 'Latin'.tl,
+    };
+    // 🔴 选中值必须在选项里，否则 `DropdownButton` 会断言失败（工程里存着
+    // 一个没有对应项的语言码时就会这样）。刻意**在 build 里算一个局部值**
+    // 而不是回写 `_sourceLang`：在 `build` 里改 state 是另一类 bug，而这里
+    // 需要的只是"显示成什么"。
+    final sourceValue =
+        sourceLabels.containsKey(_sourceLang) ? _sourceLang : 'auto';
+    final targetValue =
+        targetLabels.containsKey(_targetLang) ? _targetLang : 'zh';
+
+    final selected = resolvePageRange(widget.pageKeys, _start, _end);
+
+    return ContentDialog(
+      title: 'Run the pipeline'.tl,
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _section('Page range'),
+            const SizedBox(height: 4),
+            if (_total > 1)
+              RangeSlider(
+                min: 1,
+                max: _total.toDouble(),
+                divisions: _total - 1,
+                values: RangeValues(_start.toDouble(), _end.toDouble()),
+                labels: RangeLabels('$_start', '$_end'),
+                onChanged: (values) => _setRange(
+                  values.start.round(),
+                  values.end.round(),
+                ),
+              ),
+            Row(
+              children: [
+                Expanded(child: _pageField('First page', _startCtl)),
+                const SizedBox(width: 12),
+                Expanded(child: _pageField('Last page', _endCtl)),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '@a of @b pages selected'.tlParams({
+                'a': '${selected.length}',
+                'b': '$_total',
+              }),
+              style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
+            ),
+            const Divider(height: 24),
+            _section('Languages'),
+            const SizedBox(height: 4),
+            _dropdownRow('Source language', sourceValue, sourceLabels,
+                (v) => setState(() => _sourceLang = v)),
+            _dropdownRow('Target language', targetValue, targetLabels,
+                (v) => setState(() => _targetLang = v)),
+            const Divider(height: 24),
+            _section('Stages'),
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: Text('Translate too'.tl, style: ts.s14),
+              subtitle: Text(
+                'Off = detect and read only, so the layout can be checked before spending a translation request.'.tl,
+                style: ts.s12,
+              ),
+              value: _translate,
+              onChanged: (v) => setState(() => _translate = v),
+            ),
+            const Divider(height: 24),
+            _section('Reading direction'),
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: Text('Read right to left'.tl, style: ts.s14),
+              subtitle: Text(
+                'On for Japanese manga. Off for western/vertical-scroll pages.'.tl,
+                style: ts.s12,
+              ),
+              value: _rightToLeft,
+              onChanged: (v) => setState(() => _rightToLeft = v),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'These choices apply to this run only. Nothing is saved.'.tl,
+              style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => context.pop(),
+          child: Text('Cancel'.tl),
+        ),
+        FilledButton.icon(
+          onPressed: _confirm,
+          icon: const Icon(Icons.play_arrow, size: 18),
+          label: Text('Start'.tl),
+        ),
+      ],
+    );
+  }
+
+  Widget _section(String label) => Text(
+    label.tl,
+    style: ts.s14.copyWith(fontWeight: FontWeight.w600),
+  );
+
+  Widget _pageField(String label, TextEditingController controller) {
+    return TextField(
+      controller: controller,
+      keyboardType: TextInputType.number,
+      style: ts.s14,
+      decoration: InputDecoration(
+        isDense: true,
+        border: const OutlineInputBorder(),
+        labelText: label.tl,
+      ),
+      onSubmitted: (_) => _applyFields(),
+      onEditingComplete: _applyFields,
+      onTapOutside: (_) => _applyFields(),
+    );
+  }
+
+  Widget _dropdownRow(
+    String label,
+    String value,
+    Map<String, String> options,
+    ValueChanged<String> onChanged,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Expanded(child: Text(label.tl, style: ts.s14)),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: DropdownButton<String>(
+              value: value,
+              isDense: true,
+              onChanged: (v) {
+                if (v != null) onChanged(v);
+              },
+              items: [
+                for (final entry in options.entries)
+                  DropdownMenuItem(
+                    value: entry.key,
+                    child: Text(
+                      entry.value,
+                      overflow: TextOverflow.ellipsis,
+                      style: ts.s14,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

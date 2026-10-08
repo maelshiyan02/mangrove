@@ -8,7 +8,7 @@
 > - `docs/dev-log-2026-09-30.md`（v0.3.0 → v0.4.1 四轮修复）
 > - `.workbuddy/memory/2026-09-30.md`（当日工作记忆）
 >
-> **项目**：VeneraX（Flutter Windows 桌面漫画阅读器），路径 `D:\Ballonstranslator_Windows\VeneraX`
+> **项目**：Mangrove（Flutter Windows 桌面漫画阅读器），路径 `D:\Mangrove_Windows\Mangrove`
 > **当前版本**：comix_to.js **v0.5.0**（2026-10-01）
 > **参考实现**：BallonsTranslator `ballontranslator/utils/scraper/comix_client.py` + `ui/download_dialog.py`
 
@@ -23,14 +23,14 @@
 | **部分 API 响应是加密的** | 原始 body 形如 `{"e":"fktAPNu-..."}`，只有 SPA 解密后经 `JSON.parse` 的才是明文。所以要有 **fetch 截获 + JSON.parse 载荷** 双通道。 |
 | **阅读器是 Swiper slides 虚拟化** | 同时只渲染 3~5 张 slide，**不是懒加载**。所以 DOM 兜底最多只能拿到 3~4 张。图片必须走 API。 |
 | **图片 CDN 要 Referer** | `Referer: https://comix.to/`；且条漫 CDN 单张响应极慢，**30 秒空闲超时会误判**，需 90 秒。 |
-| **JS 源不进安装包** | 改完 `assets/comix_to.js` 必须 `node --check` 后手动同步到 `%APPDATA%\io.github.kyosee\venera\comic_source\`。 |
-| **改 Dart 必须重编** | 真正的代码在 `builds\venera\data\app.so`（~18MB AOT），不是 0.15MB 的 `venera.exe` 壳。 |
+| **JS 源不进安装包** | 改完 `assets/comix_to.js` 必须 `node --check` 后手动同步到 `%APPDATA%\io.github.maelshiyan02\mangrove\comic_source\`。 |
+| **改 Dart 必须重编** | 真正的代码在 `builds\mangrove\data\app.so`（~18MB AOT），不是 0.15MB 的 `mangrove.exe` 壳。 |
 
 ---
 
 ## 一、项目背景与目标
 
-P4 阶段的目标是把 **comix.to** 做成一个在 VeneraX 里"能搜、能看列表、能读、能下载"的完整漫画源。
+P4 阶段的目标是把 **comix.to** 做成一个在 Mangrove 里"能搜、能看列表、能读、能下载"的完整漫画源。
 
 - **前置**：P2-C 多翻译组（versioned 章节）数据结构已就位。
 - **参考资产**：BT（BallonsTranslator）侧已有成熟的 comix.to 抓取管线（Python + QWebEngineView），本阶段是把它的能力移植/对齐到 Flutter 侧。
@@ -56,10 +56,10 @@ P4 阶段的目标是把 **comix.to** 做成一个在 VeneraX 里"能搜、能�
 | API 混淆 token 签名 | QWebEngineView 渲染，让站点 JS 完成签名后截获 | 常驻 HeadlessInAppWebView + 截获 | ✅ |
 | 响应加密 | 浏览器原生 JSON.parse 解密后截获 | JSON.parse 钩子（双通道） | ✅ v0.5.0 |
 | CDN 防盗链 | `Referer: https://comix.to/` | `onImageLoad.headers` | ✅ v0.5.0 |
-| 魔数推断格式 | PIL 真解码 + 文件头字节 | 由 VeneraX 图片管线处理 | 沿用 |
+| 魔数推断格式 | PIL 真解码 + 文件头字节 | 由 Mangrove 图片管线处理 | 沿用 |
 | 章节列表采集 | 逐页翻 DOM | API 截获为主 + 点分页按钮补页 | ✅ v0.5.0 |
 | 翻译组提取 | `result.group.name` | `ComicChapterVersion.scanlationGroup` | ✅ |
-| 多翻译组 UI | 无（BT 是列表） | VeneraX versioned + FilterChip | ✅ |
+| 多翻译组 UI | 无（BT 是列表） | Mangrove versioned + FilterChip | ✅ |
 | 图片下载限流 | 5 张一组 + 组间歇 + 失败清单 | **见第十章（打基础）** | 🚧 |
 
 ### 2.3 BT 的三级架构（设计蓝本）
@@ -78,15 +78,15 @@ P4 阶段的目标是把 **comix.to** 做成一个在 VeneraX 里"能搜、能�
   download_image(url)               → bytes（重试 + cache-bust + PIL 校验）
 ```
 
-VeneraX 侧完全沿用这个分层：元数据纯 HTTP；章节/图片走 headless webview；图片字节走 Dio（带 Referer）。
+Mangrove 侧完全沿用这个分层：元数据纯 HTTP；章节/图片走 headless webview；图片字节走 Dio（带 Referer）。
 
 ---
 
-## 三、VeneraX ComicSource 注册机制与适配方案
+## 三、Mangrove ComicSource 注册机制与适配方案
 
 ### 3.1 机制要点
 
-VeneraX 的漫画源是 **JS 引擎注册的脚本**，不是 JSON 配置：
+Mangrove 的漫画源是 **JS 引擎注册的脚本**，不是 JSON 配置：
 
 ```dart
 // parser.dart:830
@@ -97,7 +97,7 @@ ComicSource.sources.$_key.comic.loadInfo(${jsonEncode(id)})
 
 ### 3.2 数据结构映射
 
-| comix.to 字段 | VeneraX 字段 | 示例 |
+| comix.to 字段 | Mangrove 字段 | 示例 |
 |---|---|---|
 | `group.name` | `ComicChapterVersion.scanlationGroup` | "Luna Toons" |
 | `number` | versioned 键 | "5" |
@@ -333,9 +333,9 @@ comix_to: loadEp got 4 images
 | 10 | **UI 数值不是全集** | 分页按钮显示 8 个 ≠ 总共 8 页；用 API `meta.last_page` |
 | 11 | **class 体内不能写 `var`** | QuickJS 语法错误 → 整个源消失 |
 | 12 | **class 字段 ≠ 闭包变量** | 裸引用 `_x` 是全局查找，会 ReferenceError |
-| 13 | **JS 源不进安装包** | 改完 `node --check` 再同步到 `%APPDATA%\io.github.kyosee\venera\comic_source\` |
-| 14 | **exe 是空壳** | 看 `builds\venera\data\app.so` 时间戳判断构建新鲜度 |
-| 15 | **会话内 flutter 必失败**（CreateFile 231） | 用 `tools\build_venera_release.bat` + 计划任务；analyze 加 `--no-fatal-infos` |
+| 13 | **JS 源不进安装包** | 改完 `node --check` 再同步到 `%APPDATA%\io.github.maelshiyan02\mangrove\comic_source\` |
+| 14 | **exe 是空壳** | 看 `builds\mangrove\data\app.so` 时间戳判断构建新鲜度 |
+| 15 | **会话内 flutter 必失败**（CreateFile 231） | 用 `tools\build_mangrove_release.bat` + 计划任务；analyze 加 `--no-fatal-infos` |
 | 16 | **nuget 必须在 PATH** | `D:\dev\tools\nuget.exe`，否则 flutter_inappwebview_windows 编译失败 |
 | 17 | **设置残留要自愈** | 源功能增删后引用它的持久化配置要启动时校验清理 |
 | 18 | **CDN 30s 空闲超时不够** | 条漫 CDN 单张可能很慢；BT 实测用 90s |
@@ -345,30 +345,30 @@ comix_to: loadEp got 4 images
 ## 九、构建与验证环境
 
 ```powershell
-$env:PATH = 'C:\Flutter\bin;D:\dev\tools;' + 'D:\Ballonstranslator_Windows\tools;' + $env:PATH
-cd D:\Ballonstranslator_Windows\VeneraX
+$env:PATH = 'C:\Flutter\bin;D:\dev\tools;' + 'D:\Mangrove_Windows\tools;' + $env:PATH
+cd D:\Mangrove_Windows\Mangrove
 
 flutter analyze --no-fatal-infos   # 0 error（有存量 info lint，必须加这个参数，否则 errorlevel=1）
 flutter test                        # 843 单测
 flutter build windows --release --no-pub
 
-# 组装产物（关键：install 目标是 ../../builds/venera/，不是 runner/Release）
-& '...\CMake\bin\cmake.exe' --install 'D:\Ballonstranslator_Windows\VeneraX\build\windows\x64'
+# 组装产物（关键：install 目标是 ../../builds/mangrove/，不是 runner/Release）
+& '...\CMake\bin\cmake.exe' --install 'D:\Mangrove_Windows\Mangrove\build\windows\x64'
 
-Start-Process 'D:\Ballonstranslator_Windows\builds\venera\venera.exe'
-Get-Content "$env:APPDATA\io.github.kyosee\venera\logs.txt" -Wait -Tail 100
+Start-Process 'D:\Mangrove_Windows\builds\mangrove\mangrove.exe'
+Get-Content "$env:APPDATA\io.github.maelshiyan02\mangrove\logs.txt" -Wait -Tail 100
 ```
 
-- **一键脚本**：`tools\build_venera_release.bat`（analyze → build → install，输出 BUILD_OK/BUILD_FAIL）
+- **一键脚本**：`tools\build_mangrove_release.bat`（analyze → build → install，输出 BUILD_OK/BUILD_FAIL）
 - **会话内构建**：`Register-ScheduledTask` + `Start-ScheduledTask` 跑上面的 bat（WMI `Win32_Process` 被安全策略拦）
-- **运行时日志**：`%APPDATA%\io.github.kyosee\venera\logs.txt`，Dart 侧前缀 `ComixClient` / `JS Console`
-- **技能**：`.workbuddy/skills/venera-windows-build/SKILL.md`（.trae 与 .workbuddy 已合并共用，以 .workbuddy 为准并双向同步）
+- **运行时日志**：`%APPDATA%\io.github.maelshiyan02\mangrove\logs.txt`，Dart 侧前缀 `ComixClient` / `JS Console`
+- **技能**：`.workbuddy/skills/mangrove-windows-build/SKILL.md`（.trae 与 .workbuddy 已合并共用，以 .workbuddy 为准并双向同步）
 
 ---
 
-## 十、下载功能设计（comix.to 适配 VeneraX）—— 基础篇
+## 十、下载功能设计（comix.to 适配 Mangrove）—— 基础篇
 
-> 本章是为"在 VeneraX 里下载 comix.to 漫画"打的设计基础。BT 侧已有完整可用的实现，本章把它的经验映射到 VeneraX 的架构上。
+> 本章是为"在 Mangrove 里下载 comix.to 漫画"打的设计基础。BT 侧已有完整可用的实现，本章把它的经验映射到 Mangrove 的架构上。
 
 ### 10.1 BT 侧已验证的四条经验（直接照搬）
 
@@ -383,7 +383,7 @@ Get-Content "$env:APPDATA\io.github.kyosee\venera\logs.txt" -Wait -Tail 100
 | 5 | **原子落盘** | 先写 `.part` 临时文件，写完 `os.replace` 改名，避免半成品被当成已下载页 |
 | 6 | **真解码校验** | PIL `im.load()` 完整解码才算成功，拦截断图/HTML 错误页 |
 
-### 10.2 VeneraX 现有下载链路
+### 10.2 Mangrove 现有下载链路
 
 | 组件 | 位置 | 说明 |
 |---|---|---|
@@ -408,7 +408,7 @@ Get-Content "$env:APPDATA\io.github.kyosee\venera\logs.txt" -Wait -Tail 100
 |---|---|---|
 | **P4-6a 源级并发上限** | `downloadThreads` 是全局的。给 `ComicSource` 增加可选 `maxConcurrentDownload`（JS 源声明），`download.dart` 取 `min(全局, 源级)`；comix.to 声明 3~5 | download.dart + parser.dart + comix_to.js |
 | **P4-6b 组间歇节流** | 并发池外再加"完成 N 张后休息 T 秒"的节流器（BT 的 5 张/1.5s），对 wowpic 这类限流 CDN 必要 | download.dart |
-| **P4-6c 失败页清单** | 单图失败不再整章 fail：记入 `failed_pages`，章末可重试/后续补救 UI 入口；落盘到章节目录（VeneraX 本地漫画目录可放 `venera_source.json`） | download.dart + 下载管理页 |
+| **P4-6c 失败页清单** | 单图失败不再整章 fail：记入 `failed_pages`，章末可重试/后续补救 UI 入口；落盘到章节目录（Mangrove 本地漫画目录可放 `mangrove_source.json`） | download.dart + 下载管理页 |
 | **P4-6d 解码校验** | 对下载字节做一次真解码校验（`dart:ui` 的 `instantiateImageCodec`），拦截断图 | download.dart |
 
 > 设计原则：**下载器负责"批量 + 节流 + 失败清单"，漫画源负责"每个 URL 怎么取（header/超时/重试）"**。这样其它源（包子/拷贝漫画）不必改，只有 comix.to 这种限流 CDN 需要声明更保守的参数。

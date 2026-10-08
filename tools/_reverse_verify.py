@@ -18,7 +18,7 @@ import shutil
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PKG = os.path.join(ROOT, 'VeneraX')
+PKG = os.path.join(ROOT, 'Mangrove')
 BACKUP = os.path.join(ROOT, 'builds', '_rv_backup')
 
 B = 'balloon_clustering.dart'   # lib/foundation/image_translation/
@@ -363,10 +363,10 @@ FAULTS = {
     ),
     'pipeline_studio_uses_legacy': (
         [f'lib/pages/translation_studio/{S}'],
-        [("import 'package:venera/foundation/translation_project/edit_command.dart';",
-          "import 'package:venera/foundation/image_translation/"
+        [("import 'package:mangrove/foundation/translation_project/edit_command.dart';",
+          "import 'package:mangrove/foundation/image_translation/"
           "pre_translation_tasks.dart'; // injected fault\n"
-          "import 'package:venera/foundation/translation_project/"
+          "import 'package:mangrove/foundation/translation_project/"
           "edit_command.dart';")],
         'pipeline.studio_does_not_use_legacy_engine',
     ),
@@ -578,7 +578,7 @@ FAULTS = {
     ),
     'harness_removes_output_file': (
         # `@` = 相对**仓库根**（不是包根）：这个故障打的是 `tools/` 下的验证
-        # 工装，它本来就在 `VeneraX/` 之外。见 [_abs]。
+        # 工装，它本来就在 `Mangrove/` 之外。见 [_abs]。
         ['@tools/run_headless_task.py'],
         # 🔴 不能把 `os.remove(OUT)` 真的放回去：环境的批量删除守卫（每轮 50 次
         # 上限，且 **Python 的 `os.remove` 也被打了补丁**）会在批跑中途拦下它，
@@ -690,7 +690,7 @@ def _abs(rel):
     """Fault path -> absolute path.
 
     `@` means "relative to the **repository** root"; anything else is relative
-    to the package root (`VeneraX/`), which is where the code under test lives.
+    to the package root (`Mangrove/`), which is where the code under test lives.
     The one fault aimed at the verification harness itself (`tools/`) needs this:
     writing `../tools/...` instead only works while `PKG` sits one level down.
     """
@@ -829,7 +829,7 @@ def cmd_apply(fault_id):
             backed_up[rel] = backup
             # 🔴 Store the path relative to the **package or repository** root,
             # never the basename: a basename made `revert` write the backup to
-            # `VeneraX/<name>.dart` instead of back into `lib/foundation/...`,
+            # `Mangrove/<name>.dart` instead of back into `lib/foundation/...`,
             # leaving the faulted file in place plus a stray copy at the package
             # root, which then broke the next build on a relative import.
             manifest.append([rel.replace('\\', '/'), backup])

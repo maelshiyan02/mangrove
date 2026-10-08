@@ -2,11 +2,11 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "启动 VeneraX",
+      "label": "启动 Mangrove",
       "type": "shell",
-      "command": "${workspaceFolder}/VeneraX-portable/venera.exe",
+      "command": "${workspaceFolder}/Mangrove-portable/mangrove.exe",
       "options": {
-        "cwd": "${workspaceFolder}/VeneraX-portable"
+        "cwd": "${workspaceFolder}/Mangrove-portable"
       },
       "presentation": {
         "reveal": "silent",

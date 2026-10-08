@@ -11,7 +11,7 @@
 
 ## 项目身份
 
-**VeneraX** — Flutter Windows 桌面应用，路径 `D:\Ballonstranslator_Windows\VeneraX`。
+**Mangrove** — Flutter Windows 桌面应用，路径 `D:\Mangrove_Windows\Mangrove`。
 当前任务：P4 comix.to 漫画源集成。章节采集链路已验证；v0.3.0 重构为常驻 HeadlessInAppWebView（无窗口）+ API JSON 直采，loadEp（阅读）已实现待实测。
 
 ---
@@ -58,7 +58,7 @@ comix.to 是 Laravel + Vue SPA，**有标准 REST API**（axios baseURL `/api/v1
 | `lib/pages/reader/images.dart` | 网络分支加了空图片防御（P0 崩溃修复） |
 | `lib/network/app_dio_io.dart` | 简化版 RHttpAdapter（走 dart:io），pubspec 已注释 rhttp / flutter_rust_bridge |
 | `pubspec.yaml` L62-63 | 已注释 `flutter_rust_bridge: 2.11.1` 和 `rhttp: ^0.15.1`（没人 import） |
-| `tools/run_venera_check.bat` | analyze+test 一键脚本（本会话环境嵌套进程受限，用它在外部终端跑检查） |
+| `tools/run_mangrove_check.bat` | analyze+test 一键脚本（本会话环境嵌套进程受限，用它在外部终端跑检查） |
 
 ---
 
@@ -88,9 +88,9 @@ comix.to 是 Laravel + Vue SPA，**有标准 REST API**（axios baseURL `/api/v1
 | 7 | **comix.to 分页结构** | 第一页只显示 `button.npager__num` 数字 1-8，后面是 "Next page"/"Last page"。href 格式 `/title/{hid}-{slug}/{id}-chapter-{N}` |
 | 8 | **Windows DevMode symlink** | 注册表改了必须**重启系统**才生效 |
 | 9 | **nuget 在 PATH** | `D:\dev\tools\nuget.exe` 必须在 PATH，否则 flutter_inappwebview_windows 编译失败 |
-| 10 | **cmake install 目标** | Release 构建后 cmake install 硬编码目标 `../../builds/venera/`，不是 runner/Release。关键产物是 `data/app.so`（17MB AOT），不是 0.15MB 的 venera.exe 壳 |
-| 11 | **JS 源不进 flutter_assets** | `assets/comix_to.js` 不会被打包；运行时从 `%APPDATA%\io.github.kyosee\venera\comic_source\*.js` 加载。**改了 JS 源必须手动复制到该目录**，否则 app 里跑的还是旧版 |
-| 12 | **会话内构建** | WorkBuddy 会话内 flutter 嵌套进程必失败（CreateFile 231）。用 `tools/build_venera_release.bat` + 计划任务（schtasks）在独立进程树跑；analyze 必须加 `--no-fatal-infos` 否则 info lint 也返回非零 |
+| 10 | **cmake install 目标** | Release 构建后 cmake install 硬编码目标 `../../builds/mangrove/`，不是 runner/Release。关键产物是 `data/app.so`（17MB AOT），不是 0.15MB 的 mangrove.exe 壳 |
+| 11 | **JS 源不进 flutter_assets** | `assets/comix_to.js` 不会被打包；运行时从 `%APPDATA%\io.github.maelshiyan02\mangrove\comic_source\*.js` 加载。**改了 JS 源必须手动复制到该目录**，否则 app 里跑的还是旧版 |
+| 12 | **会话内构建** | WorkBuddy 会话内 flutter 嵌套进程必失败（CreateFile 231）。用 `tools/build_mangrove_release.bat` + 计划任务（schtasks）在独立进程树跑；analyze 必须加 `--no-fatal-infos` 否则 info lint 也返回非零 |
 
 ---
 
@@ -119,12 +119,12 @@ comix.to 是 Laravel + Vue SPA，**有标准 REST API**（axios baseURL `/api/v1
 
 ```powershell
 # === 环境 ===
-$env:PATH = 'C:\Flutter\bin;D:\dev\tools;' + 'D:\Ballonstranslator_Windows\tools;' + $env:PATH
+$env:PATH = 'C:\Flutter\bin;D:\dev\tools;' + 'D:\Mangrove_Windows\tools;' + $env:PATH
 $env:HTTP_PROXY = 'http://127.0.0.1:7890'
 $env:HTTPS_PROXY = 'http://127.0.0.1:7890'
 
 # === 构建前闸门 ===
-cd D:\Ballonstranslator_Windows\VeneraX
+cd D:\Mangrove_Windows\Mangrove
 flutter clean          # 删 ephemeral（junction 可能失败，见踩坑 #8）
 flutter pub get        # 拿依赖
 flutter analyze        # 0 error / 0 warning（14 info 基线）
@@ -135,13 +135,13 @@ flutter build windows --release --no-pub  # 增量 ~58s，全量 ~241s
 
 # === 组装完整产物 ===
 $cmake = 'D:\Visual Studio Windows\Visual Studio 2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
-& $cmake --install 'D:\Ballonstranslator_Windows\VeneraX\build\windows\x64'
+& $cmake --install 'D:\Mangrove_Windows\Mangrove\build\windows\x64'
 
 # === 运行 ===
-Start-Process 'D:\Ballonstranslator_Windows\builds\venera\venera.exe'
+Start-Process 'D:\Mangrove_Windows\builds\mangrove\mangrove.exe'
 
 # === 实时看日志 ===
-Get-Content "$env:APPDATA\io.github.kyosee\venera\logs.txt" -Wait -Tail 100
+Get-Content "$env:APPDATA\io.github.maelshiyan02\mangrove\logs.txt" -Wait -Tail 100
 ```
 
 ---
@@ -149,7 +149,7 @@ Get-Content "$env:APPDATA\io.github.kyosee\venera\logs.txt" -Wait -Tail 100
 ## 日志路径
 
 ```
-C:\Users\{USERNAME}\AppData\Roaming\io.github.kyosee\venera\logs.txt
+C:\Users\{USERNAME}\AppData\Roaming\io.github.maelshiyan02\mangrove\logs.txt
 ```
 
 - Release 模式也会写（Log.info 文件写入不区分 kDebugMode）
@@ -169,7 +169,7 @@ C:\Users\{USERNAME}\AppData\Roaming\io.github.kyosee\venera\logs.txt
 | P2 | 封面图为空 | `detail.poster.large`（initial-data 里可能只有 medium）| `assets/comix_to.js` loadInfo |
 | P3 | 真实搜索 | API 已知：`/api/v1/manga` 列表端点 + search 参数（bundle 里 `["manga","search",a]` 查询），同样走 headless 截获 | `assets/comix_to.js` search |
 | P3 | Next page / Last page 导航 | API 直采路径已不需要（分页循环到 last_page）；仅 DOM 兜底路径仍需处理 | `comix_client.dart` DOM 路径 |
-| 环境坑 | 本会话无法跑 flutter 命令 | 工具会话内嵌套进程创建失败（CreateFile failed 231 / where.exe 管道占用）。用 `tools/run_venera_check.bat` 在外部终端跑 analyze+test | — |
+| 环境坑 | 本会话无法跑 flutter 命令 | 工具会话内嵌套进程创建失败（CreateFile failed 231 / where.exe 管道占用）。用 `tools/run_mangrove_check.bat` 在外部终端跑 analyze+test | — |
 
 ---
 
@@ -183,4 +183,4 @@ C:\Users\{USERNAME}\AppData\Roaming\io.github.kyosee\venera\logs.txt
 | JS bridge | `js_engine.dart` + `init.js` 的 `sendMessage` → `_messageReceiver` |
 | JSON 解析 | `initial-data` 在 `<script type="application/json" id="initial-data">` 里 |
 | comix.to SPA | React，章节 API 带 `__=` token + Cloudflare cf_clearance |
-| 运行时日志 | `io.github.kyosee.venera/logs.txt` |
+| 运行时日志 | `io.github.maelshiyan02.mangrove/logs.txt` |

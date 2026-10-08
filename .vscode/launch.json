@@ -29,10 +29,10 @@
       }
     },
     {
-      "name": "VeneraX (漫画阅读器)",
+      "name": "Mangrove (漫画阅读器)",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/Ballonstranslator_win_minium/launch_venerax.py",
+      "program": "${workspaceFolder}/Ballonstranslator_win_minium/launch_mangrovex.py",
       "python": "${workspaceFolder}/Ballonstranslator_win_minium/ballontrans_pylibs_win/python.exe",
       "cwd": "${workspaceFolder}/Ballonstranslator_win_minium",
       "console": "integratedTerminal",

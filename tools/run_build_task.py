@@ -7,8 +7,8 @@ import win32com.client
 #    本脚本位于 tools/ 下，用自身位置推导根目录。
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-TASK_NAME = "VeneraBuild"
-BAT = os.path.join(ROOT, "tools", "build_venera_with_log.bat")
+TASK_NAME = "MangroveBuild"
+BAT = os.path.join(ROOT, "tools", "build_mangrove_with_log.bat")
 LOG = os.path.join(ROOT, "builds", "build.log")
 
 # Ensure the log exists so the polling below has something to read early.
@@ -18,7 +18,7 @@ xml = f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Author>WorkBuddy</Author>
-    <Description>VeneraX release build</Description>
+    <Description>Mangrove release build</Description>
   </RegistrationInfo>
   <Triggers />
   <Principals>
@@ -31,7 +31,7 @@ xml = f"""<?xml version="1.0" encoding="UTF-16"?>
   <Settings>
     <Enabled>true</Enabled>
     <StartWhenAvailable>true</StartWhenAvailable>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <MultipleInstancesPolicy>StopExisting</MultipleInstancesPolicy>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
   </Settings>
   <Actions Context="Author">
@@ -46,6 +46,16 @@ xml = f"""<?xml version="1.0" encoding="UTF-16"?>
 scheduler = win32com.client.Dispatch("Schedule.Service")
 scheduler.Connect()
 root = scheduler.GetFolder("\\")
+
+# 🔴 2026-10-08：先**停掉**残留实例再注销。
+# 曾出现过"上一次构建被中断（python 被杀）但任务实例仍标记为 Running"的情况：
+# 随后每次 Register + Run 都被 MultipleInstancesPolicy=IgnoreNew 静默丢弃
+# ⇒ 日志恒为 0 字节、轮询 900s 后报 TIMEOUT，看上去像"构建很慢"，其实**根本没启动**。
+# 判据：`builds/_inner_probe.txt`（内层 bat 第一行就写）没有出现 = 没启动。
+# ⚠️ **不要**在这里调 `IRegisteredTask.Stop()`：实测它会**挂住**（COM 等待实例
+# 终止，而残留实例可能永远不会终止）⇒ python 连 "task started" 都打印不出来，
+# 症状与"构建很慢"无法区分。停掉旧实例这件事交给下面的
+# MultipleInstancesPolicy=StopExisting。
 try:
     root.DeleteTask(TASK_NAME, 0)
 except Exception:

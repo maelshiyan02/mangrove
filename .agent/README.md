@@ -13,7 +13,7 @@
 | `memory/YYYY-MM-DD.md` | 每日工作日志（**只追加**） |
 | `documents/worklog/` | 42 篇历史工作日志本体（= 项目根的 `docs/`） |
 | `documents/plans/` | 计划类文档 |
-| `skills/` | 技能（如 `venera-windows-build`） |
+| `skills/` | 技能（如 `mangrove-windows-build`） |
 | `specs/` | 规格 |
 | `kb/` | **跨项目可复用**的知识库（当前：`methodology/` M01~M07） |
 

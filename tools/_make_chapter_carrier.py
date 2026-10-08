@@ -1,12 +1,13 @@
 """为 S9.5-a 造一个「整章」验证载体工程（不复制原图）。
 
-背景：`S9Fixture` 只有 5 页，而 §4.10 序 0 的验收写的是「整章」。真正的整章
-只有 `downloads/My Dragon Girlfriend Has Returned` 下的章节（94~177 页），
-它没有对应的 `projects/` 工程 —— 因为**应用里没有任何"从下载创建工程"的入口**
-（`BtProjectManager` 只有 `ensureProject` / `scan`，没有 create；`ProjectWriter.adopt`
-只被 `project_validator` 调用）。所以本脚本补上这一步。
+背景：`S9Fixture`（5 页纯夹具）已归档到
+`builds/archive/20261008/removed_projects/`，主验证素材改用 `MDGH-ch1`（94 页真章节），
+对应 `downloads/My Dragon Girlfriend Has Returned` 下的整章。
+🔴 2026-10-08 之后：应用侧已有「从下载创建工程」的能力层
+（`ProjectBootstrap` + `BtProjectManager.createFromDownload`，见 `--headless bootstrap-check`），
+但仍**没有 GUI 入口**（属 S9.5-b）。本脚本保留为离线兜底。
 
-🔴 三条硬约束（与 `S9Fixture/README.md` 同源）：
+🔴 三条硬约束（与 `MDGH-ch1` 工程同源）：
 
 1. **原图不复制** —— 走 A 方案：`directory` 指向 `downloads/<漫画>`，
    产物落在 `projects/<工程名>`（json 所在目录即 `workspace` 的回落值）。

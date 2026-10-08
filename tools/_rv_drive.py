@@ -15,11 +15,15 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PKG_DIR = os.path.join(ROOT, 'VeneraX')
+PKG_DIR = os.path.join(ROOT, 'Mangrove')
 PY = sys.executable
 TOOLS = os.path.join(ROOT, 'tools')
-FIXTURE = os.path.join(ROOT, 'ComicLibrary', 'projects', 'S9Fixture',
-                       'imgtrans_S9Fixture.json')
+# 🔴 2026-10-08：夹具从 `S9Fixture`（5 页纯夹具）换成 `MDGH-ch1`（94 页真章节）。
+# S9Fixture 已归档到 `builds/archive/20261008/removed_projects/`（用户决定只用
+# MDGH-ch1 当主验证素材）。edit-check 在 MDGH-ch1 上是 PASS(125)，比 S9Fixture
+# 的 122 还多 3 条（它有 `chapters` / `page_order`），零失败 ⇒ 换基线是安全的。
+FIXTURE = os.path.join(ROOT, 'ComicLibrary', 'projects', 'MDGH-ch1',
+                       'imgtrans_MDGH-ch1.json')
 RESULTS = os.path.join(ROOT, 'builds', 'reverse_verification.json')
 
 

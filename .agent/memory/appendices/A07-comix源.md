@@ -36,7 +36,7 @@
 ## 5. 相关文件
 
 - 源脚本：`assets/comix_to.js` —— **不进 flutter_assets**；
-  运行时读 `%APPDATA%\io.github.kyosee\venera\comic_source\*.js` → **改后必须手动同步**。
+  运行时读 `%APPDATA%\io.github.maelshiyan02\mangrove\comic_source\*.js` → **改后必须手动同步**。
 - 调试工装：`tools/probe_copy_web*.py`、`tools/test_copy_v180.py`、`tools/copy_aes.js`。
 - 分析文档：`docs/P4-comix-to漫画源配置分析-20260929.md`、
   `docs/P4-针对comix.to漫画源配置文件的设计与实施工程记录日志.md`、

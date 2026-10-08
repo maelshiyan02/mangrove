@@ -4,7 +4,7 @@ import sys, io, os, json, hmac, hashlib, base64, time, traceback
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import quickjs, requests
 
-SRC = r"d:\Ballonstranslator_Windows\venera-configs-main\copy_manga(6).js"
+SRC = r"d:\Mangrove_Windows\mangrove-configs-main\copy_manga(6).js"
 PROXY = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
 http = requests.Session()
 http.proxies.update(PROXY)

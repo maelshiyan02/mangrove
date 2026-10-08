@@ -1,7 +1,7 @@
-# VeneraX 主记忆 · 框架与索引
+# Mangrove 主记忆 · 框架与索引
 
 > 🔖 **项目正式名 = Mangrove**（2026-10-07 定；*manga* + *grove*，漫画成林）。
-> 代码与目录**暂时仍叫 `VeneraX`**，待集成完成后统一改名；**GitHub 仓库用 `mangrove`**。
+> 代码与目录**暂时仍叫 `Mangrove`**，待集成完成后统一改名；**GitHub 仓库用 `mangrove`**。
 > 远程：`origin` = `https://github.com/maelshiyan02/mangrove`（**public** · 分支 `main`）——
 > 2026-10-07 首推完成（3 提交 / 903 文件 / `.git` 36 MB）；`.gitignore` 排除 9 GB 素材与构建产物。
 > 命名依据：本工程与 BallonTranslator 合并后，主体是**漫画 AI 汉化流水线**（下载→检测→OCR→翻译→擦除→排版→导出），
@@ -17,7 +17,7 @@
   全部是**指向 `.agent` 的目录联接（junction）**。
 - ⇒ **改任何一条路径都是改同一份文件**；过去那套「写完 `.workbuddy` 再拷回 `.trae`」**已作废，不要再做**。
 - ⇒ 新增 agent 接入 = 为它需要的子目录建一条 junction（或让它直接读 `.agent/`）。
-- 🔴 **项目根目录将来会改名** ⇒ 一切引用用**相对路径**（`VeneraX/…`、`.agent/…`、`docs/…`），
+- 🔴 **项目根目录将来会改名** ⇒ 一切引用用**相对路径**（`Mangrove/…`、`.agent/…`、`docs/…`），
   **绝不写 `D:\…` / `C:\…`**。工具脚本必须由**自身位置**推导根目录。
 - 体检：`python tools/agent_links_check.py`（`--fix` 可重建联接）。
   迁移记录与回滚步骤：`.agent/documents/D01-多agent工作区迁移记录-20261007.md`。

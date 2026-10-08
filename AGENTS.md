@@ -21,7 +21,7 @@
 
 ## 项目速览
 
-- Flutter Windows 漫画阅读器 / 翻译工作室（`VeneraX/`），把 BallonTranslator 的翻译管线融进来。
+- Flutter Windows 漫画阅读器 / 翻译工作室（`Mangrove/`），把 BallonTranslator 的翻译管线融进来。
 - 构图件：`ComicLibrary/`（三个根：`downloads` 本地库 / `projects` 工作室工程 / `translated` 成品）。
 - 工具链：`tools/`（构建工装、headless 工装、反向验证、字体检查…）。
 - 当前阶段与卡点：见 `.agent/memory/appendices/A08-排期与阶段现状.md`。

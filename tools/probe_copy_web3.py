@@ -8,7 +8,7 @@ from Cryptodome.Util.Padding import unpad
 
 PROXY = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-OUT = r"d:\Ballonstranslator_Windows\probe_out"
+OUT = r"d:\Mangrove_Windows\probe_out"
 WEB = "www.copy5000.com"
 s = requests.Session(); s.proxies.update(PROXY); s.headers.update({"User-Agent": UA})
 

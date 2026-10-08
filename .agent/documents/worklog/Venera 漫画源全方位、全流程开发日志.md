@@ -1,4 +1,4 @@
-# Venera 漫画源全方位、全流程开发日志
+# Mangrove 漫画源全方位、全流程开发日志
 
 > **案例源**：香蕉漫画（`manhuauo.com`）与腾讯动漫（正版，`m.ac.qq.com`）  
 > **案例版本**：`manhuauo_banana_v2` v1.0.3；`qq_comic_official_v1` v1.0.3  
@@ -9,7 +9,7 @@
 
 ## 1. 文档目标与最终交付标准
 
-Venera 漫画源并不是“能打开首页”就算完成，而是一个由网页取证、数据解析、图片获取、客户端接口适配和回归验证共同构成的可维护模块。官方约定漫画源以 JavaScript 类继承 `ComicSource` 实现，核心字段包括 `name`、`key`、`version`、`minAppVersion` 和 `url`；页面能力则通过 `explore`、`category`、`search` 与 `comic` 对象提供。[1]
+Mangrove 漫画源并不是“能打开首页”就算完成，而是一个由网页取证、数据解析、图片获取、客户端接口适配和回归验证共同构成的可维护模块。官方约定漫画源以 JavaScript 类继承 `ComicSource` 实现，核心字段包括 `name`、`key`、`version`、`minAppVersion` 和 `url`；页面能力则通过 `explore`、`category`、`search` 与 `comic` 对象提供。[1]
 
 本日志把开发过程拆分为可审计的步骤。每一步都必须留下输入证据、实现决策、输出结果和验证结论。开发完成的最低标准，是首页推荐、搜索、分类、漫画详情、章节列表和图片加载六条链路均有真实样本验证；任何未验证项目不得写成“已支持”。
 
@@ -17,16 +17,16 @@ Venera 漫画源并不是“能打开首页”就算完成，而是一个由网�
 
 | 交付物 | 必须包含的内容 | 不合格示例 |
 |---|---|---|
-| 漫画源脚本 | 唯一 Key、标准 Venera 返回类型、真实站点解析逻辑、版本日志 | 直接复制其他源的选择器、参数或解密流程 |
+| 漫画源脚本 | 唯一 Key、标准 Mangrove 返回类型、真实站点解析逻辑、版本日志 | 直接复制其他源的选择器、参数或解密流程 |
 | 开发日志 | 路由、HTML/JSON 字段、图片来源、错误与修复、验证结果 | 仅写“已修复”而没有样本和数据 |
 | 验证脚本或步骤 | 可重复执行的输入样本、断言、预期输出 | 手工浏览一次后口头确认 |
 | 发布说明 | 版本、改动范围、已验证与未验证项目 | 不区分已证实和猜测功能 |
 
 ---
 
-## 2. Venera 漫画源的基础接口与数据契约
+## 2. Mangrove 漫画源的基础接口与数据契约
 
-Venera 提供 `Network`、`HtmlDocument`、`Convert`、`Comic`、`ComicDetails` 等 JavaScript API。网络请求通过 `Network.get`、`Network.post` 等方法完成，HTML 通过 `new HtmlDocument(html)` 及 CSS 选择器解析；漫画列表与详情应分别返回 `new Comic({...})` 和 `new ComicDetails({...})`，而不是依赖未经验证的普通对象。[2]
+Mangrove 提供 `Network`、`HtmlDocument`、`Convert`、`Comic`、`ComicDetails` 等 JavaScript API。网络请求通过 `Network.get`、`Network.post` 等方法完成，HTML 通过 `new HtmlDocument(html)` 及 CSS 选择器解析；漫画列表与详情应分别返回 `new Comic({...})` 和 `new ComicDetails({...})`，而不是依赖未经验证的普通对象。[2]
 
 | 模块 | 输入 | 合规输出 | 典型错误 |
 |---|---|---|---|
@@ -46,7 +46,7 @@ Venera 提供 `Network`、`HtmlDocument`、`Convert`、`Comic`、`ComicDetails` 
 
 | 阶段 | 必须做的事实工作 | 必须保存的证据 | 阶段完成条件 |
 |---|---|---|---|
-| 0. 规范学习 | 查阅 Venera 漫画源与 JS API 文档；阅读官方同类源 | 官方文档 URL、参考源文件名 | 明确返回结构和可用 API |
+| 0. 规范学习 | 查阅 Mangrove 漫画源与 JS API 文档；阅读官方同类源 | 官方文档 URL、参考源文件名 | 明确返回结构和可用 API |
 | 1. 首页取证 | 检查推荐区块、卡片、懒加载封面和详情链接 | 首页 HTML、各选择器、至少一个样本 ID | 能解析多个推荐区块 |
 | 2. 搜索取证 | 读取搜索表单 method/action/name；检查结果结构 | 搜索 URL、输入参数、结果 HTML | 至少一个关键词返回正确项目 |
 | 3. 分类取证 | 访问分类入口、某一题材页、第二页和状态筛选 | 真实分类 URL、分页链接、卡片数量 | 分类与分页均有真实样本 |
@@ -64,7 +64,7 @@ Venera 提供 `Network`、`HtmlDocument`、`Convert`、`Comic`、`ComicDetails` 
 
 实际访问地址为 `https://www.manhuauo.com/`。首页推荐区块使用 `.mg-section`，区块标题位于 `.mg-section-head h2`。单个漫画卡片使用 `.mg-vod-item`；封面与详情链接位于 `.mg-vod-thumb`，其中 `href` 格式为 `/comic/{id}.html`，封面字段为 `data-original`；标题位于 `.mg-vod-name a`，状态与章节信息分别可从 `.mg-vod-status` 和 `.mg-vod-tag` 提取。
 
-实际样本存在“最近更新”“推荐漫画”“新作上线”“完结漫画”等多个区块，且“最近更新”样本可解析到不少于 10 部漫画。因此最终选择 `singlePageWithMultiPart`，以网站原区块标题作为返回对象键，Venera 探索页显示名称为“香蕉漫画”。
+实际样本存在“最近更新”“推荐漫画”“新作上线”“完结漫画”等多个区块，且“最近更新”样本可解析到不少于 10 部漫画。因此最终选择 `singlePageWithMultiPart`，以网站原区块标题作为返回对象键，Mangrove 探索页显示名称为“香蕉漫画”。
 
 | 字段 | 实际证据 | 源内处理 |
 |---|---|---|
@@ -149,11 +149,11 @@ https://www.manhuauo.com/xinhmg/neirong/2825/125664/0.jpg
 
 ---
 
-## 7. Venera 官方支持的解密能力与官方参考模式
+## 7. Mangrove 官方支持的解密能力与官方参考模式
 
 官方 `Convert` API 提供 Base64 解码、AES-ECB、AES-CBC、AES-CFB、AES-OFB 与 RSA 解密；并提供 UTF-8、MD5、SHA、HMAC、十六进制转换等辅助能力。[2] [3] 这些 API 的存在不代表应当在每个源中调用。算法选择必须服从目标站点的实际证据。
 
-| 已证实的站点机制 | Venera API | 输入要求 | 输出后仍需处理的事项 | 官方参考 |
+| 已证实的站点机制 | Mangrove API | 输入要求 | 输出后仍需处理的事项 | 官方参考 |
 |---|---|---|---|---|
 | Base64 文本/图像数据 | `Convert.decodeBase64(value)` | 确认字段可 Base64 解码 | UTF-8 解码、JSON 解析或图像字节输出 | `ccc.js`、`jm.js` [4] [5] |
 | AES-ECB | `Convert.decryptAesEcb(cipher, key)` | 密文 Buffer、Key Buffer、Padding 规则 | 转 UTF-8，校验 JSON/URL | `jm.js` [5] |
@@ -171,7 +171,7 @@ https://www.manhuauo.com/xinhmg/neirong/2825/125664/0.jpg
 
 ## 8. 可复用的编码骨架与接口实现原则
 
-实现源时，应将“站点特定内容”封装在几个小函数中，例如 `absoluteUrl`、`comicIdFromHref`、`parseVodItem`、`parseSearchItem`、`parseMaxPage` 和 `getCategoryUrl`。这样当站点改版时，可以只修改特定解析函数，并复用标准的 Venera 返回类型与测试逻辑。
+实现源时，应将“站点特定内容”封装在几个小函数中，例如 `absoluteUrl`、`comicIdFromHref`、`parseVodItem`、`parseSearchItem`、`parseMaxPage` 和 `getCategoryUrl`。这样当站点改版时，可以只修改特定解析函数，并复用标准的 Mangrove 返回类型与测试逻辑。
 
 ```javascript
 // 核心原则示例：每种卡片类型独立解析，避免跨页面猜测复用。
@@ -188,7 +188,7 @@ parseSearchItem(item) {
 }
 ```
 
-每个 `HtmlDocument` 在处理结束后应调用 `dispose()`。每个异常捕获分支应返回与 Venera 契约一致的空结构，例如列表返回 `{ comics: [], maxPage: page }`、图片返回 `{ images: [] }`，而不是返回 `null`、字符串或不完整对象。这样可避免将网络失败、选择器失效和返回类型错误混为同一种问题。
+每个 `HtmlDocument` 在处理结束后应调用 `dispose()`。每个异常捕获分支应返回与 Mangrove 契约一致的空结构，例如列表返回 `{ comics: [], maxPage: page }`、图片返回 `{ images: [] }`，而不是返回 `null`、字符串或不完整对象。这样可避免将网络失败、选择器失效和返回类型错误混为同一种问题。
 
 ---
 
@@ -208,7 +208,7 @@ parseSearchItem(item) {
 | 详情 | 章节列表 | `/comic/110.html` | 108 个章节 | 通过 |
 | 图片 | 阅读页脚本 | `/read/110-1-1.html` | 15 张图片；首图 URL 正确 | 通过 |
 | 搜索多页 | 多页关键词 | 待选稳定样本 | 第 1、2 页均有有效项目且页面链接已确认 | **待验证** |
-| App 真机导入 | Venera 导入与读取 | 用户客户端 | 无“无效参数”；六链路表现与本地验证一致 | 应在发布后确认 |
+| App 真机导入 | Mangrove 导入与读取 | 用户客户端 | 无“无效参数”；六链路表现与本地验证一致 | 应在发布后确认 |
 
 测试失败时必须先区分失败类型：请求被拒绝、页面结构变更、字段为空、解析器不兼容、加密逻辑变化或图片服务器限制。不要因为“结果为空”就直接换 URL 或加入解密代码；应先保留失败页面，比较当前 DOM 与上一个成功样本的差异。
 
@@ -224,7 +224,7 @@ parseSearchItem(item) {
 | Key 审核 | 与已安装源不冲突，非必要不改旧 Key | 保持设置与缓存连续性 |
 | 名称审核 | `name`、首页、分类页显示名一致 | 避免客户端显示混乱 |
 | 完整测试 | 运行自动化断言并保留输出 | 防止“改小功能坏大功能” |
-| 导入验证 | 在 Venera 中实际导入并检查功能 | 覆盖 JS 引擎差异和客户端约束 |
+| 导入验证 | 在 Mangrove 中实际导入并检查功能 | 覆盖 JS 引擎差异和客户端约束 |
 | 维护样本 | 保存成功与失败 HTML/JSON 样本 | 网站改版时可快速对比 |
 
 ---
@@ -232,7 +232,7 @@ parseSearchItem(item) {
 ## 11. 新网站开发用的可复制日志模板
 
 ```markdown
-# {站点名称} Venera 源开发日志
+# {站点名称} Mangrove 源开发日志
 
 > 版本：v{版本号}
 > 开发原则：所有结论均由真实页面、接口、脚本或官方文档证实。
@@ -293,7 +293,7 @@ parseSearchItem(item) {
 - [ ] 若有加密，至少一张图片解密后可正确读取。
 - [ ] 若响应含动态 nonce/表达式，至少采样 3 个章节并逐章完成解码。
 - [ ] 未识别的动态表达式会安全失败，绝不执行站点返回的脚本。
-- [ ] Venera 客户端导入通过。
+- [ ] Mangrove 客户端导入通过。
 
 > **重点：任何未勾选项都必须在发布说明中标为“待验证”。**
 ```
@@ -302,18 +302,18 @@ parseSearchItem(item) {
 
 ## 12. 最终结论
 
-本案例证明，可靠的 Venera 漫画源开发依赖于“取证—实现—验证—记录”的闭环，而不是依赖模板复制或对网站结构、路径和加密方案的猜测。香蕉漫画源最终能够工作，是因为将首页、搜索、分类、详情和图片页面分别取证；修正了错误选择器与错误分页路径；确认图片位于 `player_aaaa.url` 而非静态 DOM；并在最终发布前用真实样本做了完整回归测试。
+本案例证明，可靠的 Mangrove 漫画源开发依赖于“取证—实现—验证—记录”的闭环，而不是依赖模板复制或对网站结构、路径和加密方案的猜测。香蕉漫画源最终能够工作，是因为将首页、搜索、分类、详情和图片页面分别取证；修正了错误选择器与错误分页路径；确认图片位于 `player_aaaa.url` 而非静态 DOM；并在最终发布前用真实样本做了完整回归测试。
 
-后续开发任何新源时，应优先复制本日志的流程和验证标准，而不是复制某个站点的具体选择器或加密逻辑。站点特定代码只能从该站点的真实证据中得出；Venera 官方 API 与官方源的作用，是提供已验证的实现模式和能力边界，而不是替代目标站点的逆向分析。
+后续开发任何新源时，应优先复制本日志的流程和验证标准，而不是复制某个站点的具体选择器或加密逻辑。站点特定代码只能从该站点的真实证据中得出；Mangrove 官方 API 与官方源的作用，是提供已验证的实现模式和能力边界，而不是替代目标站点的逆向分析。
 
 ## 参考资料
 
-[1] [Venera Comic Source 文档](https://github.com/venera-app/venera/blob/master/doc/comic_source.md)  
-[2] [Venera JavaScript API 文档](https://github.com/venera-app/venera/blob/master/doc/js_api.md)  
-[3] [Venera 官方类型定义 `_venera_.js`](https://github.com/venera-app/venera-configs/blob/main/_venera_.js)  
-[4] [Venera 官方 CCC 追漫台源 `ccc.js`：AES-CBC 图片响应解密示例](https://github.com/venera-app/venera-configs/blob/main/ccc.js)  
-[5] [Venera 官方禁漫天堂源 `jm.js`：AES-ECB 文本解密示例](https://github.com/venera-app/venera-configs/blob/main/jm.js)  
-[6] [Venera 官方漫蛙吧源 `manwaba.js`](https://github.com/venera-app/venera-configs/blob/main/manwaba.js)
+[1] [Mangrove Comic Source 文档](https://github.com/mangrove-app/mangrove/blob/master/doc/comic_source.md)  
+[2] [Mangrove JavaScript API 文档](https://github.com/mangrove-app/mangrove/blob/master/doc/js_api.md)  
+[3] [Mangrove 官方类型定义 `_mangrove_.js`](https://github.com/mangrove-app/mangrove-configs/blob/main/_mangrove_.js)  
+[4] [Mangrove 官方 CCC 追漫台源 `ccc.js`：AES-CBC 图片响应解密示例](https://github.com/mangrove-app/mangrove-configs/blob/main/ccc.js)  
+[5] [Mangrove 官方禁漫天堂源 `jm.js`：AES-ECB 文本解密示例](https://github.com/mangrove-app/mangrove-configs/blob/main/jm.js)  
+[6] [Mangrove 官方漫蛙吧源 `manwaba.js`](https://github.com/mangrove-app/mangrove-configs/blob/main/manwaba.js)
 
 
 ---
@@ -324,7 +324,7 @@ parseSearchItem(item) {
 
 > **重点：这不是 AES，也不是凭 Base64 前缀就能猜出的协议。** 本案例在真实章节 `id=649514`、`cid=2` 上按前端源代码复现后，得到含 16 项的 `picture` 数组；首图下载后被验证为 800×1149 JPEG。因此该机制应归类为“站点自定义载荷混淆/编码还原”，而非 AES、RSA 或 XOR。
 
-腾讯动漫详情页只直接展示章节预览，完整章节目录位于公开章节页 `#data_chapterInfo` 的 JSON 中。本案例由此得到 448 个去重章节，说明**详情预览节点不等于完整目录数据源**。对正版权限，源仅在 `chapter.canRead !== false` 时返回图片 URL；这既遵守页面明示的权限，也避免把“能解析图片协议”错误地等同于“可以读取付费内容”。详细取证、实现和验证结果见《腾讯动漫（正版）Venera 源专项开发日志》。
+腾讯动漫详情页只直接展示章节预览，完整章节目录位于公开章节页 `#data_chapterInfo` 的 JSON 中。本案例由此得到 448 个去重章节，说明**详情预览节点不等于完整目录数据源**。对正版权限，源仅在 `chapter.canRead !== false` 时返回图片 URL；这既遵守页面明示的权限，也避免把“能解析图片协议”错误地等同于“可以读取付费内容”。详细取证、实现和验证结果见《腾讯动漫（正版）Mangrove 源专项开发日志》。
 
 | 新增诊断规则 | 已验证动作 | 禁止做法 |
 |---|---|---|
@@ -360,9 +360,9 @@ parseSearchItem(item) {
 
 ### 案例补充：历史默认图标通常是已持久化的 `ComicDetails.cover`，不是章节图片故障
 
-Venera 历史列表渲染的是 `History.cover`，而新历史记录的该字段来自 `ComicDetails.cover`。历史页面不会以章节首图或 `thumbnails` 替代漫画封面；因此当详情页误把站点通用 share-icon、favicon 或营销图作为 `cover` 时，历史记录就会保存并长期显示默认图标，即使正文图片 `loadEp` 已经正常。
+Mangrove 历史列表渲染的是 `History.cover`，而新历史记录的该字段来自 `ComicDetails.cover`。历史页面不会以章节首图或 `thumbnails` 替代漫画封面；因此当详情页误把站点通用 share-icon、favicon 或营销图作为 `cover` 时，历史记录就会保存并长期显示默认图标，即使正文图片 `loadEp` 已经正常。
 
-> **重点排查顺序：** 首先验证 `ComicDetails.cover` 是否为真实漫画封面、是否能返回有效图像字节；其次实现 `onThumbnailLoad`（需要时补充 Referer/User-Agent）；最后必须区分新历史和已保存旧历史。对已保存旧历史，应使用 Venera 的“刷新信息”或“刷新全部历史”重新调用 `loadInfo` 覆盖封面，同时保留阅读进度。
+> **重点排查顺序：** 首先验证 `ComicDetails.cover` 是否为真实漫画封面、是否能返回有效图像字节；其次实现 `onThumbnailLoad`（需要时补充 Referer/User-Agent）；最后必须区分新历史和已保存旧历史。对已保存旧历史，应使用 Mangrove 的“刷新信息”或“刷新全部历史”重新调用 `loadInfo` 覆盖封面，同时保留阅读进度。
 
 对于含多个 `meta[itemprop="image"]` 的页面，不能假设详情页的第一个元数据就是漫画封面。腾讯动漫案例表明详情页该节点是通用分享图标，实际竖版漫画封面在公开首章节页面；因此开发时须下载并验证最终 `cover` 的 MIME 类型、尺寸和视觉内容后再发布。
 
@@ -370,11 +370,11 @@ Venera 历史列表渲染的是 `History.cover`，而新历史记录的该字段
 
 ## 附录 B：从腾讯动漫（正版）案例提炼的端到端交付规范
 
-本附录不是把腾讯动漫的选择器、域名、参数或 nonce 语法复制到其他站点，而是将该案例中已经验证有效的**工作方法、失败诊断路径和安全边界**抽象为通用规范。Venera 的接口契约仍应以官方漫画源和 JavaScript API 为基准；目标网站的路由、字段、图片协议和权限规则必须重新取证。[1] [2]
+本附录不是把腾讯动漫的选择器、域名、参数或 nonce 语法复制到其他站点，而是将该案例中已经验证有效的**工作方法、失败诊断路径和安全边界**抽象为通用规范。Mangrove 的接口契约仍应以官方漫画源和 JavaScript API 为基准；目标网站的路由、字段、图片协议和权限规则必须重新取证。[1] [2]
 
 ### B.1 先区分“页面存在”与“字段可信”
 
-在本次开发中，详情页确实存在 `meta[itemprop="image"]`，但其内容是站点通用分享图，而不是漫画封面；详情页也确实存在章节链接，但只包含目录预览，不是完整目录。这说明 HTML 节点“存在”只能证明解析器找到了一个值，不能证明该值适合写入 Venera 的 `ComicDetails.cover`、`chapters` 或 `loadEp`。
+在本次开发中，详情页确实存在 `meta[itemprop="image"]`，但其内容是站点通用分享图，而不是漫画封面；详情页也确实存在章节链接，但只包含目录预览，不是完整目录。这说明 HTML 节点“存在”只能证明解析器找到了一个值，不能证明该值适合写入 Mangrove 的 `ComicDetails.cover`、`chapters` 或 `loadEp`。
 
 | 字段类别 | 低可信证据 | 可交付的高可信证据 | 必须执行的验证 |
 |---|---|---|---|
@@ -402,7 +402,7 @@ Venera 历史列表渲染的是 `History.cover`，而新历史记录的该字段
 
 ### B.3 动态协议的安全解析原则
 
-目标站点的前端可能通过 `eval`、字符串拼接或 DOM 真值计算辅助数据，但 Venera 源没有必要、也不应执行这些代码。正确的实现方式是将“协议所需的最小确定部分”转写为受限解析器。例如，只允许已取证的数字、算术、明确的字符串字面量操作和指定函数签名；只允许预定义运算符；对未知 token、非数字结果、未匹配属性名或异常括号立即终止。
+目标站点的前端可能通过 `eval`、字符串拼接或 DOM 真值计算辅助数据，但 Mangrove 源没有必要、也不应执行这些代码。正确的实现方式是将“协议所需的最小确定部分”转写为受限解析器。例如，只允许已取证的数字、算术、明确的字符串字面量操作和指定函数签名；只允许预定义运算符；对未知 token、非数字结果、未匹配属性名或异常括号立即终止。
 
 | 规则 | 应允许的范围 | 应拒绝的范围 | 验证方式 |
 |---|---|---|---|
@@ -416,7 +416,7 @@ Venera 历史列表渲染的是 `History.cover`，而新历史记录的该字段
 
 ### B.4 历史页是独立功能链路，不是阅读页的副产品
 
-Venera 的历史状态会持久化数据。因而新打开章节正常，不等于历史记录能正常恢复；新详情封面正确，也不等于旧历史会自动更新。本次案例确定了两个通用处理方向：其一，`loadEp` 要把普通目录 ID、完整章节 URL 和组合 ID 等历史入参标准化为站点实际所需的参数；其二，历史封面应从 `ComicDetails.cover` 的真实来源修复，必要时用 `onThumbnailLoad` 提供正确请求上下文。
+Mangrove 的历史状态会持久化数据。因而新打开章节正常，不等于历史记录能正常恢复；新详情封面正确，也不等于旧历史会自动更新。本次案例确定了两个通用处理方向：其一，`loadEp` 要把普通目录 ID、完整章节 URL 和组合 ID 等历史入参标准化为站点实际所需的参数；其二，历史封面应从 `ComicDetails.cover` 的真实来源修复，必要时用 `onThumbnailLoad` 提供正确请求上下文。
 
 | 历史相关故障 | 典型根因 | 实现要求 | 用户侧必要动作 |
 |---|---|---|---|
@@ -431,7 +431,7 @@ Venera 的历史状态会持久化数据。因而新打开章节正常，不等�
 
 | 验收层级 | 必测项目 | 通过条件 | 失败时优先检查 |
 |---|---|---|---|
-| 源契约 | 名称、Key、版本、类加载、返回类型 | 可实例化；Key 稳定；返回 Venera 合规对象 | 顶层字段、类继承、构造器与 Map 类型 |
+| 源契约 | 名称、Key、版本、类加载、返回类型 | 可实例化；Key 稳定；返回 Mangrove 合规对象 | 顶层字段、类继承、构造器与 Map 类型 |
 | 页面链路 | 首页、搜索、分类第 1/2 页、详情 | 数量与样本一致；ID、标题、封面有效 | 真实路由、选择器、懒加载字段、分页来源 |
 | 目录链路 | 预览与完整目录 | 完整数经真实节点/接口验证且去重 | 公开章节页、脚本变量、JSON 节点 |
 | 封面链路 | `cover`、`thumbnails`、缩略图请求 | 真实漫画图片可读且请求上下文有效 | 通用图标、相对 URL、Referer/User-Agent |
@@ -549,12 +549,12 @@ Venera 的历史状态会持久化数据。因而新打开章节正常，不等�
 
 主要真实样本：`/home/ubuntu/dongman_debug/detail_5985.html`、`/home/ubuntu/dongman_debug/japan.html`、`/home/ubuntu/dongman_debug/node_2.html`、`/home/ubuntu/dongman_debug/search_onepunch.html`、`/home/ubuntu/dongman_debug/chapter_all.html` 和 `responses_chapter_5985_395258.html`。
 
-参考资料：[Venera 官方漫画源开发文档](https://github.com/venera-app/venera/blob/master/doc/comic_source.md)、[动漫啦首页](https://www.dongman.la/)、[一拳超人详情页](https://www.dongman.la/manhua/detail/5985/)、[一拳超人第 256 话整话页](https://www.dongman.la/manhua/chapter/5985/395258/all.html)。
+参考资料：[Mangrove 官方漫画源开发文档](https://github.com/mangrove-app/mangrove/blob/master/doc/comic_source.md)、[动漫啦首页](https://www.dongman.la/)、[一拳超人详情页](https://www.dongman.la/manhua/detail/5985/)、[一拳超人第 256 话整话页](https://www.dongman.la/manhua/chapter/5985/395258/all.html)。
 
 
 ## C.8 搜索入口 302 重定向的修复经验
 
-动漫啦案例进一步证明：**搜索表单 action 不一定是最终可解析页面**。本次表单显示 action 为 `/manhua/search/`，但真实请求 `/manhua/search/?key=一拳超人` 返回 HTTP 302，最终搜索页位于 `/manhua/so/一拳超人/`。当源依赖网络层自动跟随重定向时，可能因 Venera 版本、请求实现或站点响应差异而得到空响应或仅得到重定向提示文本，最终表现为“搜索不能用”。
+动漫啦案例进一步证明：**搜索表单 action 不一定是最终可解析页面**。本次表单显示 action 为 `/manhua/search/`，但真实请求 `/manhua/search/?key=一拳超人` 返回 HTTP 302，最终搜索页位于 `/manhua/so/一拳超人/`。当源依赖网络层自动跟随重定向时，可能因 Mangrove 版本、请求实现或站点响应差异而得到空响应或仅得到重定向提示文本，最终表现为“搜索不能用”。
 
 | 检查项 | 错误做法 | 推荐做法 |
 |---|---|---|

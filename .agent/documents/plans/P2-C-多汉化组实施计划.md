@@ -164,5 +164,5 @@ BT 工程通常单汉化组，`_registerLocal` 中继续使用 flat `ComicChapte
 6. 现有 flat/grouped 章节显示不受影响
 
 ### 构建
-- 沙箱外运行 `build_venera.ps1`
+- 沙箱外运行 `build_mangrove.ps1`
 - 验收：`data/app.so` 时间戳刷新

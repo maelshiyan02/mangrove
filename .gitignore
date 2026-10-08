@@ -3,22 +3,29 @@
 # 取舍标准：能由源码重新生成的、或属于用户数据的，一律忽略。
 # ============================================================
 
+# ---- 0. Windows 保留设备名残留（stray 产物）----
+# 构建/重定向偶尔会在仓库根目录生成名为 `nul` 的 12B 残留文件。
+# Windows 把 `nul` 当作空设备名，Git 无法读取其字节 →
+# "short read while indexing nul" / "fatal: adding files failed"。
+# 它不属于源码，直接忽略（并手动删除磁盘上的残留）。
+nul
+
 # ---- 1. 大体积目录（合计约 6.8 GB）：第三方实现 / 素材库 / 打包产物 ----
 # 这些要么是别处的源码副本，要么是可重新生成的产物，进了仓库只会让
 # 每次 clone 变成一次大规模下载。
 Ballonstranslator_win_minium/
 Ballonstranslator_store/
-VeneraX-portable/
+Mangrove-portable/
 ComicLibrary/
 builds/
 
-# ---- 2. VeneraX 构建残留（约 2.2 GB，可由 flutter build 重新生成）----
-# 注意：VeneraX/.gitignore（Flutter 模板自带）已排除 /build/ 与 .dart_tool/，
+# ---- 2. Mangrove 构建残留（约 2.2 GB，可由 flutter build 重新生成）----
+# 注意：Mangrove/.gitignore（Flutter 模板自带）已排除 /build/ 与 .dart_tool/，
 # 但它**没有**排除 windows/flutter/ephemeral/ —— 那正是 262 MB 的去处。
-VeneraX/build/
-VeneraX/.dart_tool/
-VeneraX/.dart_tool_empty/
-VeneraX/windows/flutter/ephemeral/
+Mangrove/build/
+Mangrove/.dart_tool/
+Mangrove/.dart_tool_empty/
+Mangrove/windows/flutter/ephemeral/
 **/ephemeral/
 
 # ---- 3. 指向 .agent 的目录联接（junction）----

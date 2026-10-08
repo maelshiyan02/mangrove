@@ -4,8 +4,8 @@ import sys, io, json, re, os
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import quickjs
 
-OUT = r"d:\Ballonstranslator_Windows\probe_out"
-aes_js = open(r"d:\Ballonstranslator_Windows\copy_aes.js", encoding="utf-8").read()
+OUT = r"d:\Mangrove_Windows\probe_out"
+aes_js = open(r"d:\Mangrove_Windows\copy_aes.js", encoding="utf-8").read()
 ctx = quickjs.Context()
 ctx.eval(aes_js)
 

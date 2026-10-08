@@ -1,12 +1,12 @@
-"""Run one `venera.exe --headless ...` command through Task Scheduler and capture its output.
+"""Run one `mangrove.exe --headless ...` command through Task Scheduler and capture its output.
 
 Why this exists
 ---------------
-`builds/venera/venera.exe` is a **GUI-subsystem** binary, and its `main.cpp`
+`builds/mangrove/mangrove.exe` is a **GUI-subsystem** binary, and its `main.cpp`
 unconditionally calls `::AttachConsole(ATTACH_PARENT_PROCESS)`. When it is
 launched from a shell that *has* a console (Git Bash, cmd, PowerShell), that
 call re-binds stdout/stderr to the console and **discards the caller's
-redirection** — so `venera.exe ... > out.txt` produces an empty file even
+redirection** — so `mangrove.exe ... > out.txt` produces an empty file even
 though the command ran fine. The result: every headless failure looks like
 "exit 1 with no output at all", which is indistinguishable from a crash before
 Dart even starts.
@@ -36,10 +36,10 @@ import time
 import win32com.client
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXE = os.path.join(ROOT, "builds", "venera", "venera.exe")
+EXE = os.path.join(ROOT, "builds", "mangrove", "mangrove.exe")
 BAT = os.path.join(ROOT, "tools", "headless_once.bat")
 OUT = os.path.join(ROOT, "builds", "headless.out")
-TASK_NAME = "VeneraHeadlessOnce"
+TASK_NAME = "MangroveHeadlessOnce"
 
 
 def quote(arg: str) -> str:
@@ -99,7 +99,7 @@ def run(command: list[str]) -> tuple[int, str]:
         f.write("@echo off\n")
         f.write('for %%I in ("%~dp0..") do set "ROOT=%%~fI"\n')
         f.write('cd /d "%ROOT%"\n')
-        f.write(f'"%ROOT%\\builds\\venera\\venera.exe" --headless {args} > "%ROOT%\\builds\\headless.out" 2>&1\n')
+        f.write(f'"%ROOT%\\builds\\mangrove\\mangrove.exe" --headless {args} > "%ROOT%\\builds\\headless.out" 2>&1\n')
         f.write('echo === HL_EXIT=%ERRORLEVEL% === >> "%ROOT%\\builds\\headless.out"\n')
 
     # 🔴 No `os.remove(OUT)` here. The generated batch already redirects with
@@ -110,7 +110,7 @@ def run(command: list[str]) -> tuple[int, str]:
     # `SAFE_DELETE_BULK_CONFIRM_REQUIRED`.
     #
     # 🔴🔴 But truncation **by the shell** is not sufficient on its own: the
-    # batch truncates only once its `venera.exe` line starts, and this function
+    # batch truncates only once its `mangrove.exe` line starts, and this function
     # begins polling the instant the scheduled task is fired. When the previous
     # run had already left `=== HL_EXIT=` in the file, the very first poll read
     # the *previous* run's output and returned immediately — 0.6s "runs" that
@@ -122,7 +122,7 @@ def run(command: list[str]) -> tuple[int, str]:
 
     xml = """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Author>WorkBuddy</Author><Description>VeneraX headless one-shot</Description></RegistrationInfo>
+  <RegistrationInfo><Author>WorkBuddy</Author><Description>Mangrove headless one-shot</Description></RegistrationInfo>
   <Triggers />
   <Principals>
     <Principal id="Author">

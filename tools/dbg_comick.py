@@ -9,7 +9,7 @@ var localStorage={getItem:()=>null,setItem:()=>{},removeItem:()=>{}};
 class ComicSource{loadSetting(){return {};}setSetting(){}saveData(){}loadData(){return null;}deleteData(){}}
 """
 ctx=quickjs.Context(); ctx.eval(PRELUDE)
-s=open(r"C:\Users\Administrator\AppData\Roaming\io.github.kyosee\venera\comic_source\comick.js","r",encoding="utf-8").read()
+s=open(r"C:\Users\Administrator\AppData\Roaming\io.github.maelshiyan02\mangrove\comic_source\comick.js","r",encoding="utf-8").read()
 ctx.eval(s)
 print(ctx.eval(r"""
 (function(){

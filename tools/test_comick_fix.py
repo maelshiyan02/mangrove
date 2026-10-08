@@ -63,8 +63,8 @@ PROBE = r"""
 
 fails = []
 for path, label in [
-    (r"C:\Users\Administrator\AppData\Roaming\io.github.kyosee\venera\comic_source\comick.js", "deployed"),
-    (r"d:\Ballonstranslator_Windows\venera-configs-main\comick.js", "workcopy"),
+    (r"C:\Users\Administrator\AppData\Roaming\io.github.maelshiyan02\mangrove\comic_source\comick.js", "deployed"),
+    (r"d:\Mangrove_Windows\mangrove-configs-main\comick.js", "workcopy"),
 ]:
     ctx = quickjs.Context()
     ctx.eval(PRELUDE)
