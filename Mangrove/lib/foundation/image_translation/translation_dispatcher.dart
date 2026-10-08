@@ -1,5 +1,6 @@
 import 'package:mangrove/foundation/image_translation/llm_translator.dart';
 import 'package:mangrove/foundation/image_translation/local_nmt_translator.dart';
+import 'package:mangrove/foundation/image_translation/script_translator.dart';
 import 'package:mangrove/foundation/image_translation/translation_engines.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/translation_project/glossary_bridge.dart';
@@ -35,6 +36,11 @@ abstract class TranslationDispatcher {
     if (texts.isEmpty) return const LlmTranslationResult([], {});
     var engine = TranslationEngines.activeLocal;
     if (engine == null) {
+      final active = LlmProviderStore.active;
+      // 自定义脚本：经 QuickJS 沙箱跑用户的 JS，失败/超时回退内置引擎。
+      if (active != null && active.usesScript) {
+        return _viaScript(texts, sourceLang, targetLang, glossary, active);
+      }
       if (!LlmTranslator.activeIsPublicFree) {
         // 真 LLM：术语表进 prompt，不需要桥接。
         return LlmTranslator.translateBatch(
@@ -60,6 +66,53 @@ abstract class TranslationDispatcher {
         sourceLangs: sourceLangs,
       ),
     );
+  }
+
+  /// 测试/回退接缝：脚本失败时要调用的"内置引擎"翻译。生产代码默认走
+  /// [LlmTranslator.translateBatch]（真实端点）；headless 的 `script-check`
+  /// 会临时换成确定性离线实现，从而在不依赖外网的情况下验证"脚本失败 → 回退
+  /// 到内置引擎"这条链路真的被走通。
+  static Future<LlmTranslationResult> Function(
+    List<String> texts,
+    String targetLang, {
+    Map<String, String> glossary,
+  }) builtInFallback = _defaultBuiltInFallback;
+
+  static Future<LlmTranslationResult> _defaultBuiltInFallback(
+    List<String> texts,
+    String targetLang, {
+    Map<String, String> glossary = const {},
+  }) =>
+      LlmTranslator.translateBatch(texts, targetLang, glossary: glossary);
+
+  /// 走自定义脚本路径；任何异常（沙箱抛错、超时、返回形状非法）都回退内置引擎，
+  /// 不让一次坏脚本卡死整页翻译或吞掉原文。
+  static Future<LlmTranslationResult> _viaScript(
+    List<String> texts,
+    String sourceLang,
+    String targetLang,
+    Map<String, String> glossary,
+    LlmProvider provider,
+  ) async {
+    try {
+      return await ScriptTranslator.translate(
+        provider,
+        texts,
+        sourceLang,
+        targetLang,
+        glossary: glossary,
+      );
+    } catch (e) {
+      // 🔴 回退必须可见：脚本为什么挂、回退到了哪条路径，都要留下痕迹。
+      Log.warning(
+        'Script Translator',
+        '自定义翻译脚本失败（$e）；回退到内置引擎',
+      );
+      // 走 builtInFallback 接缝：生产默认是真实 LLM 端点；headless 的
+      // `script-check` 会临时换成确定性离线实现，从而在不依赖外网的情况下
+      // 验证"脚本失败 → 回退到内置引擎"这条链路真的被走通。
+      return builtInFallback(texts, targetLang, glossary: glossary);
+    }
   }
 
   /// 给"不吃术语表"的引擎套一层占位/还原。

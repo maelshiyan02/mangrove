@@ -31,6 +31,8 @@ import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/tray.dart';
 import 'package:mangrove/network/app_dio.dart';
+import 'package:dio/dio.dart';
+import 'package:mangrove/foundation/image_translation/script_translator.dart';
 import 'package:mangrove/pages/app_lock_setup.dart';
 import 'package:mangrove/pages/disclaimer.dart';
 import 'package:mangrove/pages/guide_page.dart';

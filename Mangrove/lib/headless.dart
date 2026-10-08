@@ -42,6 +42,7 @@ import 'package:mangrove/headless_p5_checks.dart';
 import 'package:mangrove/headless_p6_checks.dart';
 import 'package:mangrove/headless_p7_checks.dart';
 import 'package:mangrove/headless_pipeline_check.dart';
+import 'package:mangrove/headless_script_checks.dart';
 
 
 
@@ -2711,6 +2712,8 @@ Future<void> runHeadlessMode(List<String> args) async {
       await runCacheCheck(args, commandIndex);
     case 'pipeline-check':
       await runPipelineCheck(args, commandIndex);
+    case 'script-check':
+      await runScriptCheck(args, commandIndex);
     case 'webdav':
       if (subCommand == 'up') {
         cliPrint({'status': 'running', 'message': 'Uploading WebDAV data...'});

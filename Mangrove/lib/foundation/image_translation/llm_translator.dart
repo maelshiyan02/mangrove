@@ -30,7 +30,12 @@ enum LlmProviderKind {
 
   /// Google Translate's free endpoint. Needs no configuration at all, so its
   /// URL/key/model stay empty.
-  publicFree('public');
+  publicFree('public'),
+
+  /// A custom translation script run in the QuickJS sandbox
+  /// (`script_translator.dart`). Carries `script` (the JS source) and, optionally,
+  /// an endpoint/key/model the script reads through `provider.url`/`key`/`model`.
+  script('script');
 
   const LlmProviderKind(this.token);
 
@@ -61,6 +66,7 @@ class LlmProvider {
     required this.key,
     required this.model,
     this.kind = LlmProviderKind.openai,
+    this.script = '',
   });
 
   final String id;
@@ -70,7 +76,12 @@ class LlmProvider {
   final String model;
   final LlmProviderKind kind;
 
+  /// JS source for [LlmProviderKind.script] providers. Empty for the other kinds.
+  final String script;
+
   bool get isPublicFree => kind == LlmProviderKind.publicFree;
+
+  bool get usesScript => kind == LlmProviderKind.script;
 
   LlmProvider copyWith({
     String? name,
@@ -78,6 +89,7 @@ class LlmProvider {
     String? key,
     String? model,
     LlmProviderKind? kind,
+    String? script,
   }) {
     return LlmProvider(
       id: id,
@@ -86,6 +98,7 @@ class LlmProvider {
       key: key ?? this.key,
       model: model ?? this.model,
       kind: kind ?? this.kind,
+      script: script ?? this.script,
     );
   }
 
@@ -96,6 +109,7 @@ class LlmProvider {
     'key': key,
     'model': model,
     'kind': kind.token,
+    'script': script,
   };
 
   static LlmProvider? fromJson(dynamic json) {
@@ -109,6 +123,7 @@ class LlmProvider {
       key: (json['key'] as String?)?.trim() ?? '',
       model: (json['model'] as String?)?.trim() ?? '',
       kind: LlmProviderKind.fromToken(json['kind']),
+      script: (json['script'] as String?) ?? '',
     );
   }
 }
@@ -336,6 +351,7 @@ abstract class LlmTranslator {
     var active = LlmProviderStore.active;
     if (active == null) return false;
     if (active.isPublicFree) return true;
+    if (active.usesScript) return active.script.trim().isNotEmpty;
     return _rawUrl.isNotEmpty && _model.isNotEmpty;
   }
 

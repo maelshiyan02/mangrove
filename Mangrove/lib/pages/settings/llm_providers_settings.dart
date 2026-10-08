@@ -103,10 +103,12 @@ class _LlmProvidersPageState extends State<LlmProvidersPage> {
   ) {
     var subtitleParts = provider.isPublicFree
         ? <String>["Google Translate (no key)".tl]
-        : <String>[
-            if (provider.url.isNotEmpty) provider.url,
-            if (provider.model.isNotEmpty) provider.model,
-          ];
+        : provider.usesScript
+            ? <String>["Custom script".tl]
+            : <String>[
+                if (provider.url.isNotEmpty) provider.url,
+                if (provider.model.isNotEmpty) provider.model,
+              ];
     return ListTile(
       leading: RadioGroup<String>(
         groupValue: activeId,
@@ -149,9 +151,11 @@ class _LlmProviderEditorState extends State<_LlmProviderEditor> {
   late final TextEditingController _name;
   late final TextEditingController _url;
   late final TextEditingController _key;
+  late final TextEditingController _scriptController;
   late String _model;
   late LlmProviderKind _kind;
   bool _showKey = false;
+  bool _testRunning = false;
 
   @override
   void initState() {
@@ -160,6 +164,8 @@ class _LlmProviderEditorState extends State<_LlmProviderEditor> {
     _name = TextEditingController(text: e?.name ?? '');
     _url = TextEditingController(text: e?.url ?? '');
     _key = TextEditingController(text: e?.key ?? '');
+    _scriptController =
+        TextEditingController(text: e?.script ?? ScriptTranslator.template);
     _model = e?.model ?? '';
     _kind = e?.kind ?? LlmProviderKind.openai;
   }
@@ -169,6 +175,7 @@ class _LlmProviderEditorState extends State<_LlmProviderEditor> {
     _name.dispose();
     _url.dispose();
     _key.dispose();
+    _scriptController.dispose();
     super.dispose();
   }
 
@@ -299,6 +306,28 @@ class _LlmProviderEditorState extends State<_LlmProviderEditor> {
 
   void _confirm() {
     var existing = widget.existing;
+    // 自定义脚本：校验脚本非空即可；url/key/model 作为可选凭据交给脚本读取。
+    if (_kind == LlmProviderKind.script) {
+      final code = _scriptController.text.trim();
+      if (code.isEmpty) {
+        context.showMessage(message: "Enter a script".tl);
+        return;
+      }
+      context.pop(
+        LlmProvider(
+          id: existing?.id ?? const Uuid().v4(),
+          name: _name.text.trim().isEmpty
+              ? "Custom script".tl
+              : _name.text.trim(),
+          url: _url.text.trim(),
+          key: _key.text.trim(),
+          model: _model.trim(),
+          kind: LlmProviderKind.script,
+          script: code,
+        ),
+      );
+      return;
+    }
     // The keyless service takes no endpoint, key or model: skip the validation
     // that only applies to a user-supplied endpoint and store empty fields.
     if (_kind == LlmProviderKind.publicFree) {
@@ -336,6 +365,130 @@ class _LlmProviderEditorState extends State<_LlmProviderEditor> {
     context.pop(provider);
   }
 
+  List<Widget> _buildScriptFields() {
+    return [
+      Text(
+        "自定义脚本在 QuickJS 沙箱里运行（1 秒 CPU 上限、64MB 内存），必须对每个"
+        "输入恰好返回一个翻译并保持顺序。模板演示调用一个 OpenAI 兼容接口，按你的"
+        "接口修改返回值那一行即可。",
+        style: ts.s14.copyWith(color: context.colorScheme.outline),
+      ),
+      const SizedBox(height: 12),
+      TextField(
+        controller: _scriptController,
+        maxLines: 14,
+        minLines: 6,
+        style: ts.s14,
+        decoration: InputDecoration(
+          labelText: "Script".tl,
+          hintText: "Enter a script".tl,
+          alignLabelWithHint: true,
+          border: const OutlineInputBorder(),
+        ),
+      ),
+      const SizedBox(height: 8),
+      Row(
+        children: [
+          TextButton(
+            onPressed: () {
+              setState(
+                () => _scriptController.text = ScriptTranslator.template,
+              );
+            },
+            child: Text("Restore template".tl),
+          ),
+          const SizedBox(width: 8),
+          Button.filled(
+            onPressed: _testScript,
+            child: _testRunning
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text("Test script".tl),
+          ),
+        ],
+      ),
+    ];
+  }
+
+  void _testScript() async {
+    if (_testRunning) return;
+    final code = _scriptController.text.trim();
+    if (code.isEmpty) {
+      context.showMessage(message: "Enter a script".tl);
+      return;
+    }
+    setState(() => _testRunning = true);
+    final loading = showLoadingDialog(
+      context,
+      message: "Testing".tl,
+      allowCancel: false,
+      barrierDismissible: false,
+    );
+    try {
+      final result = await ScriptTranslator.translate(
+        LlmProvider(
+          id: const Uuid().v4(),
+          name: 'script-test',
+          url: 'https://example.com/v1',
+          key: '',
+          model: '',
+          kind: LlmProviderKind.script,
+          script: code,
+        ),
+        ['Hello', 'World'],
+        'en',
+        'zh',
+        timeout: const Duration(seconds: 10),
+        client: _mockScriptClient(),
+      );
+      loading.close();
+      if (!mounted) return;
+      if (result.texts.length == 2 &&
+          result.texts.every((t) => t.isNotEmpty)) {
+        context.showMessage(message: "Script works".tl);
+      } else {
+        context.showMessage(message: "Script returned wrong shape".tl);
+      }
+    } catch (e) {
+      loading.close();
+      if (!mounted) return;
+      context.showMessage(message: "Script error".tl + ': ' + e.toString());
+    } finally {
+      if (mounted) setState(() => _testRunning = false);
+    }
+  }
+
+  Dio _mockScriptClient() {
+    final dio = Dio();
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          var count = 2;
+          try {
+            final data = jsonDecode(options.data as String? ?? '{}');
+            final texts = data['texts'] as List?;
+            if (texts != null) count = texts.length;
+          } catch (_) {
+            count = 2;
+          }
+          handler.resolve(
+            Response(
+              requestOptions: options,
+              statusCode: 200,
+              data: jsonEncode({
+                'translations': List.generate(count, (i) => '测试$i'),
+              }),
+            ),
+          );
+        },
+      ),
+    );
+    return dio;
+  }
+
   @override
   Widget build(BuildContext context) {
     return ContentDialog(
@@ -359,6 +512,10 @@ class _LlmProviderEditorState extends State<_LlmProviderEditor> {
                   ButtonSegment(
                     value: LlmProviderKind.publicFree,
                     label: Text("Google Translate (no key)".tl),
+                  ),
+                  ButtonSegment(
+                    value: LlmProviderKind.script,
+                    label: Text("Custom script (JavaScript)".tl),
                   ),
                 ],
                 selected: {_kind},
@@ -385,6 +542,8 @@ class _LlmProviderEditorState extends State<_LlmProviderEditor> {
                       .tl,
                   style: ts.s14.copyWith(color: context.colorScheme.outline),
                 )
+              else if (_kind == LlmProviderKind.script)
+                ..._buildScriptFields()
               else ...[
                 TextField(
                   controller: _url,
