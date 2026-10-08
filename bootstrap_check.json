@@ -6,7 +6,7 @@
     {
       "name": "bootstrap.probes_defined",
       "passed": true,
-      "detail": "21 probe(s)"
+      "detail": "33 probe(s)"
     },
     {
       "name": "bootstrap.plan_non_empty",
@@ -44,9 +44,9 @@
       "detail": "6 image_info entry/entries | 绿路径=true 故障路径=变红"
     },
     {
-      "name": "bootstrap.directory_is_comic_root",
+      "name": "bootstrap.raw_directory_defaults_to_comic_root",
       "passed": true,
-      "detail": "directory=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrap4f5fdffd/bootstrap_p3_21528/downloads/FixtureComic | 绿路径=true 故障路径=变红"
+      "detail": "directory=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/downloads/FixtureComic | 绿路径=true 故障路径=变红"
     },
     {
       "name": "bootstrap.no_workspace_key",
@@ -66,22 +66,22 @@
     {
       "name": "bootstrap.root_is_safe",
       "passed": true,
-      "detail": "projects=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrap4f5fdffd/bootstrap_p3_21528/projects source=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrap4f5fdffd/bootstrap_p3_21528/downloads/FixtureComic | 绿路径=true 故障路径=变红"
+      "detail": "projects=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects source=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/downloads/FixtureComic | 绿路径=true 故障路径=变红"
     },
     {
       "name": "bootstrap.refuses_inside_downloads",
       "passed": true,
-      "detail": "refusal=工程根不能落在源漫画目录内（会让本地库整本拒绝这本漫画）：C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrap4f5fdffd/bootstrap_p3_21528/downloads/FixtureComic ⊆ C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrap4f5fdffd/bootstrap_p3_21528/downloads/FixtureComic | 绿路径=true 故障路径=变红"
+      "detail": "refusal=工程根不能落在源漫画目录内（会让本地库整本拒绝这本漫画）：C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/downloads/FixtureComic ⊆ C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/downloads/FixtureComic | 绿路径=true 故障路径=变红"
     },
     {
       "name": "bootstrap.existing_project_not_overwritten",
       "passed": true,
-      "detail": "target=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrap4f5fdffd/bootstrap_p3_21528/projects/FxForce | 绿路径=true 故障路径=变红"
+      "detail": "target=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/FxForce | 绿路径=true 故障路径=变红"
     },
     {
       "name": "bootstrap.existing_project_bytes_untouched",
       "passed": true,
-      "detail": "target=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrap4f5fdffd/bootstrap_p3_21528/projects/FxKeep | 绿路径=true 故障路径=变红"
+      "detail": "target=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/FxKeep | 绿路径=true 故障路径=变红"
     },
     {
       "name": "bootstrap.downloads_untouched",
@@ -89,29 +89,89 @@
       "detail": "11 file(s) under downloads | 绿路径=true 故障路径=变红"
     },
     {
-      "name": "bootstrap.sources_not_copied",
+      "name": "bootstrap.copy.sources_land_under_own_source_dir",
       "passed": true,
-      "detail": "root=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrap4f5fdffd/bootstrap_p3_21528/projects/P3Fixture entries=imgtrans_P3Fixture.json,inpainted,mask,result | 绿路径=true 故障路径=变红"
+      "detail": "sourceRoot=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/P3Fixture/source copied=7/7 missing= | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.copy.skips_non_page_files",
+      "passed": true,
+      "detail": "sourceRoot=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/P3Fixture/source | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.copy.directory_points_at_the_copy_not_downloads",
+      "passed": true,
+      "detail": "directory=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/P3Fixture/source sourceRoot=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/P3Fixture/source workspace=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/P3Fixture root=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/P3Fixture | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.migrate.copies_then_rewrites_directory",
+      "passed": true,
+      "detail": "before=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/downloads/FixtureComic after=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/FxMigrate/source copied=7/7 missing= wroteJson=true | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.migrate.is_idempotent",
+      "passed": true,
+      "detail": "again.alreadyMigrated=true again.wroteJson=false again.copied=7 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.migrate.downloads_still_untouched",
+      "passed": true,
+      "detail": "11 file(s) under downloads | 绿路径=true 故障路径=变红"
     },
     {
       "name": "bootstrap.artifact_directories_created",
       "passed": true,
-      "detail": "root=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrap4f5fdffd/bootstrap_p3_21528/projects/P3Fixture | 绿路径=true 故障路径=变红"
+      "detail": "root=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/P3Fixture | 绿路径=true 故障路径=变红"
     },
     {
       "name": "bootstrap.workspace_falls_back_to_project_dir",
       "passed": true,
-      "detail": "workspace=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrap4f5fdffd/bootstrap_p3_21528/projects/P3Fixture root=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrap4f5fdffd/bootstrap_p3_21528/projects/P3Fixture reloadError= | 绿路径=true 故障路径=变红"
+      "detail": "workspace=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/P3Fixture root=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/projects/P3Fixture reloadError= | 绿路径=true 故障路径=变红"
     },
     {
       "name": "bootstrap.reload_matches_plan",
       "passed": true,
-      "detail": "created=true bytes=826 reloadError= | 绿路径=true 故障路径=变红"
+      "detail": "created=true bytes=829 reloadError= | 绿路径=true 故障路径=变红"
     },
     {
       "name": "bootstrap.reloaded_keys_are_image_pages",
       "passed": true,
       "detail": "pageOrder=ch1/1.webp, ch1/2.webp, ch1/3.png, ch1/4.jpg, ch1/5.gif, ch1/9.webp, ch1/10.webp | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.reconcile.blank_page_is_not_a_gap",
+      "passed": true,
+      "detail": "绿=没有任何块的页记 no-blocks（按设计不产产物）/ 故障=记成 base-missing（13 页无字页会被误报成缺口） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.reconcile.untranslated_page_is_not_a_gap",
+      "passed": true,
+      "detail": "🔴 绿=有块但没译文的页记 no-translation / 故障=记成 base-missing —— 判序写反会让\"刚检测完还没翻\"的页整片报缺 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.reconcile.missing_bases_are_reported",
+      "passed": true,
+      "detail": "绿=有译文但底图缺 → base-missing（78 页那种缺口在这里可断言）/ 故障=产物齐全的页也被记成缺口 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.reconcile.missing_result_is_a_separate_gap",
+      "passed": true,
+      "detail": "绿=底图在、成品缺 → result-missing（与\"底图缺\"分开）/ 故障=三样齐全的页也报成品缺 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.reconcile.oversized_page_is_not_a_gap",
+      "passed": true,
+      "detail": "绿=超 12MP/8000px 的页记 downscaled（按坐标契约刻意不产出）/ 故障=正常尺寸的页也报 downscaled（把真缺口说成设计如此） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.reconcile.summary_exposes_the_gap_counts",
+      "passed": true,
+      "detail": "summary={pages: 7, ok: 1, no-blocks: 2, no-translation: 1, downscaled: 1, base-missing: 1, result-missing: 1} | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "bootstrap.reconcile.table_roundtrips_through_the_file",
+      "passed": true,
+      "detail": "path=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_bootstrapa6f6e1f0/bootstrap_p3_22172/reconcile/imgtrans_P3Fixture.artifacts.json written=true jsonFileName=imgtrans_P3Fixture.json expected=imgtrans_P3Fixture.artifacts.json endsWith=true readNull=false summaryPages=7 | 绿路径=true 故障路径=变红"
     }
   ]
 }

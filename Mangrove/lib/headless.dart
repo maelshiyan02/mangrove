@@ -16,7 +16,9 @@ import 'package:mangrove/foundation/follow_update_scope.dart';
 import 'package:mangrove/foundation/favorites.dart';
 import 'package:mangrove/foundation/translation_project/project_validator.dart';
 import 'package:mangrove/foundation/translation_project/finished_export.dart';
+import 'package:mangrove/foundation/translation_project/project_bootstrap.dart';
 import 'package:mangrove/foundation/translation_project/project_io.dart';
+import 'package:mangrove/foundation/translation_project/project.dart';
 import 'package:mangrove/foundation/translation_project/edit_command.dart';
 import 'package:mangrove/foundation/translation_project/project_writer.dart';
 import 'package:mangrove/foundation/translation_project/rich_text_sync.dart';
@@ -2205,6 +2207,141 @@ Future<void> runBootstrapCheck(List<String> args, int commandIndex) async {
   exit(passed ? 0 : 1);
 }
 
+/// `mangrove.exe --headless migrate-sources <project.json> [--json out] [--verify-only]`
+///
+/// 把一个**已经存在**的工程从"引用 `downloads/` 原图"迁到"自带
+/// `<工程根>/source/` 副本"（P10.15 §4.1 · P1「全部迁移」）。
+///
+/// 🔴 为什么这是一条命令而不是一次性脚本：序5 的验收判据是**删掉 downloads
+/// 之后工程仍可跑**，而它只能这样被证明 ——
+///
+/// 1. 先在真工程上跑一次（迁移：复制原图 + 把 json 的 `directory` 指过去）；
+/// 2. 再把 `downloads/<漫画>` 改名或删掉；
+/// 3. 然后带 `--verify-only` 再跑一次：此时每一页都必须仍然从 `directory`
+///    解析得到，`ok` 必须仍为 true。第 3 步为 true 才说明工程真的**不再需要**
+///    `downloads/`。
+///
+/// `ok` 的四个条件缺一不可：有页、没有解析不到的页、`directory` 存在、且
+/// **`directory` 不在 `downloads/` 之下**（最后一条是迁移前与迁移后唯一的分界：
+/// 迁移前它指着下载目录，那四个条件里也会满足前三条）。
+Future<void> runMigrateSources(List<String> args, int commandIndex) async {
+  final jsonIndex = args.indexOf('--json');
+  final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
+      ? args[jsonIndex + 1]
+      : '${Directory.current.path}/migrate_sources.json';
+  final verifyOnly = args.contains('--verify-only');
+  final target = commandIndex + 1 < args.length ? args[commandIndex + 1] : null;
+
+  Future<void> finish(bool ok, String message, Map<String, Object?> data) async {
+    final report = <String, Object?>{
+      'version': 1,
+      'command': 'migrate-sources',
+      'passed': ok,
+      'result': data,
+    };
+    final output = File(outPath);
+    if (!output.parent.existsSync()) {
+      await output.parent.create(recursive: true);
+    }
+    await output.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(report),
+      encoding: utf8,
+    );
+    cliPrint({
+      'status': ok ? 'success' : 'error',
+      'message': message,
+      'data': {...data, 'report': output.path},
+    });
+  }
+
+  if (target == null || target.startsWith('--')) {
+    await finish(
+      false,
+      'Usage: --headless migrate-sources <project.json> [--json out] '
+          '[--verify-only]',
+      const {},
+    );
+    exit(1);
+  }
+
+  var ok = false;
+  try {
+    final jsonFile = File(target);
+    if (!jsonFile.existsSync()) {
+      await finish(false, 'Project not found: $target', {'project': target});
+      exit(1);
+    }
+
+    final migration = verifyOnly
+        ? null
+        : await ProjectBootstrap.migrateSources(jsonFile: jsonFile);
+
+    // 🔴 迁移**之后**独立地重新解析一遍，而不是相信迁移函数的返回值：这条
+    // 链路最典型的失败形态正是"它说自己成功了，磁盘上其实没有副本"。
+    final project = await TranslationProjectIo.load(jsonFile);
+    final directory =
+        ProjectBootstrap.normalizeDirectoryPath(project.directory);
+    final workspace =
+        ProjectBootstrap.normalizeDirectoryPath(project.workspace);
+    final pages = [
+      for (final key in project.pageOrder)
+        if (TranslationProject.isImagePage(key)) key,
+    ];
+    final missing = [
+      for (final key in pages)
+        if (!File('$directory/$key').existsSync()) key,
+    ];
+    // `downloads/` = 工程根（`<…>/projects`）的**兄弟**目录。刻意不用 `../`
+    // 拼路径：`normalizeDirectoryPath` 不化简 `..`，拼出来的根永远匹配不上，
+    // 于是"是否还指着下载目录"这条判据会恒为 true（假绿）。
+    final projectsRoot = jsonFile.parent.parent.absolute.path;
+    final downloadsRoot = ProjectBootstrap.normalizeDirectoryPath(
+      '${Directory(projectsRoot).parent.path}/downloads',
+    );
+    final ownCopy = !_migratePathIsUnder(directory, downloadsRoot);
+
+    final data = <String, Object?>{
+      'project': jsonFile.path,
+      'verifyOnly': verifyOnly,
+      'previousDirectory': migration?.previousDirectory ?? '(verify-only)',
+      'directory': directory,
+      'workspace': workspace,
+      'downloadsRoot': downloadsRoot,
+      'directoryExists': Directory(directory).existsSync(),
+      'directoryIsOwnCopyNotDownloads': ownCopy,
+      'dualRootSeparated': directory != workspace,
+      'pages': pages.length,
+      'missing': missing,
+      'alreadyMigrated': migration?.alreadyMigrated ?? '(verify-only)',
+      'wroteJson': migration?.wroteJson ?? '(verify-only)',
+      'copied': migration?.copied.length ?? '(verify-only)',
+    };
+
+    ok = pages.isNotEmpty &&
+        missing.isEmpty &&
+        Directory(directory).existsSync() &&
+        ownCopy;
+    await finish(
+      ok,
+      'Migrate sources ${ok ? 'OK' : 'FAIL'}: directory=$directory '
+          'pages=${pages.length} missing=${missing.length} ownCopy=$ownCopy',
+      data,
+    );
+  } catch (e, s) {
+    Log.error('MigrateSources', 'migrate-sources failed: $e\n$s');
+    await finish(false, 'Migrate sources threw: $e', const {});
+  }
+  exit(ok ? 0 : 1);
+}
+
+/// [path] 是否就是 [root]，或落在 [root] 之下（大小写不敏感，正斜杠）。
+bool _migratePathIsUnder(String path, String root) {
+  final candidate = path.replaceAll('\\', '/').toLowerCase();
+  final base = root.replaceAll('\\', '/').toLowerCase();
+  if (base.isEmpty) return false;
+  return candidate == base || candidate.startsWith('$base/');
+}
+
 /// `mangrove.exe --headless glossary-check [--json out.json]`
 ///
 /// Verifies the glossary (S11 block 1/4, P6 §4.10 row 3): the extracted
@@ -2638,6 +2775,13 @@ Future<void> runHeadlessMode(List<String> args) async {
   // 「从下载创建工程」同样只是文件层的事（P6 §4.10.2 表 #3），也不需要启动。
   if (command == 'bootstrap-check') {
     await runBootstrapCheck(args, commandIndex);
+    return;
+  }
+
+  // 「既有工程的原图副本化」同样只是文件层的事（P10.15 §4.1 · 序5）：不启动
+  // App，而且**必须在没有 `downloads/` 的情况下也能跑** —— 那正是验收判据。
+  if (command == 'migrate-sources') {
+    await runMigrateSources(args, commandIndex);
     return;
   }
 

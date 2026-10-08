@@ -711,6 +711,29 @@ class TextBlock {
       result.raw['language'] = block.language.trim();
     }
 
+    // ---- 逐行擦除矩形（P10.15 序3） ----
+    // 🔴 检测链路本来就会给出**逐行**的紧密矩形（`balloonToOcrBlock` 填
+    // `eraseRects: [for (final l in balloon.lines) l.rect]`），但这里此前
+    // 一个字都不写、`toTranslatedRegion` 也不读 ⇒ `TranslatedRegion.eraseRects`
+    // 落到构造函数的兜底 `[rect]`，**抹字退化成"按整个块外框抹"**：气泡尖角、
+    // 贴纸边、块内美术都会被一起抹掉，而且不报错。
+    //
+    // 只在 OCR 真的提供了**多于一个**矩形（或与 rect 不同）时才写这个键：
+    // 这样"块外框 == 唯一擦除矩形"的常见情形不落盘，**零字节 diff 不受影响**
+    // （旧块本来就没有这个键）。
+    final eraseRects = block.eraseRects;
+    if (eraseRects.length > 1) {
+      result.raw['erase_rects'] = [
+        for (final rect in eraseRects)
+          <double>[
+            rect.left.toDouble(),
+            rect.top.toDouble(),
+            rect.right.toDouble(),
+            rect.bottom.toDouble(),
+          ],
+      ];
+    }
+
     final format = result.fontFormat!;
     final foreground = _argbToFtRgb(block.textColor);
     if (foreground != null) format.raw['frgb'] = foreground;
@@ -799,6 +822,23 @@ class TextBlock {
 
   /// Detected source language ('ja', 'zh', 'en', 'unknown', …).
   String get language => raw['language']?.toString() ?? 'unknown';
+
+  /// FT's `label` key — a free-form region tag FT uses to group blocks by kind.
+  ///
+  /// 🔴 The getter answers `null` for the empty string as well: [createDefault]
+  /// writes `label: null`, and FT writes `''` in some payloads. Both mean "no
+  /// label", and collapsing them here keeps callers from having to know that.
+  ///
+  /// This is the only accessor the key needs — the *policy* of who gets labelled
+  /// what lives in `StudioSfxOps` (§4.5), not in the FT model.
+  String? get label {
+    final value = raw['label'];
+    if (value is! String) return null;
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  set label(String? value) => raw['label'] = value;
 
   bool get hasTranslation => translation.trim().isNotEmpty;
 
@@ -899,6 +939,10 @@ class TextBlock {
 
     return TranslatedRegion(
       rect: rect,
+      // 🔴 P10.15 序3：把逐行矩形带给渲染器。不传的话 `TranslatedRegion`
+      // 会兜底成 `[rect]`，抹字就按整个块外框做 —— 块框里的美术（气泡尖角、
+      // 贴纸边）会被一起抹，而且看不出来是这里丢的。
+      eraseRects: _eraseRectsOrDefault(rect),
       text: text,
       backgroundColor: backgroundColor,
       textColor: textColor,
@@ -910,6 +954,28 @@ class TextBlock {
       // and then **silently dropped** on the way to the rendered page.
       fontStyle: format == null ? null : _regionFontStyle(format),
     );
+  }
+
+  /// 逐行擦除矩形：优先读 `erase_rects`，缺失 / 损坏时回落到整块外框。
+  ///
+  /// 只接受**至少 2×2 px** 的矩形：更小的框擦不出任何笔画，却会白白让
+  /// `TextInpainter` 多跑一轮搜索窗口。
+  List<IntRect> _eraseRectsOrDefault(IntRect rect) {
+    final list = asObjectList(raw['erase_rects']);
+    if (list == null || list.isEmpty) return [rect];
+    final result = <IntRect>[];
+    for (final entry in list) {
+      final box = asObjectList(entry);
+      if (box == null || box.length < 4) continue;
+      final candidate = IntRect(
+        ((box[0] as num?)?.toDouble() ?? 0.0).floor(),
+        ((box[1] as num?)?.toDouble() ?? 0.0).floor(),
+        ((box[2] as num?)?.toDouble() ?? 0.0).ceil(),
+        ((box[3] as num?)?.toDouble() ?? 0.0).ceil(),
+      );
+      if (candidate.width >= 2 && candidate.height >= 2) result.add(candidate);
+    }
+    return result.isEmpty ? [rect] : result;
   }
 
   /// Flattens FT's 32-key `fontformat` into the renderer's plain style object.

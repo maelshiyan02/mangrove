@@ -23,6 +23,7 @@ import '../log.dart';
 import 'glossary_store.dart';
 import 'project.dart';
 import 'rich_text_sync.dart';
+import 'studio_block_ops.dart';
 import 'text_block.dart';
 
 /// 一次运行的协作式取消。
@@ -100,6 +101,7 @@ class StudioRunOptions {
     required this.targetLang,
     this.readingDirection = ReadingDirection.rightToLeft,
     this.translate = true,
+    this.recognize = true,
     this.glossary = const {},
   });
 
@@ -114,6 +116,26 @@ class StudioRunOptions {
   /// 分开是因为版面与翻译的失败率完全不同：版面错要重跑检测，翻译错只要
   /// 重填译文。把两者绑在一起意味着每次调版面参数都要重新请求一次 LLM。
   final bool translate;
+
+  /// 是否**识别**块内文字（P10.15 §4.3 第二段）。
+  ///
+  /// false = 只检测：块照建、框照准，但 `text` 为空。
+  ///
+  /// 🔴 **本引擎做不到"检测与识别的计算分离"**，这里必须说清楚，否则下一个人
+  /// 会以为这个开关省了识别那一步。`ocrPage` 的检测后处理（`clusterOcrBoxes`
+  /// 聚类 + 行高中位数 + 取色）与识别同在一趟里，而**建块恰恰需要这些量**
+  /// （`TextBlock.fromOcr` 要吃 `rect` / `lineHeight` / `textColor` /
+  /// `backgroundColor` / `eraseRects`）。所以 `recognize: false` 的实现是
+  /// **跑完整趟然后丢掉文本**：
+  ///
+  /// * 用户看到的结果与真正的"只检测"**完全一致**（框有、字空）；
+  /// * 省下的是**翻译请求**（§4.3 里"只检测"想省的正是这个），不是识别算力；
+  /// * 代价是白跑一趟识别 —— 不花 token、不发网络请求。
+  ///
+  /// 做成"跳过识别"需要给 worker 加一条独立入口（`_WorkerState._detectBoxes`
+  /// 目前是私有的，且它的输出还没有聚类/取色那一层）。那条路在 headless 里
+  /// **无法验证**（无 ONNX、无渲染表面），所以等有 GUI 验收手段时再做。
+  final bool recognize;
 
   final Map<String, String> glossary;
 }
@@ -252,20 +274,52 @@ class StudioPagePipeline {
         }
       }
 
-      final outcome = options.translate && sources.isNotEmpty
-          ? await _translate(sources, options, cancel)
+      // 🔴 拟声词先于翻译判一次（P10.15 §4.5 · 序6）：判出来的是**下标集合**，
+      // 因为同一条判据要驱动两件事 —— 不进翻译批次、以及建块时打标记。在这里
+      // 算一次并传下去，两处就不可能各判一次而判出不同结果。
+      final sfxIndexes = <int>{
+        for (var i = 0; i < sources.length; i++)
+          if (StudioSfxOps.looksLikeSfx(
+            sources[i].text,
+            language: sources[i].language,
+          ))
+            i,
+      };
+
+      final outcome = options.translate && options.recognize && sources.isNotEmpty
+          ? await _translate(sources, options, cancel, skip: sfxIndexes)
           : _TranslationOutcome(
               List<String>.filled(sources.length, ''), const {});
       final translated = outcome.texts;
 
+      // 🔴 只检测（§4.3 第一段，见 [StudioRunOptions.recognize]）：本引擎
+      // 的检测后处理与识别同在一趟里，而建块需要那一步的产物，所以这里是
+      // "跑完整趟、把文本丢掉"。丢掉的是**原文与译文两边** —— 只清原文会
+      // 留下 `translation`，而一个"有译文、没原文"的块既不能校对也不能重译，
+      // 是纯粹的数据垃圾。
+      final detectOnly = !options.recognize;
+
       final blocks = <TextBlock>[];
       for (var i = 0; i < sources.length; i++) {
         final source = sources[i];
-        if (source.text.trim().isEmpty) {
+        // 只检测时**不能**按"原文为空"剔除：那正是本模式全部产物的样子，
+        // 剔完就是"跑完了、一页 0 块"，与真正的空页在界面上长得一模一样。
+        if (!detectOnly && source.text.trim().isEmpty) {
           skipped++;
           continue;
         }
         final block = TextBlock.fromOcr(source);
+        // 🔴 打标记（§4.5 · 序6）。写在 `fromOcr` **之后**而不是塞进 `fromOcr`
+        // 里：`fromOcr` 是纯映射（OCR 载荷 → FT 块），"哪些块算拟声词"是**策略**，
+        // 混进去会让"检测到的块"和"手工建的块"在形状上分不出差别 —— 而那正是
+        // 零字节 diff 与 `fromOcr` 那批断言赖以成立的前提。
+        if (sfxIndexes.contains(i)) block.label = StudioSfxOps.label;
+        if (detectOnly) {
+          block.sourceText = '';
+          block.translation = '';
+          blocks.add(block);
+          continue;
+        }
         // 译文对齐：`_translate` 返回与 `sources` 等长的列表（可能含空串），
         // 所以下标可以直接用。
         var text = i < translated.length ? translated[i].trim() : '';
@@ -299,13 +353,19 @@ class StudioPagePipeline {
   /// 🔴 等长是**刻意的**：用 `Map<rect, text>` 会让"哪一条丢了"变成隐式的，
   /// 而下标对齐 + 空串占位能让"这一块没翻出来"在块上直接看得见（空译文 =
   /// 不letter，用户自己补），这正是漏检兜底要的行为。
+  ///
+  /// [skip] 里的下标**不发给模型**（用来跳过拟声词，见 `StudioSfxOps`），它们
+  /// 在结果里同样是空串 —— 与"翻失败"在下游看起来一样，这是有意的：两者都
+  /// 应当表现为"这一块没有译文"，不该让下游去分辨原因。
   Future<_TranslationOutcome> _translate(
     List<OcrBlock> blocks,
     StudioRunOptions options,
-    CancellationToken? cancel,
-  ) async {
+    CancellationToken? cancel, {
+    Set<int> skip = const {},
+  }) async {
     final pending = <int>[];
     for (var i = 0; i < blocks.length; i++) {
+      if (skip.contains(i)) continue;
       final text = blocks[i].text.trim();
       if (text.length < 2) continue;
       // 已是目标语言的不必再问模型（`ocrPage` 已把这类放进 `ready`，

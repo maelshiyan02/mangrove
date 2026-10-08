@@ -2,6 +2,8 @@
 
 import 'dart:async';
 import 'dart:convert';
+// `Uint8List` 由下面的 `flutter/services.dart` 一并带进来（analyze 会报
+// `unnecessary_import`），所以这里**不**显式 import `dart:typed_data`。
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +12,7 @@ import 'package:mangrove/components/components.dart';
 import 'package:mangrove/components/editable_text_block_canvas.dart';
 import 'package:mangrove/components/studio_scroll_canvas.dart';
 import 'package:mangrove/components/text_block_canvas.dart';
+import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/context.dart';
@@ -26,6 +29,7 @@ import 'package:mangrove/foundation/image_translation/translation_types.dart';
 import 'package:mangrove/foundation/leave_guard.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
+import 'package:mangrove/foundation/translation_project/artifact_reconciliation.dart';
 import 'package:mangrove/foundation/translation_project/edit_command.dart';
 import 'package:mangrove/foundation/translation_project/finished_export.dart';
 import 'package:mangrove/foundation/translation_project/glossary_backend.dart';
@@ -335,15 +339,22 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   /// 明确的选择，不能是默认值。
   bool _pipelineSkipExisting = true;
 
-  /// 日漫右起是默认；欧漫/条漫的用户需要能改。
+  /// 上一轮的**三段选择**（检测 / 识别 / 翻译，P10.15 §4.3）与阅读方向。
   ///
-  /// 🔴 做成**会话内状态而不是设置项**：阅读方向是"看这一本时怎么读"，
-  /// 写进全局设置意味着为了一本横排漫画改掉了所有漫画的默认。它不进
-  /// `appdata` 也不进工程 json，因此**不会**破坏零字节 diff。
-  bool _pipelineRightToLeft = true;
-
-  /// 关掉时只做检测 + OCR + 建块，不调 LLM。
-  bool _pipelineTranslate = true;
+  /// 🔴 P2（P10.15 §4.2 选项②）：**跨重启记忆**，落点是
+  /// `appdata.settings['studioRunDefaults']` —— 一个**独立命名空间**，而不是
+  /// `TranslationConfig`。两条路径必须分开：#178 就是"把为这一本临时改的
+  /// 语言变成了所有漫画的全局默认"踩出来的。详见 [_loadRunDefaults]。
+  ///
+  /// 默认值按 §4.2 的拍板：**不勾翻译**（先看版面、不花 token）、方向
+  /// **左起**（不勾右起）。旧默认是 `translate=true / rightToLeft=true`，
+  /// 那是"日漫+直接出成品"的设定，对第一次打开工作室的人偏激进。
+  StudioRunStages _runStages = const StudioRunStages(
+    detect: true,
+    recognize: true,
+    translate: false,
+  );
+  ReadingDirection _runDirection = ReadingDirection.leftToRight;
 
   /// 「从这一页继续」的断点 = **第一条没有跑完的页** key，null 表示没有断点。
   ///
@@ -355,13 +366,55 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
 
   /// 本次运行的语向覆盖（S-N2）。`null` = 跟随全局 `TranslationConfig`。
   ///
-  /// 🔴 **会话内状态，不落盘**。它存在的唯一理由：工作室工程没有"这本漫画"
-  /// 的阅读上下文可继承（`studio_page` 读的是全局设置），而为一个日文工程临时
-  /// 改成日语，此前只能去设置页改全局、再记得改回来。写进设置会把"为这一本
-  /// 临时改的"变成所有漫画的默认（`TranslationConfig` 注释里 #178 就是这条
-  /// 路径踩出来的），写进工程 json 会立刻破坏零字节 diff。
+  /// 🔴 与 [StudioRunChoice] 一起被记进 `studioRunDefaults`（P2 选项②），
+  /// 所以它能跨重启活下来。**仍然不写工程 json** —— 那是零字节 diff 的
+  /// 红线上；也不进 `TranslationConfig` —— 那是 #178 的红线。语向之所以
+  /// 值得记，是因为它不随工程变（日漫就该是日→中），而页码会变。
   String? _runSourceLang;
   String? _runTargetLang;
+
+  /// 「上次怎么跑的」在 `appdata.settings` 里的**独立命名空间**（P2 选项②）。
+  ///
+  /// 🔴 独立于 `TranslationConfig`：后者是"全局翻译默认"，改它等于改所有
+  /// 漫画；这里记的是"上次在工作室点的那几个开关"。#178 就是这两者混在
+  /// 一起踩出来的（为某一本临时改的语言变成了全局默认）。
+  static const String _runDefaultsKey = 'studioRunDefaults';
+
+  /// 读回上次的运行选项（三段 / 方向 / 语向）。
+  ///
+  /// 🔴 **缺失就不写**：只有"存过"才覆盖字段，没存过时保留声明处的默认值。
+  /// 若把"没存过"也走一遍赋值，第一次打开工作室就会拿到一份由
+  /// `fromJson(null)` 推出来的全 false 三段 —— 于是弹窗里「开始」被
+  /// "Select at least one stage" 禁用，而用户从没关过任何阶段。
+  ///
+  /// 存储损坏（类型不对）时**逐字段**回落，不整块丢弃：一次手改
+  /// `appdata.json` 把 `readingDirection` 写成数字，不该顺带把三段和语向
+  /// 也一起忘掉。
+  void _loadRunDefaults() {
+    final raw = appdata.settings[_runDefaultsKey];
+    if (raw is! Map) return;
+    if (raw['stages'] is Map) {
+      _runStages = StudioRunStages.fromJson(raw['stages']);
+    }
+    final direction = readingDirectionFromName(raw['readingDirection']);
+    if (direction != null) _runDirection = direction;
+    final source = raw['sourceLang'];
+    if (source is String && source.isNotEmpty) _runSourceLang = source;
+    final target = raw['targetLang'];
+    if (target is String && target.isNotEmpty) _runTargetLang = target;
+  }
+
+  /// 记住这一轮的选择。**只在用户按下「开始」之后调用** —— 拖滑块、试点
+  /// 阶段都不落盘，否则"打开弹窗随便看看"会污染记忆，而用户下次会以为
+  /// 那些状态是自己上次定的。
+  void _saveRunDefaults(StudioRunChoice choice) {
+    appdata.settings[_runDefaultsKey] = <String, Object?>{
+      'stages': choice.stages.toJson(),
+      'readingDirection': readingDirectionName(choice.direction),
+      'sourceLang': choice.sourceLang,
+      'targetLang': choice.targetLang,
+    };
+  }
 
   /// 本次运行生效的源语言：S-N2 弹窗选过的优先，否则读全局设置。
   ///
@@ -376,6 +429,43 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
 
   String _currentTargetLang() =>
       _runTargetLang ?? TranslationConfig.of(widget.comicId, null).targetLang;
+
+  /// 统计**选中页范围**内的三类块数，供弹窗的工作量预估（P3 选项①）。
+  ///
+  /// 🔴 与 `_runPipeline` 读的是**同一份** `project.pages`，所以弹窗里那句
+  /// "Detect 12 pages, recognize 34 blocks, translate 34 items"就是这一轮
+  /// 真正会处理的量。统计口径写错（比如把别页的块算进来）会让「开始」按钮
+  /// 的禁用判断放行一次空跑 —— 而空跑报 0 与"识别了但没认出字"在界面上
+  /// 长得一模一样，正是本项目最忌讳的那类静默。
+  ///
+  /// 口径：
+  /// * `blocks` —— 选中页的块总数；
+  /// * `unrecognized` —— 其中**原文为空**的块（识别阶段的输入）；
+  /// * `untranslated` —— 其中**有原文、还没译文**的块（翻译阶段的输入）。
+  StudioRunCounts _countBlocks(List<String> pages) {
+    final project = _project;
+    if (project == null) return (blocks: 0, unrecognized: 0, untranslated: 0);
+    var blocks = 0;
+    var unrecognized = 0;
+    var untranslated = 0;
+    for (final key in pages) {
+      final page = project.pages[key];
+      if (page == null) continue;
+      for (final block in page.blocks) {
+        blocks++;
+        if (block.sourceText.trim().isEmpty) {
+          unrecognized++;
+        } else if (!block.hasTranslation) {
+          untranslated++;
+        }
+      }
+    }
+    return (
+      blocks: blocks,
+      unrecognized: unrecognized,
+      untranslated: untranslated,
+    );
+  }
 
   /// 「本页 / 整章」两个按钮的**共同入口**：先弹确认窗，再带着选择去跑。
   ///
@@ -398,19 +488,21 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       initialEnd: wholeChapter ? _pageKeys.length : current,
       sourceLang: _runSourceLang ?? config.sourceLang,
       targetLang: _runTargetLang ?? config.targetLang,
-      translate: _pipelineTranslate,
-      rightToLeft: _pipelineRightToLeft,
+      stages: _runStages,
+      direction: _runDirection,
+      countsOf: _countBlocks,
     );
     if (choice == null || !mounted) return;
     setState(() {
       _runSourceLang = choice.sourceLang;
       _runTargetLang = choice.targetLang;
-      // 🔴 面板上的两个开关必须跟着弹窗走：它们是**同一件事**的两种呈现，
+      // 🔴 面板上的三段/方向必须跟着弹窗走：它们是**同一件事**的两种呈现，
       // 不同步就会出现"面板写着'同时翻译'开着、实际这轮没翻"——而那正是
-      // 这个项目反复栽的"UI 在说谎"那一类。两项都只是会话状态，不落盘。
-      _pipelineTranslate = choice.translate;
-      _pipelineRightToLeft = choice.rightToLeft;
+      // 这个项目反复栽的"UI 在说谎"那一类。
+      _runStages = choice.stages;
+      _runDirection = choice.direction;
     });
+    _saveRunDefaults(choice);
     unawaited(_runPipeline(pages: choice.pages));
   }
 
@@ -465,16 +557,28 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     final sourceLang = _runSourceLang ?? config.sourceLang;
     final targetLang = _runTargetLang ?? config.targetLang;
     final pipeline = StudioPagePipeline();
+    // 🔴 三段（P10.15 §4.3）在这里**分叉**。分叉点只有一处，就是
+    // [StudioRunStages.detect]：
+    //
+    // * 勾了检测 ⇒ 走引擎的整页管线（`StudioPagePipeline.runPage`）：检测、
+    //   聚类、取色、建块、翻译都是一趟里的事，拆开反而要重造聚类。
+    // * 没勾检测 ⇒ 引擎完全不参与，只在**页上已有的块**上做"识别"和
+    //   "翻译"。这两件事工作室早就有单块按钮（`_recogniseSelectedBlock` /
+    //   `_translateSelectedBlock`），这里是同一套代码的批量版。
+    //
+    // 之所以不做成"第三条路"（只检测不识别）：本引擎的检测后处理
+    // （`clusterOcrBoxes` + 行高 + 取色）与识别同在一趟里，而检测框的下游
+    // （建块）恰恰需要这些量。见 [StudioRunOptions.recognize] 的说明。
+    final stages = _runStages;
     final options = StudioRunOptions(
       // 工作室没有"这本漫画"的上下文可继承，读全局设置：用户在阅读器里改过
       // 的语向对同一本漫画同样成立，而猜一个默认值只会让第一次运行的产物
       // 全是错的语言。弹窗（`_confirmAndRun`）给出的覆盖优先。
       sourceLang: sourceLang,
       targetLang: targetLang,
-      readingDirection: _pipelineRightToLeft
-          ? ReadingDirection.rightToLeft
-          : ReadingDirection.leftToRight,
-      translate: _pipelineTranslate,
+      readingDirection: _runDirection,
+      translate: stages.translate,
+      recognize: stages.recognize,
       // 🔴 这一行是"术语表进工作室"的**注入端**。字段早就有了
       // （`StudioRunOptions.glossary`），但一直没人传 ⇒ 工作室此前跑整章时
       // 术语表恒为空，跨页/跨章人名一致性是个空承诺。
@@ -509,41 +613,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         }
         continue;
       }
-      final bytes = await file.readAsBytes();
-      final size = _pageSizeInPixels(pageKey);
-      final run = await pipeline.runPage(
-        pageKey,
-        bytes,
-        options: options,
-        pageWidth: size.width.round(),
-        cancel: cancel,
-      );
-      if (run.error is PipelineCanceled) {
-        resumeFrom ??= pageKey;
-        break;
-      }
-      // 🔴 回报端：模型在本页新学到的专名**立刻**进 store，下一页就能用上 ——
-      // 攒到最后再合并会让"同一章内"的人名也不一致。真 LLM 才回报，
-      // 免 Key / 本地 NMT 恒为空（`run.glossary` 为空时 `merge` 直接返回 0）。
-      if (run.glossary.isNotEmpty) {
-        learned += appGlossary.merge(widget.comicId, run.glossary);
-      }
-      if (run.failed) {
-        failures++;
-        resumeFrom ??= pageKey;
-        if (mounted) {
-          setState(() => _pipeline.lastMessage =
-              'Page @a failed: @b'.tlParams({
-            'a': pageKey,
-            // `Object?` is not assignable to the parameter map's `Object` value
-            // type, and `run.error` is legitimately null on the success path —
-            // stringify it so the message is honest either way.
-            'b': '${run.error}',
-          }));
-        }
-        continue;
-      }
-      // 去重在落地之前，且**只读**既有块（见 `overlapsExistingBlock` 的说明）。
+      // 🔴 页不存在就**在跑之前**判掉（原始版本是跑完再判）。原写法会把一次
+      // 整页 OCR 白跑掉再丢弃结果，而"页不在工程里"是个与图像内容无关的
+      // 事实，不需要先付检测的代价。
       final page = project.pages[pageKey];
       if (page == null) {
         // 🔴 页在工程里不存在（页集变了，或 key 打错）。不能 `page!` 崩掉整章，
@@ -557,26 +629,43 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         }
         continue;
       }
-      var fresh = _pipelineSkipExisting
-          ? [
-              for (final block in run.blocks)
-                if (!overlapsExistingBlock(page, block.rect)) block,
-            ]
-          : run.blocks;
-      // 🔴 落地必须走与 Create/Delete 块**同一条**路径（硬规矩 3）：任何写
-      // `pages[key]` 而不登记脏页的写法，都会让 `result/` 增量重渲漏掉这一页
-      // —— 用户看到的是"跑完了，导出还是旧的"。
-      if (fresh.isNotEmpty) {
-        final command = captureBlockListEdit(
-          page.rawBlocks,
-          () => page.addBlocks(fresh),
-          pageKey: pageKey,
-          label: 'Detect blocks',
-        );
-        if (!command.isEmpty) _history.push(command);
+      final bytes = await file.readAsBytes();
+      final result = stages.detect
+          ? await _runDetectStage(
+              pipeline,
+              page,
+              bytes,
+              pageKey: pageKey,
+              options: options,
+              cancel: cancel,
+            )
+          : await _runBlockStages(
+              page,
+              bytes,
+              pageKey: pageKey,
+              stages: stages,
+              sourceLang: sourceLang,
+              targetLang: targetLang,
+              cancel: cancel,
+            );
+      if (result.canceled) {
+        resumeFrom ??= pageKey;
+        break;
       }
-      blocks += fresh.length;
-      skipped += run.skipped;
+      // 🔴 回报端：模型在本页新学到的专名**立刻**进 store，下一页就能用上 ——
+      // 攒到最后再合并会让"同一章内"的人名也不一致。真 LLM 才回报，
+      // 免 Key / 本地 NMT 恒为空（`run.glossary` 为空时 `merge` 直接返回 0）。
+      learned += result.learned;
+      if (result.failed) {
+        failures++;
+        resumeFrom ??= pageKey;
+        if (mounted) {
+          setState(() => _pipeline.lastMessage = result.message);
+        }
+        continue;
+      }
+      blocks += result.blocks;
+      skipped += result.skipped;
       if (mounted) {
         setState(() {
           _pipeline.done++;
@@ -614,34 +703,330 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     //
     // 键名刻意与 `mangrove.exe --headless pipeline-check` 的报告对齐，两边的
     // 数字可以直接比对。
-    Log.info(
-      'Studio Pipeline',
-      jsonEncode({
-        'pages': pages.length,
-        'done': _pipeline.done,
-        'blocks': blocks,
-        'skipped': skipped,
-        'failures': failures,
-        'stopped': stopped,
-        // 本轮新学到的术语条数：0 有两种可能（本页没有新专名 / 引擎根本
-        // 不回报），配合日志里的 `Glossary Bridge` 行才能区分。
-        'glossaryLearned': learned,
-        'resumeFrom': _pipelineResumeFrom,
-        // S-N2：语向现在是**每次运行可变**的（弹窗覆盖），所以必须记进凭据行
-        // —— 否则"这一轮的产物为什么是这种语言"事后无法重建。
-        'sourceLang': sourceLang,
-        'targetLang': targetLang,
-        'translate': _pipelineTranslate,
-        'skipExisting': _pipelineSkipExisting,
-        'rightToLeft': _pipelineRightToLeft,
-      }),
-    );
+    //
+    // 🔴 P10.15 §3.1-C：同一个 map 现在还会被写进产物**对账表**
+    // （`imgtrans_<名>.artifacts.json` 的 `run` 段）。`failures > 0` 时那条
+    // "失败不自动存"的规则仍然成立 —— 但一次 94 页全失败的运行此前只在这行
+    // 日志里留痕，工程目录看起来和"没跑过"一模一样。进了对账表就分得开了。
+    final runSummary = <String, Object?>{
+      'pages': pages.length,
+      'done': _pipeline.done,
+      'blocks': blocks,
+      'skipped': skipped,
+      'failures': failures,
+      'stopped': stopped,
+      // 本轮新学到的术语条数：0 有两种可能（本页没有新专名 / 引擎根本
+      // 不回报），配合日志里的 `Glossary Bridge` 行才能区分。
+      'glossaryLearned': learned,
+      'resumeFrom': _pipelineResumeFrom,
+      // S-N2：语向现在是**每次运行可变**的（弹窗覆盖），所以必须记进凭据行
+      // —— 否则"这一轮的产物为什么是这种语言"事后无法重建。
+      'sourceLang': sourceLang,
+      'targetLang': targetLang,
+      // P10.15 §4.3：三段取代了旧的 `translate` 开关。**三个键都记**，而不是
+      // 只记 `translate`：`translate:false` 在旧模型里只有一个含义（只检测
+      // 不翻译），在新模型里"没勾检测"才是另一条完全不同的代码路径
+      // （不跑引擎、只处理已有块）。只记一个 `translate` 会让两份日志的
+      // `translate:false` 看起来一样，而它们做的事不一样。
+      'stages': stages.toJson(),
+      'direction': readingDirectionName(_runDirection),
+      'skipExisting': _pipelineSkipExisting,
+    };
+    Log.info('Studio Pipeline', jsonEncode(runSummary));
     // 页集/分辨率可能变了（inpainted/ 被写入），条带缓存必须重算。
     _invalidateStripCache();
     if (!stopped && failures == 0) {
       // 全成功才自动存：自动管线跑完不存等于用户还要按一次 Ctrl+S，而这一批
       // 块有可能是几十页的量。失败/取消时**不**自动存，让用户先看状态栏。
-      unawaited(_save());
+      unawaited(_save(run: runSummary));
+    } else {
+      // 失败/取消：不写 JSON，但**照样**落一份对账表。否则一次失败运行在
+      // 工程目录里不留任何痕迹，`reason` 也永远停在旧状态。
+      unawaited(_writeReconciliation(runSummary));
+    }
+  }
+
+  /// 只写对账表、不动 JSON 与产物。用于"不自动存"的那条路径。
+  Future<void> _writeReconciliation(Map<String, Object?> run) async {
+    final project = _project;
+    if (project == null) return;
+    try {
+      final file = await ArtifactReconciliation.write(project, run: run);
+      Log.info('Translation Studio', 'reconciliation written: ${file.path}');
+    } catch (e, s) {
+      Log.error('Translation Studio', 'reconciliation failed', s);
+    }
+  }
+
+  /// 检测阶段（§4.3 第一段）：整页交给引擎，一趟拿到块。
+  ///
+  /// 只在 `stages.detect` 为真时调用。识别是否发生由
+  /// [StudioRunOptions.recognize] 决定（见那里的说明）。
+  Future<_PageStageResult> _runDetectStage(
+    StudioPagePipeline pipeline,
+    ProjectPage page,
+    Uint8List bytes, {
+    required String pageKey,
+    required StudioRunOptions options,
+    required CancellationToken cancel,
+  }) async {
+    final size = _pageSizeInPixels(pageKey);
+    final run = await pipeline.runPage(
+      pageKey,
+      bytes,
+      options: options,
+      pageWidth: size.width.round(),
+      cancel: cancel,
+    );
+    if (run.error is PipelineCanceled) {
+      return const _PageStageResult(
+        blocks: 0,
+        skipped: 0,
+        learned: 0,
+        failed: false,
+        canceled: true,
+        message: '',
+      );
+    }
+    var learned = 0;
+    if (run.glossary.isNotEmpty) {
+      learned = appGlossary.merge(widget.comicId, run.glossary);
+    }
+    if (run.failed) {
+      return _PageStageResult(
+        blocks: 0,
+        skipped: 0,
+        learned: learned,
+        failed: true,
+        canceled: false,
+        message: 'Page @a failed: @b'.tlParams({
+          'a': pageKey,
+          // `Object?` is not assignable to the parameter map's `Object` value
+          // type, and `run.error` is legitimately null on the success path —
+          // stringify it so the message is honest either way.
+          'b': '${run.error}',
+        }),
+      );
+    }
+    // 去重在落地之前，且**只读**既有块（见 `overlapsExistingBlock` 的说明）。
+    final fresh = _pipelineSkipExisting
+        ? [
+            for (final block in run.blocks)
+              if (!overlapsExistingBlock(page, block.rect)) block,
+          ]
+        : run.blocks;
+    // 🔴 落地必须走与 Create/Delete 块**同一条**路径（硬规矩 3）：任何写
+    // `pages[key]` 而不登记脏页的写法，都会让 `result/` 增量重渲漏掉这一页
+    // —— 用户看到的是"跑完了，导出还是旧的"。
+    if (fresh.isNotEmpty) {
+      final command = captureBlockListEdit(
+        page.rawBlocks,
+        () => page.addBlocks(fresh),
+        pageKey: pageKey,
+        label: 'Detect blocks',
+      );
+      if (!command.isEmpty) _history.push(command);
+    }
+    return _PageStageResult(
+      blocks: fresh.length,
+      skipped: run.skipped,
+      learned: learned,
+      failed: false,
+      canceled: false,
+      message: '',
+    );
+  }
+
+  /// 识别 + 翻译阶段（§4.3 第二、三段）：**不跑引擎的整页管线**，只在页上
+  /// **已有的块**上做事。
+  ///
+  /// 只在 `stages.detect` 为假时调用。
+  ///
+  /// ## 为什么不去调 `StudioPagePipeline.runPage`
+  ///
+  /// 那条路的第一步就是整页检测，而本路径的**全部意义**正是"不重新检测"：
+  /// 用户已经手工把版面排好了（拖框、删块、改字号），只想把文字补齐/翻掉。
+  /// 整页检测会把用户排好的块当成待检内容重新划一遍，去重又只挡显著重叠的，
+  /// 于是"改一个字"变成"多出三个新块"。
+  ///
+  /// ## 两个动作分别复用已验证的入口
+  ///
+  /// * 识别 → [PageTranslationPipeline.ocrRegion]（框内 OCR）。与单块
+  ///   【识别】按钮（`_recogniseSelectedBlock`）**同一个** API，只是这里按块
+  ///   批量走。
+  /// * 翻译 → [TranslationDispatcher.translateBatch]。与单块【翻译】按钮
+  ///   （`_translateSelectedBlock`）**同一个** API。
+  ///
+  /// ## 只认"还没做过"的块
+  ///
+  /// 已经有原文的块不再 OCR，已经有译文的块不再翻译。理由与 `skipExisting`
+  /// 同源：人工校对过的块比机器新认出来的值钱，拿一次批量运行覆盖它属于
+  /// "用机器换掉人工"。想重做某一块，用单块按钮 —— 那里是有意的覆盖。
+  Future<_PageStageResult> _runBlockStages(
+    ProjectPage page,
+    Uint8List bytes, {
+    required String pageKey,
+    required StudioRunStages stages,
+    required String sourceLang,
+    required String targetLang,
+    required CancellationToken cancel,
+  }) async {
+    final blocks = page.blocks;
+    var processed = 0;
+    var learned = 0;
+    final glossary = appGlossary.of(widget.comicId);
+    final size = _pageSizeInPixels(pageKey);
+    try {
+      // ── 识别 ──────────────────────────────────────────────────────────
+      if (stages.recognize) {
+        final pipeline = PageTranslationPipeline();
+        final updates = <int, String>{};
+        for (var i = 0; i < blocks.length; i++) {
+          cancel.throwIfCanceled();
+          final block = blocks[i];
+          if (block.sourceText.trim().isNotEmpty) continue;
+          final crop = StudioBlockOps.cropWindow(
+            block.xyxy,
+            size.width.round(),
+            size.height.round(),
+          );
+          // 坐标坏掉的块**跳过而不是失败**：它本来就没有可读的框，把它算作
+          // 本页失败会让一次整章运行因为一个坏块而报失败页。
+          if (crop == null) continue;
+          final found = await pipeline.ocrRegion(
+            bytes,
+            IntRect(crop.left, crop.top, crop.right, crop.bottom),
+            sourceLang: sourceLang,
+          );
+          final lines = StudioTranslateOps.splitLines(
+            found.map((b) => b.text).join('\n'),
+          );
+          if (lines.isEmpty) continue;
+          updates[i] = StudioTranslateOps.joinLines(lines);
+        }
+        if (updates.isNotEmpty) {
+          // 🔴 一次页级编辑（与 `captureBlockListEdit` 的"一页一步"约定一致）：
+          // 逐块 push 会在一页十几块时把 undo 栈冲掉。
+          final command = captureBlockListEdit(
+            page.rawBlocks,
+            () {
+              for (final entry in updates.entries) {
+                final block = blocks[entry.key];
+                block.sourceText = entry.value;
+                // 🔴 识别框与字形色都变了，而 FT 的 `rich_text` 里存着排版
+                // 结果 —— 不同步就会出图时用旧字号画新文字。
+                syncFtRichText(block);
+              }
+            },
+            pageKey: pageKey,
+            label: 'Recognise blocks',
+          );
+          if (!command.isEmpty) _history.push(command);
+          processed += updates.length;
+        }
+      }
+
+      // ── 翻译 ──────────────────────────────────────────────────────────
+      if (stages.translate) {
+        // 🔴 一次请求带整页所有待翻块，而不是逐块请求：`translateBatch` 的
+        // 契约就是批（术语表、上下文都在一次请求里），逐块调用会把"同一页
+        // 内的人名一致"这个它唯一的优势丢掉，还会把请求数乘以块数。
+        final targets = <int>[];
+        final texts = <String>[];
+        final langs = <String>[];
+        // `sourceLangs` 在这里传**本次运行的源语言**而不是每块自己的
+        // `sourceLang`：块上那个字段是识别阶段的产物，老工程里可能为空或
+        // 过时，而弹窗给出的语向是用户这一轮明确的选择。
+        for (var i = 0; i < blocks.length; i++) {
+          final block = blocks[i];
+          // 🔴 拟声词默认不译（P10.15 §4.5 · 序6）：检测阶段已按 `StudioSfxOps`
+          // 打了 `label: 'sfx'`。这里若只按"没译文就翻"的通用规则走，标记就会
+          // 变成 json 里一个没人用的字段 —— token 照花、荒唐译文照拿。
+          //
+          // 刻意**不**在这一段给旧块补标记：本段的语言来自"用户这一轮选的语向"，
+          // 而标记必须依据该块**自己**的检测语言，否则同一页会因为用户换了语向
+          // 而得到不同的标记。标记只有一个产生点：`StudioPagePipeline.runPage`。
+          // 面板上的【翻译】是**单块**动作、不看这个标记，误标一次点击就能回来。
+          if (StudioSfxOps.isMarkedSfx(block)) continue;
+          final source = block.sourceText.trim();
+          if (source.isEmpty || block.hasTranslation) continue;
+          targets.add(i);
+          texts.add(source);
+          langs.add(sourceLang);
+        }
+        if (targets.isNotEmpty) {
+          cancel.throwIfCanceled();
+          final response = await TranslationDispatcher.translateBatch(
+            texts,
+            targetLang,
+            sourceLang: sourceLang,
+            sourceLangs: langs,
+            glossary: glossary,
+          );
+          if (response.glossary.isNotEmpty) {
+            learned = appGlossary.merge(widget.comicId, response.glossary);
+          }
+          final applied = <int, String>{};
+          for (var k = 0; k < targets.length; k++) {
+            final incoming = k < response.texts.length ? response.texts[k] : '';
+            final block = blocks[targets[k]];
+            // 🔴 空结果 / 与原文逐字相同的结果**都不写**（判据与单块按钮
+            // 共用 `StudioTranslateOps.shouldApply`）。写回去只会让用户以为
+            // 按钮生效了，而实际什么都没变 —— 正是本项目最忌讳的静默。
+            if (!StudioTranslateOps.shouldApply(
+              incoming,
+              currentTranslation: block.translation,
+              currentSource: block.sourceText,
+            )) {
+              continue;
+            }
+            applied[targets[k]] = incoming.trim();
+          }
+          if (applied.isNotEmpty) {
+            final command = captureBlockListEdit(
+              page.rawBlocks,
+              () {
+                for (final entry in applied.entries) {
+                  final block = blocks[entry.key];
+                  block.translation = entry.value;
+                  syncFtRichText(block);
+                }
+              },
+              pageKey: pageKey,
+              label: 'Translate blocks',
+            );
+            if (!command.isEmpty) _history.push(command);
+            processed += applied.length;
+          }
+        }
+      }
+      return _PageStageResult(
+        blocks: processed,
+        skipped: 0,
+        learned: learned,
+        failed: false,
+        canceled: false,
+        message: '',
+      );
+    } on PipelineCanceled {
+      return const _PageStageResult(
+        blocks: 0,
+        skipped: 0,
+        learned: 0,
+        failed: false,
+        canceled: true,
+        message: '',
+      );
+    } catch (e, s) {
+      Log.error('Studio Pipeline', 'block stages $pageKey failed: $e', s);
+      return _PageStageResult(
+        blocks: 0,
+        skipped: 0,
+        learned: learned,
+        failed: true,
+        canceled: false,
+        message: 'Page @a failed: @b'.tlParams({'a': pageKey, 'b': '$e'}),
+      );
     }
   }
 
@@ -759,9 +1144,12 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       _selectedPageKey = null;
       // 页集可能整个换掉了：断点指向的 key 未必还在（P9.7）。
       _pipelineResumeFrom = null;
-      // 语向覆盖同理：那是"上一本工程临时选的语言"，换工程就该回到全局设置。
-      _runSourceLang = null;
-      _runTargetLang = null;
+      // 语向 / 三段 / 方向按 P2 选项②**从设置里读回**（`studioRunDefaults`）。
+      // 这与"断点作废"是两条相反的决定，理由也相反：断点说的是"这一本跑到
+      // 哪"，换工程就不成立；而语向/方向说的是"我平时怎么跑"，它跨工程、
+      // 跨重启都成立（日漫就该日→中）。两者唯一的共同点是都必须显式处理 ——
+      // 默默留着旧值或默默清掉都会做成一种"看起来正常"的错。
+      _loadRunDefaults();
       _revision++;
     });
     // The page set changed: the memoised strip list is stale.
@@ -946,6 +1334,11 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       sourceText: block.sourceText,
       fontFamily: format?.fontFamily ?? FontFormat.defaultFontFamily,
       fontSize: format?.fontSize ?? block.detectedFontSize,
+      // 🔴 P10.15 序2: the source-scale anchor the canvas's shrink-to-fit needs
+      // (`page_renderer._fitFontSize` reads the same number as `lineHeight`).
+      // Without it the canvas had nothing to cap against and drew oversized
+      // lettering that it then truncated with `…`.
+      lineHeight: block.detectedFontSize,
       fontWeight: format?.fontWeight ?? FontFormat.defaultFontWeight,
       alignment: format?.alignment ?? FontFormat.defaultAlignment,
       vertical: format?.vertical ?? block.sourceIsVertical,
@@ -1244,7 +1637,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   /// outcomes; the `false` case exists for "save then leave" ([_leaveGuard]),
   /// where leaving on a failed write would drop the edits the user was told
   /// were safe.
-  Future<bool> _save() async {
+  Future<bool> _save({Map<String, Object?>? run}) async {
     final project = _project;
     if (project == null) return false;
     final messenger = context;
@@ -1268,7 +1661,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         }),
       );
       setState(() {});
-      unawaited(_regenerateResults(dirtyPages: dirtyPages));
+      unawaited(_regenerateResults(dirtyPages: dirtyPages, run: run));
       return true;
     } catch (e, s) {
       Log.error('Translation Studio', 'Save failed', s);
@@ -1347,10 +1740,19 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   /// caller with no dirty-page information must ask for; an **empty** set is a
   /// legitimate answer ("the user undid back to the saved state") and must not
   /// be conflated with "no idea, render everything".
-  Future<void> _regenerateResults({Set<String>? dirtyPages}) async {
+  ///
+  /// [run] is the last pipeline summary, recorded into the reconciliation table
+  /// so a run that produced nothing is still auditable (P10.15 §3.1-C).
+  Future<void> _regenerateResults({
+    Set<String>? dirtyPages,
+    Map<String, Object?>? run,
+  }) async {
     final project = _project;
     if (project == null) return;
     setState(() => _renderingResults = true);
+    // 用 `File?` 而不是 `ArtifactReconciliation?`：`write` 返回的是**落盘后的
+    // 文件**（要打日志用它的 path），类型只挂在 `write` 的签名上。
+    File? reconciliation;
     try {
       bool Function(String)? filter =
           dirtyPages == null ? null : (key) => dirtyPages.contains(key);
@@ -1388,16 +1790,75 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         concurrency: 2,
         source: (kind, pageKey) => renderProjectResultPage(project, pageKey),
       );
+      // 🔴 对账表（P10.15 §3.1-B）：每次重生成后落一份**逐页**证据。
+      //
+      // 没有它，"78 页有 inpainted 没有 mask"这件事只能在文件管理器里一页
+      // 一页数出来，而且数出来也分不清"本来就没字"和"真的丢了"。有了它，
+      // 缺口是可断言的（`reason` 字段），补没补回也一目了然。
+      reconciliation = await ArtifactReconciliation.write(project, run: run);
       Log.info(
         'Translation Studio',
         'artifacts regenerated: bases=$bases result=$report '
-        '(dirty=${dirtyPages?.length ?? 'all'})',
+        '(dirty=${dirtyPages?.length ?? 'all'}) '
+        'reconciliation=${reconciliation.path}',
       );
     } catch (e, s) {
       Log.error('Translation Studio', 'result regeneration failed', s);
     } finally {
       if (mounted) setState(() => _renderingResults = false);
     }
+  }
+
+  /// 「重新生成全部产物」：把**每一页**的 `mask/` `inpainted/` `result/` 重算一遍。
+  ///
+  /// 🔴 为什么需要一个**全量**入口：保存走的是**脏页增量**
+  /// （`_save -> _regenerateResults(dirtyPages)`），而 `writeArtifacts` 只处理
+  /// 计划里的页 —— 于是**一页只要不再被编辑，它缺的产物就永远不会被补回来**。
+  /// S9.5-a 的 78 页 `inpainted 有 / mask 无` 正是这个状态：那批产物产出时
+  /// mask 接线还没写，而后续每次保存都只碰"刚改过的那一页"。
+  ///
+  /// 语义上 `dirtyPages: null` 就是"全部"（该参数早就有这个含义），所以这里
+  /// 没有新机制，只是把那个语义接到一个按钮上。
+  Future<void> _regenerateAllArtifacts() async {
+    final project = _project;
+    if (project == null || _renderingResults) return;
+    final go = await _confirmRegenerateAll();
+    if (!go || !mounted) return;
+    await _regenerateResults(dirtyPages: null);
+    if (!mounted) return;
+    final reconciliation = ArtifactReconciliation.read(project);
+    final summary = reconciliation?['summary'];
+    final detail = summary is Map
+        ? summary.entries.map((e) => '${e.key}=${e.value}').join(', ')
+        : 'no report';
+    context.showMessage(
+      message: 'Regenerated all artifacts. @a'.tlParams({'a': detail}),
+    );
+  }
+
+  /// 全量重生成的确认框。整章重算 + 重新渲染是分钟级的，不能一点就跑。
+  Future<bool> _confirmRegenerateAll() async {
+    final answer = await showDialog<bool>(
+      context: context,
+      builder: (_) => ContentDialog(
+        title: 'Regenerate all artifacts'.tl,
+        content: Text(
+          'Recompute mask, inpainted and result for every page of this project. Use it to fill in pages whose artifacts are missing; a large project can take a while.'.tl,
+        ).paddingHorizontal(16).paddingVertical(8),
+        actions: [
+          TextButton(
+            onPressed: () => context.pop(false),
+            child: Text('Cancel'.tl),
+          ),
+          FilledButton.icon(
+            onPressed: () => context.pop(true),
+            icon: const Icon(Icons.refresh, size: 18),
+            label: Text('Regenerate'.tl),
+          ),
+        ],
+      ),
+    );
+    return answer ?? false;
   }
 
   /// 打开本工程的术语表编辑器（A08 §1.1 · C）。
@@ -1670,6 +2131,27 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
               tooltip: 'Publish finished product'.tl,
               icon: const Icon(Icons.outbox_outlined),
               onPressed: project == null ? null : _publish,
+            ),
+            // 🔴 P10.15 序1: 全量产物重生成。保存走的是**脏页增量**，所以
+            // 「一页不再被编辑 ⇒ 它缺的 mask/inpainted/result 永远补不回来」。
+            // 这个按钮就是那条缺口的唯一出口（S9.5-a 的 78 页掩膜来源于此）。
+            Builder(
+              builder: (context) {
+                final busy = _renderingResults;
+                return IconButton(
+                  tooltip: 'Regenerate all artifacts'.tl,
+                  icon: busy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
+                  onPressed: project == null || busy
+                      ? null
+                      : () => unawaited(_regenerateAllArtifacts()),
+                );
+              },
             ),
             IconButton(
               tooltip: 'Continuous preview'.tl,
@@ -2076,8 +2558,19 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
 
   /// 管线选项面板（未选中块时显示在属性面板位置）。
   ///
-  /// 🔴 三项都是**会话内**状态，不落 `appdata`、不写工程 json：它们描述的是
-  /// "这一次怎么跑"，写进工程会让零字节 diff 立刻破掉。
+  /// 🔴 三段 / 方向 / `skipExisting` 的落盘规则**各不相同**，不能一句话概括：
+  ///
+  /// * 三段与方向 —— 按 P2 选项②记进 `appdata.settings['studioRunDefaults']`
+  ///   （**独立命名空间**，与 `TranslationConfig` 隔离），跨重启沿用；
+  /// * 语向 —— 同上，一起记；
+  /// * `skipExisting` —— 仍是**会话内**状态，不落盘（默认开、且描述的是
+  ///   "这次要不要覆盖已有块"，属于一次性决定）。
+  ///
+  /// 三者都不写工程 json —— 写进工程会让零字节 diff 立刻破掉。
+  ///
+  /// 面板上的三段/方向与弹窗里的是**同一份状态**：这里改了，下次弹窗的
+  /// 初始值就跟着改，反之亦然。两处各存一份会让"面板写着 A、弹窗预选 B"
+  /// 这种 UI 自相矛盾的状态成为可能。
   Widget _buildPipelinePanel(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final running = _pipeline.running;
@@ -2100,18 +2593,42 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
         ),
         const SizedBox(height: 10),
-        SwitchListTile(
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          title: Text('Translate too'.tl, style: ts.s14),
-          subtitle: Text(
-            'Off = detect and read only, so the layout can be checked before spending a translation request.'.tl,
-            style: ts.s12,
-          ),
-          value: _pipelineTranslate,
-          onChanged: running
-              ? null
-              : (v) => setState(() => _pipelineTranslate = v),
+        Text('Stages'.tl, style: ts.s14.copyWith(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 8,
+          children: [
+            FilterChip(
+              label: Text('Detect'.tl),
+              selected: _runStages.detect,
+              onSelected: running
+                  ? null
+                  : (on) => setState(
+                      () => _runStages = _runStages.copyWith(detect: on)),
+            ),
+            FilterChip(
+              label: Text('Recognize'.tl),
+              selected: _runStages.recognize,
+              onSelected: running
+                  ? null
+                  : (on) => setState(
+                      () => _runStages = _runStages.copyWith(recognize: on)),
+            ),
+            FilterChip(
+              label: Text('Translate'.tl),
+              selected: _runStages.translate,
+              onSelected: running
+                  ? null
+                  : (on) => setState(
+                      () => _runStages = _runStages.copyWith(translate: on)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          // 与弹窗同一句话：三段能不能互相独立，取决于同一份工作量判断。
+          'Stages run in order: detect, then recognize, then translate.'.tl,
+          style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
         ),
         SwitchListTile(
           dense: true,
@@ -2126,18 +2643,43 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
               ? null
               : (v) => setState(() => _pipelineSkipExisting = v),
         ),
-        SwitchListTile(
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          title: Text('Read right to left'.tl, style: ts.s14),
-          subtitle: Text(
-            'On for Japanese manga. Off for western/vertical-scroll pages.'.tl,
-            style: ts.s12,
-          ),
-          value: _pipelineRightToLeft,
-          onChanged: running
-              ? null
-              : (v) => setState(() => _pipelineRightToLeft = v),
+        const SizedBox(height: 8),
+        Text(
+          'Reading direction'.tl,
+          style: ts.s14.copyWith(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 8,
+          children: [
+            // 🔴 `ChoiceChip` 而不是 `SwitchListTile`：方向自 P10.15 §4.4 起是
+            // **三值**（右起 / 左起 / 纵向），一个开关塞不下第三个状态，硬塞
+            // 会把"纵向"静默变成"左起"——那正是这条改动要修的那类错。
+            ChoiceChip(
+              label: Text('Right to left'.tl),
+              selected: _runDirection == ReadingDirection.rightToLeft,
+              onSelected: running
+                  ? null
+                  : (_) => setState(
+                      () => _runDirection = ReadingDirection.rightToLeft),
+            ),
+            ChoiceChip(
+              label: Text('Left to right'.tl),
+              selected: _runDirection == ReadingDirection.leftToRight,
+              onSelected: running
+                  ? null
+                  : (_) => setState(
+                      () => _runDirection = ReadingDirection.leftToRight),
+            ),
+            ChoiceChip(
+              label: Text('Top to bottom'.tl),
+              selected: _runDirection == ReadingDirection.topToBottom,
+              onSelected: running
+                  ? null
+                  : (_) => setState(
+                      () => _runDirection = ReadingDirection.topToBottom),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         if (_pipeline.lastMessage.isNotEmpty)
@@ -2210,6 +2752,37 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       ),
     );
   }
+}
+
+/// 一页跑完的汇总：检测路径与"只处理已有块"路径的共同返回。
+///
+/// 🔴 做成**类**而不是 record typedef：record 的字段名在类型别名上不会被
+/// 解析成"构造参数"，`const _PageStageResult(...)` 会被判成
+/// `creation_with_non_type`（"isn't a class"）—— 报错信息看起来像名字打错了，
+/// 实际是别名解析的问题。一个 6 字段的小类在这里更贵一点也更好读。
+///
+/// [blocks] 的含义**随路径不同**：检测路径是"本页新增的块数"，非检测路径
+/// 是"本页被填了原文或译文的块数"。两者都不是"页上块总数"。
+/// [canceled] 与 [failed] 分开：取消不是失败（断点语义不同），把取消算成
+/// 失败会让状态栏报一页失败而用户只是自己点了停止。
+class _PageStageResult {
+  const _PageStageResult({
+    required this.blocks,
+    required this.skipped,
+    required this.learned,
+    required this.failed,
+    required this.canceled,
+    required this.message,
+  });
+
+  final int blocks;
+  final int skipped;
+  final int learned;
+  final bool failed;
+  final bool canceled;
+
+  /// 失败时给状态栏的一句话（成功/取消时为空）。
+  final String message;
 }
 
 /// 一组可变字段而不是 `setState` 上的十几个单独字段。

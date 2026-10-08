@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'text_block.dart';
+
 /// 「给一个块做局部识别 / 局部翻译」这件事的**纯逻辑部分**。
 ///
 /// ## 为什么单独抽出来
@@ -99,6 +101,92 @@ abstract final class StudioBlockOps {
   /// 🔴 **空结果判失败**，不判"成功但没文字"：用户点了【识别】却什么都没
   /// 发生时，必须有一句可读的说明，否则他只会以为按钮坏了。
   static bool isRecognised(String text) => text.trim().isNotEmpty;
+}
+
+/// 拟声词 / 非标准文字的**默认策略**（P10.15 §4.5 · 序6）。
+///
+/// ## 为什么要有这一层
+///
+/// 漫画里 `BAM!!`、`SLAM`、「쿵」这类拟声词**不该被翻译、更不该被改字** ——
+/// 它们是画面的一部分。但检测器分不出"拟声词"和"短对白"，而把每一页都送去
+/// 问模型既费 token 又会拿到一堆荒唐译文（模型对着 `SLAM` 会给出"猛击"）。
+///
+/// 所以这里只做一件**保守**的事：把明显属于这一类、且**敢于确认**的块打上
+/// `label: 'sfx'`，于是它们
+///
+/// 1. 不进翻译批次（省 token，也不会得到荒唐译文）；
+/// 2. `translation` 保持为空 ⇒ `toTranslatedRegion()` 返回 null ⇒ 既不 letter
+///    也不产生 `region` ⇒ **原字原样留在图上**（"不改字"就是这么实现的：
+///    抹字的区域来自 `page.regions`，而它只包含有译文的块）；
+/// 3. 在 json 里留下可筛的标记（`TextBlock.label`），供人工复核。
+///
+/// 人工兜底：工作室块面板上的【翻译】是**单块**动作，**不看**这个标记 ——
+/// 用户一眼看出被误标，点一下就能翻。所以"默认不译"不是死路。
+///
+/// ## 🔴 判据刻意收得很窄（误标与漏标的代价不对称）
+///
+/// 误标 = **一句真对白默认不译**（要人点一下才回来）；漏标 = 多问一次模型。
+/// 所以只在下面三条**同时**成立时才判为 SFX：
+///
+/// * 源语言是拉丁/韩文（[languages]）—— 中日文的短句（「嗯」「你好」）是正常
+///   对白，按字符数判会把它们成片误标；
+/// * 去掉空白后 ≤ [maxChars] 个字符；
+/// * 不含任何中日文字（汉字/假名 —— 那类由竖排启发式管，见 §4.5 第一段），且
+///   （韩文）**只有 1 个音节**（[maxHangulChars]），或（拉丁）**全大写**且
+///   ≥ 3 个字母。全大写是漫画拟声词的书写惯例（`BAM` / `SLAM`），而 `No` /
+///   `Hi` / `Hello` 这类短对白是混合大小写，正好被排除。
+///
+/// 🔴 韩文刻意只收单音节（「쿵」「쾅」「퍽」）：**两个音节就分不出来了** ——
+/// 「두근」（拟声词）与「안녕」（台词）的字数完全一样，靠字数判必然误标，而
+/// 误标的代价是"一句真对白默认不译"。这条只有中文/日文词典能解决，现在没有，
+/// 所以**宁可漏**：漏了只是多问一次模型。
+///
+/// 已知的误标形态（可接受，因为一次点击就能翻）：全大写的短问候语，如
+/// `HELLO` / `OK!`。
+abstract final class StudioSfxOps {
+  /// `TextBlock.label` 的取值。
+  static const String label = 'sfx';
+
+  /// 去掉空白后的最大字符数。
+  static const int maxChars = 5;
+
+  /// 韩文拟声词的音节数上限。**1** —— 见类文档最后一段：2 音节无法与台词区分。
+  static const int maxHangulChars = 1;
+
+  /// 判为 SFX 的源语言。**刻意只有这两个** —— 见类文档第一条。
+  static const Set<String> languages = {'en', 'ko'};
+
+  static final RegExp _whitespace = RegExp(r'\s+');
+  // 🔴 这几条**不用 raw 字符串**：`r'\u3040'` 交给正则引擎的是一段
+  // `\u3040` 文本（依赖正则自己解析转义），而普通字符串里的 `\u3040` 由
+  // **Dart** 先转成真正的字符。后者只有一种解释，读代码的人不必去查
+  // "这个正则引擎支持不支持 `\u`"。
+  //
+  // 中日文：假名（U+3040–30FF）+ 汉字（含扩展 A 与兼容区）。
+  static final RegExp _cjk = RegExp(
+    '[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]',
+  );
+  // 韩文**音节**（U+AC00–D7A3）。刻意不含 Jamo 区：OCR 交出来的是音节。
+  static final RegExp _nonLetters = RegExp('[^A-Za-z\uAC00-\uD7A3]');
+  static final RegExp _nonHangul = RegExp('[^\uAC00-\uD7A3]');
+
+  /// [text] 是否像拟声词 / 非标准文字。[language] 是 OCR 判定的源语言。
+  static bool looksLikeSfx(String text, {required String language}) {
+    final compact = text.replaceAll(_whitespace, '');
+    if (compact.isEmpty || compact.length > maxChars) return false;
+    if (!languages.contains(language.trim().toLowerCase())) return false;
+    // 中日文字符一律不判：它们要么是正常对白，要么该走竖排那条路。
+    if (_cjk.hasMatch(compact)) return false;
+    final letters = compact.replaceAll(_nonLetters, '');
+    // 纯符号（`!!` / `???` / `…`）不是拟声词，标了只会让用户以为有东西。
+    if (letters.isEmpty) return false;
+    final hangul = letters.replaceAll(_nonHangul, '');
+    if (hangul.isNotEmpty) return hangul.length <= maxHangulChars;
+    return letters.length >= 3 && letters == letters.toUpperCase();
+  }
+
+  /// [block] 是否已被本策略标记为拟声词。
+  static bool isMarkedSfx(TextBlock block) => block.label == label;
 }
 
 /// 一次局部识别的裁剪窗口（页坐标）。

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'project.dart';
+import 'project_io.dart';
 import 'project_writer.dart';
 
 /// 一张页图的像素尺寸。
@@ -226,6 +227,9 @@ class ProjectBootstrapResult {
     required this.root,
     required this.jsonFile,
     required this.created,
+    this.sourceRoot = '',
+    this.copiedSources = const [],
+    this.missingSources = const [],
     this.project,
     this.report,
     this.error,
@@ -233,6 +237,21 @@ class ProjectBootstrapResult {
 
   /// 工程目录（`<projectsRoot>/<name>`）。
   final String root;
+
+  /// 原图副本根（`<root>/source`）。json 的 `directory` 指向它 —— 见
+  /// [ProjectBootstrap.sourceDirectoryName]。
+  final String sourceRoot;
+
+  /// 成功复制过来的页键。
+  final List<String> copiedSources;
+
+  /// 复制时**源文件不在**的页键。
+  ///
+  /// 🔴 必须上报而不是静默跳过：副本目录仍然会被创建出来（所以
+  /// `TranslationProject.directory` 不会回落到 json 所在目录），但那些页在
+  /// 工作室里会显示成"没有可读页图"。**"少了几页"与"页面本来就是空的"在
+  /// 界面上长得一样**，只有这里的计数分得开。
+  final List<String> missingSources;
 
   final File jsonFile;
 
@@ -251,21 +270,57 @@ class ProjectBootstrapResult {
   bool get ok => error == null;
 }
 
+/// 一次「原图副本化」的搬运结果（新工程与既有工程共用）。
+class ProjectBootstrapCopy {
+  const ProjectBootstrapCopy({
+    required this.root,
+    required this.copied,
+    required this.missing,
+  });
+
+  /// 副本根目录。
+  final String root;
+
+  final List<String> copied;
+  final List<String> missing;
+
+  int get copiedCount => copied.length;
+
+  int get missingCount => missing.length;
+
+  bool get complete => missing.isEmpty && copied.isNotEmpty;
+}
+
 /// 从一本**已下载的漫画**开一个工作室工程（`A08 §5` · `P6 §4.10.2` 表 #3）。
 ///
 /// 三条硬约束，与离线工具 `tools/_make_chapter_carrier.py` 同源：
 ///
-/// 1. **原图不复制** —— `directory` 指向 `downloads/<漫画>`，产物落在
-///    `projects/<工程名>`。复制 94×852KB 既慢又没意义。
+/// 1. **原图复制进 `source/`**（P10.15 §4.1 · P1 选项②）—— `directory` 指向
+///    `<工程根>/source`，产物落在 `<工程根>/{mask,inpainted,result}`。
+///    🔴 这条是**反过来的**：上一版刻意"不复制"，而那个决定是错的。抹字是
+///    **破坏性**的（`TextInpainter.erase` 就地改像素），一旦底图取的是
+///    `downloads/` 里唯一那份原图，一次逻辑错就是**擦掉用户的原图**。副本化
+///    把这条风险从"数据丢失"降为"重跑一次"，代价是磁盘。
+///    由此 `downloads/` 降级为**只读保底**，翻译链路不再写它。
 /// 2. **`projects/` 必须是 `downloads/` 的兄弟** —— 章节目录内出现任何子目录
 ///    → 本地库扫描器**整本拒绝**（`A03 §1`）。所以 [rootIsSafe] 直接禁掉
 ///    把工程建在源目录里。
 /// 3. **json 只写实测字段** —— `image_info` 只有 `width`/`height`，**不写
 ///    `workspace` 键**（FT 自己也不写；写了就是编造，会让零字节 diff 失败）。
+///    副本化之后 `directory` 仍然**是**要写的（它本来就有这个键），只是值从
+///    下载目录改成了副本目录。
 ///
 /// 整个文件**零 Flutter 依赖**，所以能在 `init()` 之前被 headless 验证。
 abstract final class ProjectBootstrap {
   ProjectBootstrap._();
+
+  /// 原图副本所在的子目录名（相对工程根）。
+  ///
+  /// 🔴 放在工程根下、与 `mask/` `inpainted/` `result/` 平级：这样
+  /// `TranslationProject.workspace`（= json 所在目录）与 `directory`
+  /// （= `<root>/source`）是两个**真实存在**的不同目录，双 root 分离
+  /// （`ProjectWriter` 的「Two roots, one implementation」）才真正成立。
+  static const String sourceDirectoryName = 'source';
 
   /// 与本地库扫描器一致的白名单（`A03 §1`），不是 `TranslationProject` 那份
   /// 更宽的名单 —— 这里扫的是下载目录，读者把什么当页，我们就认什么。
@@ -358,10 +413,18 @@ abstract final class ProjectBootstrap {
   ///
   /// 键序刻意与 `TranslationProject.create` / FT 一致，这样「建完立刻存一次」
   /// 看起来就像是 FT 自己写的。
-  static Map<String, Object?> buildRaw(ProjectBootstrapPlan plan) {
+  ///
+  /// [directory] 覆盖 `directory` 的值。默认是 [ProjectBootstrapPlan] 记下的
+  /// **源漫画目录**（= 不复制的那种布局，纯函数测试用）；[create] 传的是
+  /// 副本目录 —— 于是"`directory` 到底指向哪"这件事只有**一个**写入点，
+  /// 而不是"计划里一个、落盘时又改一个"。
+  static Map<String, Object?> buildRaw(
+    ProjectBootstrapPlan plan, {
+    String? directory,
+  }) {
     final keys = plan.pageKeys;
     return <String, Object?>{
-      'directory': normalizeDirectoryPath(plan.comicDirectory),
+      'directory': normalizeDirectoryPath(directory ?? plan.comicDirectory),
       'pages': <String, Object?>{for (final key in keys) key: <Object?>[]},
       'current_img': keys.isEmpty ? '' : keys.first,
       'image_info': <String, Object?>{
@@ -378,6 +441,51 @@ abstract final class ProjectBootstrap {
           },
       ],
     };
+  }
+
+  /// 把 [plan] 里的页图**逐个复制**到 [root] 下，保持 `<章节>/<文件名>` 结构。
+  ///
+  /// [root] **一定会被建出来**，即使一页都没复制成功 —— 于是
+  /// `TranslationProject.directory` 不会静默回落到 json 所在目录，缺图表现为
+  /// "这一页没有可读原图"而不是"悄悄读错目录"。
+  ///
+  /// 🔴 为什么是"逐个页键"而不是"整个章节目录复制"：`plan.pageKeys` 里只有
+  /// 扫描器认得的**页图**（白名单扩展名 + 不递归），而整目录复制会把
+  /// `notes.txt`、`.DS_Store`、子目录一起搬过来 —— 那些东西出现在工程根下
+  /// 只会让后续"这一页为什么在"变成一个问题。
+  static Future<ProjectBootstrapCopy> copySources({
+    required String root,
+    required ProjectBootstrapPlan plan,
+    required String fromDirectory,
+  }) async {
+    final targetRoot = normalizeDirectoryPath(root);
+    final sourceRoot = normalizeDirectoryPath(fromDirectory);
+    // 🔴 一页都没有也要把副本根建出来：`TranslationProject.directory` 在目录
+    // **不存在**时会静默回落到 json 所在目录（`project.dart` 的 getter），于是
+    // 「json 指着 `source/` 而 `source/` 还没建」这个中间态在界面上完全正常，
+    // 读的却是错的目录。建出来就把这种静默堵死 —— 缺图的页会明明白白地变成
+    // 「这一页没有可读原图」，而不是悄悄换一个目录去找图。
+    await Directory(targetRoot).create(recursive: true);
+    final copied = <String>[];
+    final missing = <String>[];
+    for (final key in plan.pageKeys) {
+      final from = File('$sourceRoot/$key');
+      if (!from.existsSync()) {
+        missing.add(key);
+        continue;
+      }
+      final to = File('$targetRoot/$key');
+      if (!to.parent.existsSync()) {
+        await to.parent.create(recursive: true);
+      }
+      await from.copy(to.path);
+      copied.add(key);
+    }
+    return ProjectBootstrapCopy(
+      root: targetRoot,
+      copied: copied,
+      missing: missing,
+    );
   }
 
   /// 落盘前校验。返回 `null` 表示可以建，否则是人能读的拒绝理由。
@@ -412,16 +520,21 @@ abstract final class ProjectBootstrap {
     return true;
   }
 
-  /// 把 [plan] 落成 `<projectsRoot>/<name>/imgtrans_<name>.json`。
+  /// 把 [plan] 落成 `<projectsRoot>/<name>/imgtrans_<name>.json`，并把页图
+  /// 复制进 `<projectsRoot>/<name>/source/`（§4.1）。
   ///
   /// 目标已存在且 [force] 为 false 时**什么都不写**，返回 `created: false`
   /// —— 静默覆盖用户已有的工程是最坏的一种失败。
+  ///
+  /// `copySources` 为 false 时退回旧布局（`directory` 直接指向源漫画目录）。
+  /// 只留给夹具与离线工具，产品路径**一律复制**。
   static Future<ProjectBootstrapResult> create({
     required String projectsRoot,
     required String name,
     required ProjectBootstrapPlan plan,
     bool force = false,
     bool ensureArtifactDirectories = true,
+    bool copySources = true,
   }) async {
     final root = '${normalizeDirectoryPath(projectsRoot)}/$name';
     final jsonFileName = TranslationProject.jsonFileNameFor(name);
@@ -449,7 +562,28 @@ abstract final class ProjectBootstrap {
       );
     }
 
-    final project = TranslationProject.buildFrom(buildRaw(plan), jsonFile);
+    // 🔴 先复制、后写 json。顺序反过来会留下一个"json 指着 source/ 而
+    // source/ 还不存在"的中间态；`TranslationProject.directory` 在目录不存在
+    // 时会**静默回落**到 json 所在目录（`project.dart` 的 getter），于是那个
+    // 中间态在界面上看起来完全正常，读的却是错的目录。
+    final sourceRoot =
+        copySources ? '$root/$sourceDirectoryName' : plan.comicDirectory;
+    var copied = <String>[];
+    var missing = <String>[];
+    if (copySources) {
+      final copy = await ProjectBootstrap.copySources(
+        root: sourceRoot,
+        plan: plan,
+        fromDirectory: plan.comicDirectory,
+      );
+      copied = copy.copied;
+      missing = copy.missing;
+    }
+
+    final project = TranslationProject.buildFrom(
+      buildRaw(plan, directory: sourceRoot),
+      jsonFile,
+    );
     // 🔴 只给 `directory`，**不给 `workspace`**：`ProjectWriter.save` 只在传了
     // 的时候写这两个键，所以不传 = json 里没有 `workspace`，与 FT 一致，
     // 而 `TranslationProject.workspace` 会回落到 json 的父目录 —— 正是我们要的
@@ -458,15 +592,143 @@ abstract final class ProjectBootstrap {
       root: root,
       project: project,
       jsonFileName: jsonFileName,
-      directory: normalizeDirectoryPath(plan.comicDirectory),
+      directory: normalizeDirectoryPath(sourceRoot),
       ensureArtifactDirectories: ensureArtifactDirectories,
     );
     return ProjectBootstrapResult(
       root: root,
       jsonFile: report.jsonFile,
       created: true,
+      sourceRoot: normalizeDirectoryPath(sourceRoot),
+      copiedSources: copied,
+      missingSources: missing,
       project: project,
       report: report,
     );
   }
+
+  /// 把一个**已经存在**的工程从"引用 `downloads/` 原图"迁到"自带
+  /// `<工程根>/source/` 副本"（§4.1 · P1 选项② 的既有工程那一半）。
+  ///
+  /// ## 为什么要有这个入口
+  ///
+  /// 新建工程已经自带副本，但 `MDGH-ch1` 这种**在改动之前建的**工程，json 的
+  /// `directory` 仍然指着下载目录。而抹字是破坏性的 —— 那份下载目录是用户
+  /// **唯一**一份原图。这条迁移就是把它复制进来、然后把 `directory` 指过去。
+  ///
+  /// ## 幂等
+  ///
+  /// 已经迁过的工程（`directory` 已经指向一个存在的 `source/`，且所有页图都在）
+  /// 直接返回 `alreadyMigrated: true` 且一个字节都不写。再点一次不会重复复制，
+  /// 也不会把 `directory` 改成别的东西。
+  ///
+  /// ## 顺序
+  ///
+  /// 复制全部成功**之后**才改 json。中途失败（源文件缺、磁盘满）时 json
+  /// 保持原样 —— 半迁移状态（json 指着不存在的 `source/`）会触发
+  /// `TranslationProject.directory` 的静默回落，读的是错目录而界面上看不出来。
+  static Future<ProjectBootstrapMigration> migrateSources({
+    required File jsonFile,
+    bool copyAllPages = true,
+  }) async {
+    final project = await TranslationProjectIo.load(jsonFile);
+    final current = project.directory;
+    final desired = '${project.jsonDirectory}/$sourceDirectoryName';
+
+    final imageKeys = [
+      for (final key in project.pageOrder)
+        if (TranslationProject.isImagePage(key)) key,
+    ];
+    // 已经指向一个真实存在的 source/，且页图齐全 ⇒ 无事可做。
+    if (normalizeDirectoryPath(current) == normalizeDirectoryPath(desired) &&
+        Directory(desired).existsSync() &&
+        imageKeys.every((key) => File('$desired/$key').existsSync())) {
+      return ProjectBootstrapMigration(
+        jsonFile: jsonFile,
+        previousDirectory: current,
+        directory: desired,
+        alreadyMigrated: true,
+        copied: [
+          for (final key in imageKeys)
+            if (File('$desired/$key').existsSync()) key,
+        ],
+        missing: const [],
+        wroteJson: false,
+      );
+    }
+
+    // 源 = 工程**当前**解析出来的 directory（可能已经是副本目录，那说明上一
+    // 次迁了一半；从它继续复制是安全的，因为副本目录是只读保底）。
+    final copy = await ProjectBootstrap.copySources(
+      root: desired,
+      plan: ProjectBootstrapPlan(
+        comicDirectory: current,
+        chapterName: '',
+        pageKeys: copyAllPages ? imageKeys : const [],
+        sizes: const {},
+      ),
+      fromDirectory: current,
+    );
+    // 🔴 少了页就**不改 json**：只复制到一半就改 `directory` 会让缺的那些页
+    // 静默变成"这一页没有原图"。宁可让调用方看到 missing 并重跑。
+    if (copy.missing.isNotEmpty) {
+      return ProjectBootstrapMigration(
+        jsonFile: jsonFile,
+        previousDirectory: current,
+        directory: current,
+        alreadyMigrated: false,
+        copied: copy.copied,
+        missing: copy.missing,
+        wroteJson: false,
+      );
+    }
+
+    await ProjectWriter.save(
+      root: project.jsonDirectory,
+      project: project,
+      directory: normalizeDirectoryPath(desired),
+      // 既有工程的产物目录早就在了；这里再建一次是幂等的，且能补上缺失的。
+      ensureArtifactDirectories: true,
+    );
+    return ProjectBootstrapMigration(
+      jsonFile: jsonFile,
+      previousDirectory: current,
+      directory: normalizeDirectoryPath(desired),
+      alreadyMigrated: false,
+      copied: copy.copied,
+      missing: const [],
+      wroteJson: true,
+    );
+  }
+}
+
+/// 一次「既有工程原图副本化」的结果。
+class ProjectBootstrapMigration {
+  const ProjectBootstrapMigration({
+    required this.jsonFile,
+    required this.previousDirectory,
+    required this.directory,
+    required this.alreadyMigrated,
+    required this.copied,
+    required this.missing,
+    required this.wroteJson,
+  });
+
+  final File jsonFile;
+  final String previousDirectory;
+
+  /// 迁移**之后**应有的 `directory`（[wroteJson] 为 false 时说明没改成功，
+  /// 值仍是 [previousDirectory]）。
+  final String directory;
+
+  /// 本来就已经迁过，一个字节都没写。
+  final bool alreadyMigrated;
+
+  final List<String> copied;
+  final List<String> missing;
+
+  /// 是否真的改写了 json。
+  final bool wroteJson;
+
+  bool get ok => missing.isEmpty && (wroteJson || alreadyMigrated);
 }

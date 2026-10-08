@@ -109,12 +109,22 @@ bool isVerticalLine(IntRect box) {
 ///
 /// 🔴 顺序不是"随便定一下"：日漫右起（左页在右），顺序错了整章校对顺序就
 /// 完全颠倒，而用户只能靠逐块点选才发现。
+///
+/// P10.15 §4.4 把原来的两值扩成三值：条漫/页漫竖读（`topToBottom`）此前被
+/// 含糊地并进 [leftToRight]，而两者差别是实打实的 —— 欧美页漫**分栏**，
+/// 条漫整页一列，分栏会把条漫的一长条切成好几段竖排文字。
 enum ReadingDirection {
   /// 列从右往左，列内从上往下（日漫默认）。
   rightToLeft,
 
-  /// 列从左往右，列内从上往下（欧漫/条漫默认）。
+  /// 列从左往右，列内从上往下（欧美页漫）。
   leftToRight,
+
+  /// 整页按 y 排序，**不做列切分**（条漫 / 竖读页漫）。
+  ///
+  /// 实现上是"把整页当一列"（`_assignColumns` 在页宽 ≤ 0 时的既有行为），
+  /// 不是一套新算法 —— 少一套算法就少一处与另外两值漂移的机会。
+  topToBottom,
 }
 
 /// 聚块参数。默认值全部有 comic 排版上的依据，依据写在每个字段上。
@@ -186,7 +196,14 @@ List<Balloon> clusterBalloons(
       .clamp(params.minGap, params.maxGap);
 
   final groups = _merge(usable, gap);
-  final columnOfGroup = _assignColumns(groups, pageWidth, params.columnGapFactor);
+  // 🔴 P10.15 §4.4: `topToBottom` 复用"整页一列"这条既有路径（`_assignColumns`
+  // 在页宽 ≤ 0 时不切列）。传 0 而不是新写一套排序，是为了让三种方向的差别
+  // 只有"切不切列"这一处，不会再多出一条会漂移的排序实现。
+  final columnOfGroup = _assignColumns(
+    groups,
+    direction == ReadingDirection.topToBottom ? 0 : pageWidth,
+    params.columnGapFactor,
+  );
 
   // 列号沿阅读方向递增：右起模式下 0 是最右列。
   final columnCount = columnOfGroup.values.toSet().length;

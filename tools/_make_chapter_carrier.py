@@ -12,6 +12,10 @@
 1. **原图不复制** —— 走 A 方案：`directory` 指向 `downloads/<漫画>`，
    产物落在 `projects/<工程名>`（json 所在目录即 `workspace` 的回落值）。
    复制 94×852KB 既慢又没意义。
+   🔴 **2026-10-08 更新（P10.15 §4.1 · P1 选项②）：产品路径已经反过来** ——
+   `ProjectBootstrap.create` 现在**复制**页图进 `<工程根>/source/` 并把
+   `directory` 指过去（抹字是破坏性的，不能拿 `downloads/` 里唯一那份原图做
+   底图）。本脚本保留"不复制"只为造**一次性夹具**，不要再用它产产品工程。
 2. **`projects/` 必须是 `downloads/` 的兄弟** —— 扫描器红线：章节目录内出现
    任何子目录 → 整本漫画被 `local_comic_scanner` 拒绝。所以产物绝不进
    `downloads/`。

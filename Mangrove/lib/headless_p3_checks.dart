@@ -21,9 +21,12 @@ library;
 
 import 'dart:io';
 
+import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import 'package:mangrove/foundation/translation_project/artifact_reconciliation.dart';
 import 'package:mangrove/foundation/translation_project/project.dart';
 import 'package:mangrove/foundation/translation_project/project_bootstrap.dart';
 import 'package:mangrove/foundation/translation_project/project_io.dart';
+import 'package:mangrove/foundation/translation_project/text_block.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 
 /// FT 写工程 JSON 的顶层键序。建出来的工程必须长这个样子，否则「存一次」
@@ -229,7 +232,11 @@ Future<void> _run(CheckSink check, String baseInput) async {
   );
 
   probe(
-    'directory_is_comic_root',
+    'raw_directory_defaults_to_comic_root',
+    // `buildRaw` 的**默认**仍是源漫画目录 —— 纯函数测试与离线工具（旧布局）
+    // 用得上。真正落盘的工程走 `create`，它的 `directory` 指向
+    // `<工程根>/source`，由下面 `copy.directory_points_at_the_copy_not_downloads`
+    // 断言。两条一起才说明"指向哪"只有**一个**写入点。
     () async => raw['directory'] == comicDir,
     // 故障：`directory` 指到了章节目录 → 页键会变成 `ch1/ch1/1.webp`。
     () async => _withKey(raw, 'directory', '$comicDir/$chapter')['directory'] ==
@@ -388,22 +395,127 @@ Future<void> _run(CheckSink check, String baseInput) async {
     () => '${inventoryBefore.length} file(s) under downloads',
   );
 
+  // ── 3b · 原图副本与双 root（P10.15 §4.1 · P1 选项② · 序5） ──────────────
+  //
+  // 🔴 这一组**替换掉了**上一版的 `sources_not_copied`。那个设计（"原图不复制，
+  // `directory` 直接指下载目录"）是**错的**：抹字是破坏性的
+  // （`TextInpainter.erase` 就地改像素），底图取 `downloads/` 里唯一那份原图，
+  // 一次逻辑错就是**擦掉用户的原图**。现在建工程把用到的页图逐个复制进
+  // `<工程根>/source/`，`directory` 指向副本 —— 于是 `directory`（原图根）与
+  // `workspace`（产物根）是两个**真实存在**的不同目录，`ProjectWriter` 那套
+  // "Two roots, one implementation" 才真正成立。
   probe(
-    'sources_not_copied',
-    () async => _noImageAtRoot(created.root, plan),
-    // 故障：把判据指向原图目录本身 —— 那里当然全是图片。
-    () async => _noImageAtRoot('$comicDir/$chapter', plan),
-    () {
-      // detail 里枚举目录：目录不存在会抛，别让"取个 detail"把整批掀翻。
-      final dir = Directory(created.root);
-      // 🔴 不能用 `entity.uri.pathSegments.last`：目录 URI 必带结尾斜杠，
-      // 取出来恒为 ''（`A02 §5`）—— 上一版 detail 里那串 `,,,` 就是三个
-      // 产物目录，看上去像有三个空文件。
-      final entries = dir.existsSync()
-          ? dir.listSync().map((e) => _basename(e.path)).join(',')
-          : '(missing)';
-      return 'root=${created.root} entries=$entries';
+    'copy.sources_land_under_own_source_dir',
+    () async => _sourcesCopiedUnder(created.sourceRoot, plan, comicDir),
+    // 故障：副本没落在 `source/` 子目录下（页键结构被拍平 / 位置放错）——
+    // `directory` 会指到一个没有图的地方，工作室里每一页都变成"读不到图"。
+    () async => _sourcesCopiedUnder(created.root, plan, comicDir),
+    () => 'sourceRoot=${created.sourceRoot} '
+        'copied=${created.copiedSources.length}/${plan.pageKeys.length} '
+        'missing=${created.missingSources.join(',')}',
+  );
+
+  probe(
+    'copy.skips_non_page_files',
+    () async => !File('${created.sourceRoot}/$chapter/notes.txt').existsSync(),
+    // 故障：把判据指向源章节目录 —— `notes.txt` 就在那儿。这正是"整目录复制"
+    // 会把 `.txt` / `.DS_Store` / 子目录一起搬进工程根的那一类污染。
+    () async => !File('$comicDir/$chapter/notes.txt').existsSync(),
+    () => 'sourceRoot=${created.sourceRoot}',
+  );
+
+  probe(
+    'copy.directory_points_at_the_copy_not_downloads',
+    () async {
+      final loaded = reloaded;
+      return loaded != null &&
+          _directoryIsOwnCopy(loaded, created.sourceRoot, downloads);
     },
+    // 故障：不复制的那种布局 —— `directory` 直接指下载目录（旧行为），
+    // 抹字会就地改用户的原图。这一侧必须变红。
+    () async {
+      final old = await ProjectBootstrap.create(
+        projectsRoot: projects,
+        name: 'FxNoCopy',
+        plan: plan,
+        copySources: false,
+      );
+      final loaded = await TranslationProjectIo.load(old.jsonFile);
+      return _directoryIsOwnCopy(loaded, old.sourceRoot, downloads);
+    },
+    () => 'directory=${reloaded?.directory} sourceRoot=${created.sourceRoot} '
+        'workspace=${reloaded?.workspace} root=${created.root}',
+  );
+
+  // ── 3c · 既有工程的原图副本化（§4.1 · P1「全部迁移」的既有工程那一半）────
+  //
+  // 🔴 `MDGH-ch1` 这种**在改动之前建的**工程，json 的 `directory` 仍然指着下载
+  // 目录 —— 而那是用户唯一一份原图。`migrateSources` 把它复制进来再改
+  // `directory`。夹具在**收集期**快照三个状态（迁移前 / 迁移后 / 再迁一次），
+  // 因为 probe 的 green/red 是在收集之后才依次执行的。
+  final migrateSource = await ProjectBootstrap.create(
+    projectsRoot: projects,
+    name: 'FxMigrate',
+    plan: plan,
+    copySources: false,
+  );
+  final migrationBefore =
+      await TranslationProjectIo.load(migrateSource.jsonFile);
+  final migration = await ProjectBootstrap.migrateSources(
+    jsonFile: migrateSource.jsonFile,
+  );
+  final migrationAgain = await ProjectBootstrap.migrateSources(
+    jsonFile: migrateSource.jsonFile,
+  );
+  final migrationAfter =
+      await TranslationProjectIo.load(migrateSource.jsonFile);
+
+  probe(
+    'migrate.copies_then_rewrites_directory',
+    () async =>
+        migration.ok &&
+        migration.wroteJson &&
+        !migration.alreadyMigrated &&
+        migration.copied.length == plan.pageKeys.length &&
+        migration.missing.isEmpty &&
+        _hasOwnSourceCopy(migrationAfter, downloads),
+    // 故障：拿"迁移之前"的工程跑同一条判据 —— `directory` 还指着下载目录，
+    // 一副"没问题"的样子，而抹字会就地改用户的原图。
+    () async => _hasOwnSourceCopy(migrationBefore, downloads),
+    () => 'before=${migrationBefore.directory} '
+        'after=${migrationAfter.directory} '
+        'copied=${migration.copied.length}/${plan.pageKeys.length} '
+        'missing=${migration.missing.join(',')} '
+        'wroteJson=${migration.wroteJson}',
+  );
+
+  probe(
+    'migrate.is_idempotent',
+    () async =>
+        migrationAgain.ok &&
+        migrationAgain.alreadyMigrated &&
+        !migrationAgain.wroteJson &&
+        _sameList(migrationAgain.missing, const <String>[]),
+    // 故障：第一次迁移（它**应当**写 json）—— 判据必须在这一侧变红。
+    () async =>
+        migration.ok && migration.alreadyMigrated && !migration.wroteJson,
+    () => 'again.alreadyMigrated=${migrationAgain.alreadyMigrated} '
+        'again.wroteJson=${migrationAgain.wroteJson} '
+        'again.copied=${migrationAgain.copied.length}',
+  );
+
+  probe(
+    'migrate.downloads_still_untouched',
+    () async => _sameInventory(_inventory(downloads), inventoryBefore),
+    // 故障：真往 downloads 里塞一个文件 —— 复制读的是它，绝不能写它。
+    () async {
+      final stray = File('$comicDir/$chapter/stray2.json');
+      await stray.writeAsString('{}');
+      final result = _sameInventory(_inventory(downloads), inventoryBefore);
+      await stray.delete();
+      return result;
+    },
+    () => '${inventoryBefore.length} file(s) under downloads',
   );
 
   probe(
@@ -480,6 +592,205 @@ Future<void> _run(CheckSink check, String baseInput) async {
     () async => ['ch1/1.webp', 'ch1/notes.txt']
         .every(TranslationProject.isImagePage),
     () => 'pageOrder=${reloaded?.pageOrder.join(', ') ?? '(null)'}',
+  );
+
+  // ── 5 · 产物对账表（P10.15 §3.1-B · 序1） ──────────────────────────────
+  //
+  // 🔴 本组断言存在的**唯一**理由：S9.5-a 那个「78 页 inpainted 有 / mask 无」
+  // 在磁盘上要一页一页 `ls` 才看得出来，而且"缺"有好几种原因（本来就没字 /
+  // 没有译文 / 超解码预算 / 真的丢了）—— 光看有没有文件**分不出**是哪一种。
+  // 分不出就等于静默。这里把"分得出"这件事钉住。
+  //
+  // 夹具：把 P3Fixture 的 7 页分别摆成七种状态中的一种（见下面每个 probe 的
+  // 注释）。页面状态在**收集期**摆好（probe 的 green/red 在收集之后才依次
+  // 执行），所以断言之间不会互相污染。
+  final reconcileRoot = '$base/reconcile';
+  // 🔴 用 `copy()`（深拷贝 raw）而不是直接改 `reloaded`：本组夹具要往
+  // `image_info` 里塞一个超预算的尺寸，而 `reload_matches_plan` 那条断言
+  // 逐页核对 `image_info` —— 改原对象会把它打红，报错点离原因很远。
+  final reconcileProject = reloaded?.copy();
+  if (reconcileProject != null) {
+    // 1.webp：有译文、底图和成品都没有 ⇒ base-missing（这就是那 78 页）
+    _addBlock(reconcileProject, 'ch1/1.webp', translated: true);
+    // 2.webp：有译文、底图在、成品缺 ⇒ result-missing
+    _addBlock(reconcileProject, 'ch1/2.webp', translated: true);
+    // 3.png：有译文、三样齐全 ⇒ ok
+    _addBlock(reconcileProject, 'ch1/3.png', translated: true);
+    // 4.jpg：有块、没有译文 ⇒ no-translation（刚检测完还没翻）
+    _addBlock(reconcileProject, 'ch1/4.jpg', translated: false);
+    // 5.gif / 9.webp：一个块都没有 ⇒ no-blocks（按设计不产产物）
+    // 10.webp：有译文，但 `image_info` 超过解码预算 ⇒ downscaled
+    _addBlock(reconcileProject, 'ch1/10.webp', translated: true);
+
+    for (final key in const ['ch1/2.webp', 'ch1/3.png']) {
+      for (final kind in const ['mask', 'inpainted']) {
+        await _write(
+          reconcileProject.artifactPath(kind, key),
+          const [0x89, 0x50, 0x4E, 0x47],
+        );
+      }
+    }
+    await _write(
+      reconcileProject.artifactPath('result', 'ch1/3.png'),
+      const [0x89, 0x50, 0x4E, 0x47],
+    );
+    // 超过 12MP 的行程：9000×9000 = 81MP。
+    final info = reconcileProject.imageInfo;
+    if (info['ch1/10.webp'] is Map) {
+      (info['ch1/10.webp'] as Map)['width'] = 9000;
+      (info['ch1/10.webp'] as Map)['height'] = 9000;
+    }
+  }
+
+  String? reasonOf(String pageKey) {
+    final project = reconcileProject;
+    if (project == null) return null;
+    return ArtifactReconciliation.statusFor(project, pageKey).reason;
+  }
+
+  probe(
+    'reconcile.blank_page_is_not_a_gap',
+    () async => reasonOf('ch1/5.gif') == 'no-blocks',
+    // 故障：把"无字页"记成缺底图。这正是 S9.5-a 里 13 页无字页被数成缺口的
+    // 那个误判 —— 判据必须在这里变红。
+    () async => reasonOf('ch1/5.gif') == 'base-missing',
+    () => '绿=没有任何块的页记 no-blocks（按设计不产产物）/ '
+        '故障=记成 base-missing（13 页无字页会被误报成缺口）',
+  );
+
+  probe(
+    'reconcile.untranslated_page_is_not_a_gap',
+    () async => reasonOf('ch1/4.jpg') == 'no-translation',
+    // 🔴 故障：与上一条**只差一个顺序**。`_reasonFor` 里 `no-translation`
+    // 必须排在 `base-missing` 前面（底图只对**有译文**的页产出），写反了
+    // 会把"刚检测完、还没翻译"的整片页报成缺口。
+    () async => reasonOf('ch1/4.jpg') == 'base-missing',
+    () => '🔴 绿=有块但没译文的页记 no-translation / '
+        '故障=记成 base-missing —— 判序写反会让"刚检测完还没翻"的页整片报缺',
+  );
+
+  probe(
+    'reconcile.missing_bases_are_reported',
+    () async => reasonOf('ch1/1.webp') == 'base-missing',
+    // 故障：拿产物**齐全**的页去跑同一条判据 —— 它不该被判成缺口。
+    () async => reasonOf('ch1/3.png') == 'base-missing',
+    () => '绿=有译文但底图缺 → base-missing（78 页那种缺口在这里可断言）/ '
+        '故障=产物齐全的页也被记成缺口',
+  );
+
+  probe(
+    'reconcile.missing_result_is_a_separate_gap',
+    () async => reasonOf('ch1/2.webp') == 'result-missing',
+    () async => reasonOf('ch1/3.png') == 'result-missing',
+    () => '绿=底图在、成品缺 → result-missing（与"底图缺"分开）/ '
+        '故障=三样齐全的页也报成品缺',
+  );
+
+  probe(
+    'reconcile.oversized_page_is_not_a_gap',
+    () async => reasonOf('ch1/10.webp') == 'downscaled',
+    // 故障：正常尺寸的页也报 downscaled —— 那会把真缺口说成"设计如此"，
+    // 是这条链路最不该出现的一种静默。
+    () async => reasonOf('ch1/3.png') == 'downscaled',
+    () => '绿=超 12MP/8000px 的页记 downscaled（按坐标契约刻意不产出）/ '
+        '故障=正常尺寸的页也报 downscaled（把真缺口说成设计如此）',
+  );
+
+  probe(
+    'reconcile.summary_exposes_the_gap_counts',
+    () async {
+      final project = reconcileProject;
+      if (project == null) return false;
+      // 🔴 **不传 root**：对账表必须能反映**工程自己的产物根**（`workspace`）。
+      // 传一个空目录进去会让每一页都报 base-missing —— 那正是这一条断言在
+      // 防的事（"汇总看不见缺口"的镜像）。
+      final payload = ArtifactReconciliation.build(project);
+      final pages = payload['pages'] as Map?;
+      final summary = payload['summary'] as Map?;
+      if (pages == null || summary == null) return false;
+      final reasons = {
+        for (final entry in pages.values) (entry as Map)['reason'],
+      };
+      // 逐页的 every reason 都必须在 published 名单里（下游要能穷举 switch），
+      // 且汇总计数必须能从逐页结果**推出来** —— 两者不一致就是一张会撒谎的
+      // 对账表。
+      var tallied = 0;
+      for (final reason in ArtifactReconciliation.reasons) {
+        tallied += ((summary[reason] as num?) ?? 0).toInt();
+      }
+      return pages.length == 7 &&
+          summary['pages'] == 7 &&
+          tallied == pages.length &&
+          reasons.every(ArtifactReconciliation.reasons.contains) &&
+          summary['base-missing'] == 1 &&
+          summary['result-missing'] == 1 &&
+          summary['no-blocks'] == 2 &&
+          summary['no-translation'] == 1 &&
+          summary['downscaled'] == 1 &&
+          summary['ok'] == 1;
+    },
+    // 故障：假装缺口是 0。一张"看不见缺口"的对账表等于没有对账表 ——
+    // 「78 页缺掩膜」会再次变成一件没人看得出来的事。
+    () async {
+      final project = reconcileProject;
+      if (project == null) return true;
+      final summary =
+          ArtifactReconciliation.build(project)['summary'] as Map;
+      return ((summary['base-missing'] as num?) ?? 0).toInt() == 0;
+    },
+    () {
+      final project = reconcileProject;
+      if (project == null) return '(no fixture project)';
+      final summary = ArtifactReconciliation.build(project)['summary'] as Map;
+      return 'summary=$summary';
+    },
+  );
+
+  probe(
+    'reconcile.table_roundtrips_through_the_file',
+    () async {
+      final project = reconcileProject;
+      if (project == null) return false;
+      final file = await ArtifactReconciliation.write(
+        project,
+        root: reconcileRoot,
+      );
+      if (!file.existsSync()) return false;
+      // 落盘后的**文件名**必须能被原样找回来（`pathFor` 是读写两侧唯一的
+      // 命名来源；两侧不一致会让"写了但读不到"看起来像没写过）。
+      //
+      // 🔴 这里**不要**再补 `imgtrans_` 前缀：`jsonFileName` 本身就是
+      // `imgtrans_<工程名>.json`，再补一次会得到 `imgtrans_imgtrans_...`。
+      final expected =
+          '${project.jsonFileName.replaceAll(RegExp(r'\.json$'), '')}'
+          '${ArtifactReconciliation.fileSuffix}';
+      if (!file.path.replaceAll('\\', '/').endsWith(expected)) return false;
+      final payload = ArtifactReconciliation.read(project, root: reconcileRoot);
+      return payload != null && (payload['summary'] as Map?)?['pages'] == 7;
+    },
+    // 故障：读一个**从没写过**的根。它必须返回 null，而不是凭空造一份
+    // "看起来正常"的对账表。
+    () async => ArtifactReconciliation.read(
+          reconcileProject!,
+          root: '$base/never_written',
+        ) !=
+        null,
+    () {
+      final project = reconcileProject;
+      if (project == null) return '(no fixture project)';
+      final path =
+          ArtifactReconciliation.pathFor(project, root: reconcileRoot);
+      final payload = ArtifactReconciliation.read(project, root: reconcileRoot);
+      final expected =
+          '${project.jsonFileName.replaceAll(RegExp(r'\.json$'), '')}'
+          '${ArtifactReconciliation.fileSuffix}';
+      final base = path.replaceAll('\\', '/');
+      return 'path=$path written=${File(path).existsSync()} '
+          'jsonFileName=${project.jsonFileName} expected=$expected '
+          'endsWith=${base.endsWith(expected)} '
+          'readNull=${payload == null} '
+          'summaryPages=${payload?['summary'] is Map ? (payload!['summary'] as Map)['pages'] : '(no summary)'}';
+    },
   );
 
   // 空结果判 FAIL：一条都没定义出来，说明这批断言自己坏了。
@@ -604,24 +915,63 @@ bool _chapterMatches(
   );
 }
 
-bool _noImageAtRoot(String root, ProjectBootstrapPlan plan) {
-  final dir = Directory(root);
-  if (!dir.existsSync()) return false;
-  for (final entity in dir.listSync(followLinks: false)) {
-    if (entity is! File) continue;
-    final name = _basename(entity.path);
-    final dot = name.lastIndexOf('.');
-    if (dot < 0) continue;
-    if (ProjectBootstrap.pageImageExtensions
-        .contains(name.substring(dot).toLowerCase())) {
-      return false; // 原图被复制进来了 —— 这正是要禁止的。
+/// [path] 是否就是 [root]，或落在 [root] 之下（都按同一条归一规则比较）。
+bool _underRoot(String path, String root) {
+  final p = ProjectBootstrap.normalizeDirectoryPath(path).toLowerCase();
+  final r = ProjectBootstrap.normalizeDirectoryPath(root).toLowerCase();
+  if (r.isEmpty) return false;
+  return p == r || p.startsWith('$r/');
+}
+
+/// `plan` 的每一页是否都在 [root] 下、且与 [origin] 里的源**逐字节相同**。
+///
+/// 🔴 比对内容而不是只看"文件在不在"：`copySources` 用 `File.copy` 复制，若
+/// 哪天改成"建空文件占位"，只看存在性的断言会照绿 —— 而空白的原图在工作室里
+/// 就是一片白，比"没有原图"更难发现。
+bool _sourcesCopiedUnder(String root, ProjectBootstrapPlan plan, String origin) {
+  if (plan.pageKeys.isEmpty) return false;
+  for (final key in plan.pageKeys) {
+    final copied = File('$root/$key');
+    if (!copied.existsSync()) return false;
+    final source = File('$origin/$key');
+    if (!source.existsSync()) return false;
+    if (!_sameBytes(copied.readAsBytesSync(), source.readAsBytesSync())) {
+      return false;
     }
   }
-  // 反过来：计划的每一页在源目录里都还在（没被"移动"过来）。
-  for (final key in plan.pageKeys) {
-    if (!File('${plan.comicDirectory}/$key').existsSync()) return false;
-  }
   return true;
+}
+
+/// 工程的 `directory` 是否指向 [expectedSourceRoot]、该目录真实存在，且**不在**
+/// [downloadsRoot] 之下。
+///
+/// 最后一条是这条断言的全部要点：`directory` 一旦落回下载目录，抹字就会就地改
+/// 用户唯一那份原图（P10.15 §4.1）。
+bool _directoryIsOwnCopy(
+  TranslationProject project,
+  String expectedSourceRoot,
+  String downloadsRoot,
+) {
+  final dir =
+      ProjectBootstrap.normalizeDirectoryPath(project.directory).toLowerCase();
+  final expected =
+      ProjectBootstrap.normalizeDirectoryPath(expectedSourceRoot).toLowerCase();
+  if (dir != expected) return false;
+  if (!Directory(project.directory).existsSync()) return false;
+  return !_underRoot(project.directory, downloadsRoot);
+}
+
+/// 工程是否已自带一份**完整**的原图副本（`directory` 不在 downloads 之下，且
+/// 每一页的图都在）。这是 `migrateSources` 迁移前后唯一的分界。
+bool _hasOwnSourceCopy(TranslationProject project, String downloadsRoot) {
+  if (_underRoot(project.directory, downloadsRoot)) return false;
+  if (!Directory(project.directory).existsSync()) return false;
+  final keys = [
+    for (final key in project.pageOrder)
+      if (TranslationProject.isImagePage(key)) key,
+  ];
+  if (keys.isEmpty) return false;
+  return keys.every((key) => File('${project.directory}/$key').existsSync());
 }
 
 bool _artifactDirsExist(String root) {
@@ -662,13 +1012,6 @@ List<String> _inventory(String dir) {
 }
 
 bool _sameInventory(List<String> a, List<String> b) => _sameList(a, b);
-
-/// 目录名/文件名。🔴 见 `A02 §5`：`uri.pathSegments.last` 对目录返回空串。
-String _basename(String path) {
-  final normalized = path.replaceAll('\\', '/');
-  final slash = normalized.lastIndexOf('/');
-  return slash < 0 ? normalized : normalized.substring(slash + 1);
-}
 
 // ---------------------------------------------------------------------------
 // raw 的变异（只用于故障路径）
@@ -717,6 +1060,26 @@ Map<String, Object?> _withImageInfoExtra(
 // ---------------------------------------------------------------------------
 // 文件头夹具
 // ---------------------------------------------------------------------------
+
+/// 往 [pageKey] 塞一个块（可选带译文），用来在夹具里制造"有块 / 有译文"
+/// 两种状态 —— 产物对账表的全部判据都建立在这两个计数上。
+///
+/// 页不在工程里时**静默返回**：夹具摆不出来的话，后面那些断言会因为
+/// `reasonOf` 拿到 `null` 而变红，报错点比在这里抛异常更靠近原因。
+void _addBlock(
+  TranslationProject project,
+  String pageKey, {
+  required bool translated,
+}) {
+  final page = project.pages[pageKey];
+  if (page == null) return;
+  final block = TextBlock.createDefault(rect: IntRect(10, 20, 110, 80));
+  // 原文非空：`no-blocks` 与 `no-translation` 的分界是"有没有块"，
+  // 而块里有没有原文只影响识别阶段，不影响对账。
+  block.sourceText = 'こんにちは';
+  if (translated) block.translation = '你好';
+  page.addBlock(block);
+}
 
 Future<void> _write(String path, List<int> bytes) async {
   final file = File(path);

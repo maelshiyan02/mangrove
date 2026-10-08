@@ -24,6 +24,10 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+// `ReadingDirection` 住在 `balloon_clustering.dart`，而 `run_plan.dart` 只是
+// **import** 它、没有 export ⇒ 这里必须显式 import，否则报的错读起来像
+// "拼错了枚举名"。
+import 'package:mangrove/foundation/image_translation/balloon_clustering.dart';
 import 'package:mangrove/foundation/translation_project/run_plan.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink, tlLiteralKeys;
 
@@ -129,13 +133,19 @@ Future<void> runP5Checks(
 
   // ── 2 · 选择对象 ──────────────────────────────────────────────────────
 
-  StudioRunChoice makeChoice({String sourceLang = 'ja', String targetLang = 'zh'}) {
+  StudioRunChoice makeChoice({String sourceLang = 'ja'}) {
     return StudioRunChoice(
       pages: resolvePageRange(pages, 3, 5),
       sourceLang: sourceLang,
-      targetLang: targetLang,
-      translate: false,
-      rightToLeft: true,
+      targetLang: 'zh',
+      // 三段刻意**不全开**：全开时 `detect`/`recognize`/`translate` 三个
+      // getter 都是 true，`carries` 里任何一个写错了都测不出来。
+      stages: const StudioRunStages(
+        detect: false,
+        recognize: true,
+        translate: false,
+      ),
+      direction: ReadingDirection.leftToRight,
     );
   }
 
@@ -143,8 +153,10 @@ Future<void> runP5Checks(
     final c = makeChoice(sourceLang: sourceLang);
     return c.sourceLang == 'ja' &&
         c.targetLang == 'zh' &&
+        !c.detect &&
+        c.recognize &&
         !c.translate &&
-        c.rightToLeft &&
+        c.direction == ReadingDirection.leftToRight &&
         c.pages.length == 3;
   }
 
@@ -154,7 +166,252 @@ Future<void> runP5Checks(
     // 故障路径 = 换个 sourceLang 建对象，判据必须变红。否则这条是装饰品：
     // "字段被带出来"这件事只有在一个**不同的**输入会把它打红时才被证明。
     () async => carries(sourceLang: 'en'),
-    () => '绿=五个字段原样带出 / 故障=sourceLang 变了判据也变红',
+    () => '绿=语向/三段/方向/页码原样带出 / 故障=sourceLang 变了判据也变红',
+  );
+
+  // ── 2b · 三段工作量与「开始」按钮（P10.15 §4.3 / P3 选项①） ─────────────
+  //
+  // 这一组测的是**唯一的**"该不该放行"判据（`planStudioRun`）。它存在的理由
+  // 是项目硬规矩 3：绝不能"跑了但什么都没发生"却看起来像成功。每条的故障
+  // 路径都拿**同一条判据**去跑一个相反的场景，证明它不是恒真。
+
+  probe(
+    'workload.no_stage_blocks_start',
+    () async =>
+        !planStudioRun(
+          selectedPages: 5,
+          detect: false,
+          recognize: false,
+          translate: false,
+          blocks: 40,
+          unrecognized: 0,
+          untranslated: 0,
+        ).canStart,
+    // 反场景 = 三段全开。若判据恒真（什么都禁），这条会变 true。
+    () async =>
+        !planStudioRun(
+          selectedPages: 5,
+          detect: true,
+          recognize: true,
+          translate: true,
+          blocks: 40,
+          unrecognized: 0,
+          untranslated: 0,
+        ).canStart,
+    () => '绿=三段全关 → 禁用开始 / 故障=连三段全开也禁用（判据恒真）',
+  );
+
+  probe(
+    'workload.detect_runs_on_blank_pages',
+    () async =>
+        planStudioRun(
+          selectedPages: 3,
+          detect: true,
+          recognize: true,
+          translate: false,
+          // 一片空白页：工程里一个块都没有。这正是首次检测的正常起点。
+          blocks: 0,
+          unrecognized: 0,
+          untranslated: 0,
+        ).canStart,
+    // 反场景 = 不勾检测、只勾识别、且工程没有块 ⇒ 必须被拦。
+    // 只证明"检测能开始"不够 —— 还得证明这条判据不会对**所有**输入放行。
+    () async =>
+        planStudioRun(
+          selectedPages: 3,
+          detect: false,
+          recognize: true,
+          translate: false,
+          blocks: 0,
+          unrecognized: 0,
+          untranslated: 0,
+        ).canStart,
+    () => '🔴 绿=空白页也能开始检测 / 故障=拿"当前 0 块"去禁用 —— '
+        '那会让"对新工程做首次检测"这个最正常的用法按不了（§4.3）',
+  );
+
+  probe(
+    'workload.recognize_without_blocks_blocks',
+    () async =>
+        planStudioRun(
+          selectedPages: 3,
+          detect: false,
+          recognize: true,
+          translate: false,
+          blocks: 0,
+          unrecognized: 0,
+          untranslated: 0,
+        ).blockedReason ==
+        nothingToRecognizeCode,
+    // 反场景 = 页上确实有 4 个还没认字的块。同一个不等式必须为假。
+    () async =>
+        planStudioRun(
+          selectedPages: 3,
+          detect: false,
+          recognize: true,
+          translate: false,
+          blocks: 4,
+          unrecognized: 4,
+          untranslated: 0,
+        ).blockedReason ==
+        nothingToRecognizeCode,
+    () => '绿=只勾识别但工程没有块 → 理由码 nothing-to-recognize / '
+        '故障=有 4 个待识别块也报同一个理由码',
+  );
+
+  probe(
+    'workload.translate_without_source_blocks',
+    () async =>
+        planStudioRun(
+          selectedPages: 3,
+          detect: false,
+          recognize: false,
+          translate: true,
+          blocks: 9,
+          // 9 个块**全都**没有原文 ⇒ 翻译阶段无输入。
+          unrecognized: 9,
+          untranslated: 0,
+        ).blockedReason ==
+        nothingToTranslateCode,
+    // 反场景 = 9 个块都有原文、都还没译文。同一个等式必须为假。
+    () async =>
+        planStudioRun(
+          selectedPages: 3,
+          detect: false,
+          recognize: false,
+          translate: true,
+          blocks: 9,
+          unrecognized: 0,
+          untranslated: 9,
+        ).blockedReason ==
+        nothingToTranslateCode,
+    () => '绿=只勾翻译但所有块都没有原文 → 理由码 nothing-to-translate / '
+        '故障=有 9 条可翻却报同一个理由码',
+  );
+
+  probe(
+    'workload.counts_are_clamped_never_thrown',
+    () async {
+      // 统计口径错（unrecognized / untranslated 超过 blocks）时**夹取**而不是
+      // 抛异常：这是弹窗里的实时预览，抛异常等于"打开弹窗就崩"。
+      final w = planStudioRun(
+        selectedPages: 2,
+        detect: false,
+        recognize: true,
+        translate: true,
+        blocks: 3,
+        unrecognized: 99,
+        untranslated: 99,
+      );
+      // 识别 = 夹取后的 3；翻译 = 夹取后的 3 条未译 + 3 条将被识别的 = 6。
+      return w.recognizeBlocks == 3 && w.translateBlocks == 6;
+    },
+    () async =>
+        planStudioRun(
+          selectedPages: 2,
+          detect: false,
+          recognize: true,
+          translate: true,
+          blocks: 3,
+          unrecognized: 99,
+          untranslated: 99,
+        ).recognizeBlocks ==
+        99,
+    () => '绿=越界计数被夹到 blocks 之内 / 故障=原样透出'
+        '（界面会报"识别 99 块"，而工程里一共只有 3 块）',
+  );
+
+  probe(
+    'workload.detect_marks_the_counts_as_a_lower_bound',
+    () async =>
+        planStudioRun(
+          selectedPages: 4,
+          detect: true,
+          recognize: true,
+          translate: true,
+          blocks: 7,
+          unrecognized: 5,
+          untranslated: 2,
+        ).dependsOnDetection,
+    // 反场景 = 不勾检测。此时块数是**精确值**，不该标"下界"。
+    () async =>
+        planStudioRun(
+          selectedPages: 4,
+          detect: false,
+          recognize: true,
+          translate: true,
+          blocks: 7,
+          unrecognized: 5,
+          untranslated: 2,
+        ).dependsOnDetection,
+    () => '绿=检测+识别一起勾时标记"块数只是下界"（新块数取决于检测结果）/ '
+        '故障=不勾检测也标下界（把精确值说成估计值）',
+  );
+
+  probe(
+    'workload.translate_only_does_not_promise_recognition',
+    () async {
+      // 只勾翻译时**不能**把"待识别的块"算进翻译量：那些块没有原文，
+      // 翻译阶段对它们无事可做（`_runBlockStages` 只翻有原文的块）。
+      final w = planStudioRun(
+        selectedPages: 1,
+        detect: false,
+        recognize: false,
+        translate: true,
+        blocks: 5,
+        unrecognized: 5,
+        untranslated: 0,
+      );
+      return w.translateBlocks == 0 && w.detectPages == 0;
+    },
+    () async {
+      final w = planStudioRun(
+        selectedPages: 1,
+        detect: false,
+        recognize: true,
+        translate: true,
+        blocks: 5,
+        unrecognized: 5,
+        untranslated: 0,
+      );
+      // 反场景 = 同时勾识别：此时那 5 块会被识别后再翻 ⇒ 翻译量是 5 而不是 0。
+      return w.translateBlocks == 0;
+    },
+    () => '绿=只勾翻译时"翻译 0 条"（无原文可翻）/ '
+        '故障=把待识别块也算成翻译量（界面报 5 条，实际一条都没翻）',
+  );
+
+  probe(
+    'direction.roundtrips_through_its_name',
+    () async {
+      // §4.4：三个值（右起 / 左起 / 纵向）。少一个就说明三分没做完 ——
+      // 条漫会退回"左起"，界面上看不出任何异常。
+      if (ReadingDirection.values.length != 3) return false;
+      for (final d in ReadingDirection.values) {
+        if (readingDirectionFromName(readingDirectionName(d)) != d) {
+          return false;
+        }
+      }
+      return true;
+    },
+    // 故障路径 = 一个**不存在的**方向名。它必须回落到 null（"存储里没有
+    // 可用的值"），而不是被当成某个方向 —— 后者会让一份手改坏的
+    // `appdata.json` 静默改变聚类方向。
+    () async => readingDirectionFromName('sideways') != null,
+    () => '绿=三个方向各自 name 往返恒等 / '
+        '故障=未知名字被当成某个方向（存储写坏会静默改方向）',
+  );
+
+  probe(
+    'direction.top_to_bottom_is_offered',
+    () async =>
+        readingDirectionFromName('topToBottom') == ReadingDirection.topToBottom,
+    // 反场景 = 拼写近似的另一个名字。`topToBottom` 必须**精确**匹配，模糊
+    // 匹配（比如前缀匹配）会把别的值也吞进来。
+    () async =>
+        readingDirectionFromName('topToBottomX') != null,
+    () => '绿=topToBottom 可往返（条漫不再被静默当成左起）/ '
+        '故障=相似名字也能命中（匹配过宽）',
   );
 
   // ── 3 · 接线（静态扫描，防"改回去了"） ─────────────────────────────────

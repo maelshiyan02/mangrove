@@ -22,6 +22,7 @@ import 'package:mangrove/foundation/image_translation/translation_types.dart';
 import 'package:mangrove/foundation/translation_project/gray_png.dart';
 import 'package:mangrove/foundation/translation_project/mask_producer.dart';
 import 'package:mangrove/foundation/translation_project/studio_block_ops.dart';
+import 'package:mangrove/foundation/translation_project/text_block.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink, tlLiteralKeys;
 
 /// 一张纯色 RGBA 图。像素值按行给出，便于构造"白底 + 黑块"这类最小夹具。
@@ -93,6 +94,8 @@ const _pipelinePath =
     'lib/foundation/image_translation/translation_pipeline.dart';
 const _rendererPath =
     'lib/foundation/translation_project/result_renderer.dart';
+const _studioPipelinePath =
+    'lib/foundation/translation_project/studio_pipeline.dart';
 const _tablePath = 'assets/translation.json';
 
 Future<void> runP7Checks(
@@ -881,6 +884,135 @@ Future<void> runP7Checks(
     // 故障路径：把一个替换字符塞进表里（正是本轮真的踩到的那种损坏）。
     () async => zhCn.values.any((v) => '$v'.contains('�')),
     () => '绿=全表无 U+FFFD / 故障=塞一个替换字符',
+  );
+
+  // ── 7 · 拟声词标记（P10.15 §4.5 · 序6） ───────────────────────────────
+  //
+  // 🔴 这一组钉住的是**判据的窄度**，不是"能识别拟声词"。误标的代价是"一句真
+  // 对白默认不译"（要人点一下才回来），漏标的代价只是"多问一次模型" —— 两者
+  // 不对称，所以每一条断言都在问"它有没有**多标**"。
+
+  probe(
+    'sfx.marks_short_uppercase_latin',
+    // 漫画拟声词的书写惯例是全大写（`BAM` / `SLAM!` / `THUD`）。
+    () async {
+      final sfx = StudioSfxOps.looksLikeSfx;
+      return sfx('BAM', language: 'en') &&
+          sfx('SLAM!', language: 'en') &&
+          sfx('THUD', language: 'en') &&
+          sfx('KRAK', language: 'EN');
+    },
+    // 故障：混合大小写的短对白也被标 —— `No` / `Hi` / `Hello` 是**台词**，
+    // 标了就永久不译。
+    () async {
+      final sfx = StudioSfxOps.looksLikeSfx;
+      return sfx('No', language: 'en') &&
+          sfx('Hi', language: 'en') &&
+          sfx('Hello', language: 'en');
+    },
+    () => '绿=全大写短串判 sfx / 故障=混合大小写的对白也被判 sfx',
+  );
+
+  probe(
+    'sfx.marks_single_syllable_hangul',
+    // 🔴 只收**单音节**：两音节就分不出拟声词与台词（「두근」vs「안녕」字数相同）。
+    () async {
+      final sfx = StudioSfxOps.looksLikeSfx;
+      return sfx('쿵', language: 'ko') &&
+          sfx('쾅', language: 'ko') &&
+          sfx('퍽', language: 'ko');
+    },
+    // 故障：把韩文**台词**也当拟声词（2 音节是这条线上最危险的一档）。
+    () async {
+      final sfx = StudioSfxOps.looksLikeSfx;
+      return sfx('안녕', language: 'ko') ||
+          sfx('두근', language: 'ko') ||
+          sfx('사랑해', language: 'ko');
+    },
+    () => '绿=单音节韩文拟声词 / 故障=2 音节以上的韩文台词被当成拟声词',
+  );
+
+  probe(
+    'sfx.never_marks_a_cjk_source',
+    // 🔴 中日文的短句（「嗯」「你好」）是正常对白；日语拟声词走的是竖排那条
+    // 启发式（§4.5 第一段），不该在这里再抢一次。判据必须**认源语言**。
+    () async {
+      final sfx = StudioSfxOps.looksLikeSfx;
+      return ['你好', '嗯', 'ドン', 'こんにちは', 'SLAM', 'BAM']
+          .every((t) => !sfx(t, language: 'zh') && !sfx(t, language: 'ja'));
+    },
+    // 故障：忽略源语言 ⇒ 中文页上的 `SLAM` 也被标成拟声词。
+    () async => StudioSfxOps.looksLikeSfx('SLAM', language: 'zh'),
+    () => '绿=zh/ja 源一律不标 / 故障=忽略源语言时中文页的 SLAM 被标',
+  );
+
+  probe(
+    'sfx.punctuation_only_is_not_sfx',
+    // `!!` / `???` / `…` 没有可读的字母，标了只会让用户以为这里有东西。
+    () async {
+      final sfx = StudioSfxOps.looksLikeSfx;
+      return ['!!!', '???', '…', '--', '*'].every(
+        (t) => !sfx(t, language: 'en') && !sfx(t, language: 'ko'),
+      );
+    },
+    () async => StudioSfxOps.looksLikeSfx('!!!', language: 'en'),
+    () => '绿=纯符号不判 sfx / 故障=纯符号被判 sfx',
+  );
+
+  probe(
+    'sfx.label_roundtrips_and_starts_unset',
+    // 🔴 [createDefault] 本来就写 `label: null`（FT 的 23 键之一），所以"没被
+    // 标记"与"标记过又清掉"在 json 里是同一个形状 —— 零字节 diff 不受影响。
+    () async {
+      final block = TextBlock.createDefault(rect: IntRect(0, 0, 10, 10));
+      final keyExists = block.raw.containsKey('label');
+      final unset = block.label == null && !StudioSfxOps.isMarkedSfx(block);
+      block.label = StudioSfxOps.label;
+      final marked = StudioSfxOps.isMarkedSfx(block);
+      block.label = null;
+      final cleared = block.label == null &&
+          !StudioSfxOps.isMarkedSfx(block) &&
+          block.raw['label'] == null;
+      return keyExists && unset && marked && cleared;
+    },
+    // 故障：写了标记但读不回来（例如比较时大小写/空白没归一）。
+    () async {
+      final block = TextBlock.createDefault(rect: IntRect(0, 0, 10, 10));
+      block.label = StudioSfxOps.label;
+      return !StudioSfxOps.isMarkedSfx(block);
+    },
+    () => '绿=标记可写可读可清、且键本来就在 / 故障=写完读不回来',
+  );
+
+  probe(
+    'wiring.pipeline_marks_sfx_and_excludes_them_from_the_batch',
+    // 🔴 两件事必须**同时**成立：只打标记不跳过翻译 ⇒ 标记是个没人用的字段；
+    // 只跳过不标记 ⇒ 用户在 json / 界面上看不出为什么这一块没译文。
+    () async {
+      final src = code(_studioPipelinePath);
+      return src.contains('block.label = StudioSfxOps.label') &&
+          RegExp(r'_translate\(\s*sources[\s\S]{0,240}?skip:').hasMatch(src);
+    },
+    // 故障：打了标记但**不**把下标传给翻译批次。
+    () async {
+      final src = code(_studioPipelinePath);
+      return src.contains('block.label = StudioSfxOps.label') &&
+          !RegExp(r'_translate\(\s*sources[\s\S]{0,240}?skip:').hasMatch(src);
+    },
+    () => '绿=建块时打标记 + 翻译批次拿到 skip / 故障=只打标记不跳过',
+  );
+
+  probe(
+    'wiring.studio_batch_also_skips_marked_sfx',
+    // 「只识别/只翻译」那条路（`_runBlockStages`）建块时不经 `runPage`，所以它
+    // 必须自己认标记 —— 否则整章重跑会把上一轮标好的拟声词又翻一遍。
+    () async =>
+        codeHas(_studioPath, 'StudioSfxOps.isMarkedSfx(block)'),
+    // 故障：扫描目标换成面板文件（那里**不应该**有这个判据 —— 单块【翻译】
+    // 是人工动作，必须能盖过标记）。
+    () async =>
+        codeHas(_panelPath, 'StudioSfxOps.isMarkedSfx(block)'),
+    () => '绿=批量翻译那段认标记 / 故障=判据跑到单块按钮那边去了',
   );
 
   // ── 跑 ──────────────────────────────────────────────────────────────

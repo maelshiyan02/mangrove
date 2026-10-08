@@ -1,4 +1,4 @@
-// 工作室「运行自动管线」的确认弹窗（S-N2 · P10.6 §七）。
+// 工作室「运行自动管线」的确认弹窗（S-N2 · P10.6 §七 · P10.15 序4）。
 //
 // 🔴 **为什么要有这个弹窗**：`Run this page` / `Run chapter` 两个按钮此前
 // 直接进 `_runPipeline` —— 整章重跑是"点一下就好几分钟 + 一整个章节的翻译
@@ -6,15 +6,22 @@
 // 语言只能来自全局 `TranslationConfig`，为一个日文工程临时改成日语得先去
 // 设置页改全局，再记得改回来。
 //
-// 因此本弹窗只做两件事：**让人在按下开始之前看清这一轮会做什么**，以及
-// **让语向/阶段在这个运行级别上可覆盖**。
+// 因此本弹窗做三件事：
 //
-// ## 🔴 选择不落盘
+// 1. **让人在按下开始之前看清这一轮会做什么**；
+// 2. **让语向 / 阶段 / 阅读方向在这个运行级别上可覆盖**；
+// 3. 🔴 **算出来并明确告知**：三段（检测 / 识别 / 翻译）各自的工作量实时
+//    统计，组合起来**没有输入**时直接**禁用「开始」**并给出一行原因。
+//    "跑了但什么都没发生"看起来和成功一模一样，那是本项目最忌讳的一类静默。
 //
-// 这里的一切都只作用于本次运行。[StudioRunChoice] 是一份纯数据，调用方
-// 拿它去构造 `StudioRunOptions`；本文件**不碰任何持久化设置** —— 写进设置
-// 会把"为这一本临时改的语言"变成所有漫画的默认（`TranslationConfig` 的
-// 注释里记着 #178 就是这条路径踩出来的）。
+// ## 🔴 本文件不碰持久化
+//
+// 弹窗的一切都只作用于本次运行：[StudioRunChoice] 是一份纯数据，调用方
+// 拿它去构造 `StudioRunOptions`。**"记住上次选择"由 `studio_page.dart`
+// 负责**（写 `appdata.settings.studioRunDefaults`，与 `TranslationConfig`
+// 隔离 —— #178 就是"把为这一本临时改的语言变成全局默认"踩出来的）。
+// `edit-check` 的 `wiring.dialog_does_not_persist` 每次都在核对这条边界，
+// 所以这里连 `appdata` 这个词都不该出现。
 //
 // ## 🔴 文案纪律（P9.3 的教训）
 //
@@ -44,6 +51,7 @@ import 'package:mangrove/components/components.dart';
 // `components.dart` 只是自己 import 了它，**没有**把它 export 出去
 // ⇒ 这里必须显式 import，否则报的错读起来像"拼错了方法名"。
 import 'package:mangrove/foundation/context.dart';
+import 'package:mangrove/foundation/image_translation/balloon_clustering.dart';
 import 'package:mangrove/foundation/translation_project/run_plan.dart';
 import 'package:mangrove/foundation/widget_utils.dart';
 import 'package:mangrove/utils/translations.dart';
@@ -57,8 +65,9 @@ Future<StudioRunChoice?> showStudioRunDialog({
   required int initialEnd,
   required String sourceLang,
   required String targetLang,
-  required bool translate,
-  required bool rightToLeft,
+  required StudioRunStages stages,
+  required ReadingDirection direction,
+  required StudioRunCounts Function(List<String> pages) countsOf,
 }) {
   if (pageKeys.isEmpty) return Future.value(null);
   return showDialog<StudioRunChoice>(
@@ -69,8 +78,9 @@ Future<StudioRunChoice?> showStudioRunDialog({
       initialEnd: initialEnd,
       sourceLang: sourceLang,
       targetLang: targetLang,
-      translate: translate,
-      rightToLeft: rightToLeft,
+      stages: stages,
+      direction: direction,
+      countsOf: countsOf,
     ),
   );
 }
@@ -82,8 +92,9 @@ class _StudioRunDialog extends StatefulWidget {
     required this.initialEnd,
     required this.sourceLang,
     required this.targetLang,
-    required this.translate,
-    required this.rightToLeft,
+    required this.stages,
+    required this.direction,
+    required this.countsOf,
   });
 
   final List<String> pageKeys;
@@ -94,8 +105,11 @@ class _StudioRunDialog extends StatefulWidget {
 
   final String sourceLang;
   final String targetLang;
-  final bool translate;
-  final bool rightToLeft;
+  final StudioRunStages stages;
+  final ReadingDirection direction;
+
+  /// 统计**选中页范围内**的块数，供工作量预估使用。
+  final StudioRunCounts Function(List<String> pages) countsOf;
 
   @override
   State<_StudioRunDialog> createState() => _StudioRunDialogState();
@@ -108,8 +122,8 @@ class _StudioRunDialogState extends State<_StudioRunDialog> {
   late final TextEditingController _endCtl;
   late String _sourceLang;
   late String _targetLang;
-  late bool _translate;
-  late bool _rightToLeft;
+  late StudioRunStages _stages;
+  late ReadingDirection _direction;
 
   int get _total => widget.pageKeys.length;
 
@@ -127,8 +141,8 @@ class _StudioRunDialogState extends State<_StudioRunDialog> {
     _endCtl = TextEditingController(text: '$_end');
     _sourceLang = widget.sourceLang;
     _targetLang = widget.targetLang;
-    _translate = widget.translate;
-    _rightToLeft = widget.rightToLeft;
+    _stages = widget.stages;
+    _direction = widget.direction;
   }
 
   @override
@@ -188,10 +202,25 @@ class _StudioRunDialogState extends State<_StudioRunDialog> {
       ),
       sourceLang: _sourceLang,
       targetLang: _targetLang,
-      translate: _translate,
-      rightToLeft: _rightToLeft,
+      stages: _stages,
+      direction: _direction,
     );
     context.pop(choice);
+  }
+
+  /// 把"不能开始"的原因码翻成一句人话。
+  ///
+  /// 🔴 每个分支都是**字面量挨着 `.tl`** —— 这正是 i18n 扫描看得见的写法。
+  String _blockedText(StudioRunBlockReason reason) {
+    if (reason == noStageCode) return 'Select at least one stage.'.tl;
+    if (reason == noPagesCode) return 'There are no pages in the selected range.'.tl;
+    if (reason == nothingToRecognizeCode) {
+      return 'Nothing to recognize: the selected pages have no blocks waiting for text.'.tl;
+    }
+    if (reason == nothingToTranslateCode) {
+      return 'Nothing to translate: the selected pages have no blocks with source text.'.tl;
+    }
+    return 'Nothing to do: the selected pages have no matching blocks.'.tl;
   }
 
   @override
@@ -230,83 +259,161 @@ class _StudioRunDialogState extends State<_StudioRunDialog> {
         targetLabels.containsKey(_targetLang) ? _targetLang : 'zh';
 
     final selected = resolvePageRange(widget.pageKeys, _start, _end);
+    final counts = widget.countsOf(selected);
+    final workload = planStudioRun(
+      selectedPages: selected.length,
+      detect: _stages.detect,
+      recognize: _stages.recognize,
+      translate: _stages.translate,
+      blocks: counts.blocks,
+      unrecognized: counts.unrecognized,
+      untranslated: counts.untranslated,
+    );
 
     return ContentDialog(
       title: 'Run the pipeline'.tl,
       content: SizedBox(
-        width: 460,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _section('Page range'),
-            const SizedBox(height: 4),
-            if (_total > 1)
-              RangeSlider(
-                min: 1,
-                max: _total.toDouble(),
-                divisions: _total - 1,
-                values: RangeValues(_start.toDouble(), _end.toDouble()),
-                labels: RangeLabels('$_start', '$_end'),
-                onChanged: (values) => _setRange(
-                  values.start.round(),
-                  values.end.round(),
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _section('Page range'),
+              const SizedBox(height: 4),
+              if (_total > 1)
+                RangeSlider(
+                  min: 1,
+                  max: _total.toDouble(),
+                  divisions: _total - 1,
+                  values: RangeValues(_start.toDouble(), _end.toDouble()),
+                  labels: RangeLabels('$_start', '$_end'),
+                  onChanged: (values) => _setRange(
+                    values.start.round(),
+                    values.end.round(),
+                  ),
                 ),
+              Row(
+                children: [
+                  Expanded(child: _pageField('First page', _startCtl)),
+                  const SizedBox(width: 12),
+                  Expanded(child: _pageField('Last page', _endCtl)),
+                ],
               ),
-            Row(
-              children: [
-                Expanded(child: _pageField('First page', _startCtl)),
-                const SizedBox(width: 12),
-                Expanded(child: _pageField('Last page', _endCtl)),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              '@a of @b pages selected'.tlParams({
-                'a': '${selected.length}',
-                'b': '$_total',
-              }),
-              style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
-            ),
-            const Divider(height: 24),
-            _section('Languages'),
-            const SizedBox(height: 4),
-            _dropdownRow('Source language', sourceValue, sourceLabels,
-                (v) => setState(() => _sourceLang = v)),
-            _dropdownRow('Target language', targetValue, targetLabels,
-                (v) => setState(() => _targetLang = v)),
-            const Divider(height: 24),
-            _section('Stages'),
-            SwitchListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: Text('Translate too'.tl, style: ts.s14),
-              subtitle: Text(
-                'Off = detect and read only, so the layout can be checked before spending a translation request.'.tl,
-                style: ts.s12,
+              const SizedBox(height: 6),
+              Text(
+                '@a of @b pages selected'.tlParams({
+                  'a': '${selected.length}',
+                  'b': '$_total',
+                }),
+                style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
               ),
-              value: _translate,
-              onChanged: (v) => setState(() => _translate = v),
-            ),
-            const Divider(height: 24),
-            _section('Reading direction'),
-            SwitchListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: Text('Read right to left'.tl, style: ts.s14),
-              subtitle: Text(
-                'On for Japanese manga. Off for western/vertical-scroll pages.'.tl,
-                style: ts.s12,
+              const Divider(height: 24),
+              _section('Stages'),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 8,
+                children: [
+                  FilterChip(
+                    label: Text('Detect'.tl),
+                    selected: _stages.detect,
+                    onSelected: (on) =>
+                        setState(() => _stages = _stages.copyWith(detect: on)),
+                  ),
+                  FilterChip(
+                    label: Text('Recognize'.tl),
+                    selected: _stages.recognize,
+                    onSelected: (on) => setState(
+                      () => _stages = _stages.copyWith(recognize: on),
+                    ),
+                  ),
+                  FilterChip(
+                    label: Text('Translate'.tl),
+                    selected: _stages.translate,
+                    onSelected: (on) => setState(
+                      () => _stages = _stages.copyWith(translate: on),
+                    ),
+                  ),
+                ],
               ),
-              value: _rightToLeft,
-              onChanged: (v) => setState(() => _rightToLeft = v),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'These choices apply to this run only. Nothing is saved.'.tl,
-              style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
-            ),
-          ],
+              const SizedBox(height: 6),
+              Text(
+                'Stages run in order: detect, then recognize, then translate.'.tl,
+                style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Detect @a pages, recognize @b blocks, translate @c items'.tlParams({
+                  'a': '${workload.detectPages}',
+                  'b': '${workload.recognizeBlocks}',
+                  'c': '${workload.translateBlocks}',
+                }),
+                style: ts.s14,
+              ),
+              if (workload.dependsOnDetection)
+                Text(
+                  'The block counts are a lower bound: new blocks depend on the detection result.'.tl,
+                  style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              if (!workload.canStart)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    _blockedText(workload.blockedReason!),
+                    style: ts.s12.copyWith(color: scheme.error),
+                  ),
+                ),
+              const Divider(height: 24),
+              _section('Languages'),
+              const SizedBox(height: 4),
+              _dropdownRow('Source language', sourceValue, sourceLabels,
+                  (v) => setState(() => _sourceLang = v)),
+              _dropdownRow('Target language', targetValue, targetLabels,
+                  (v) => setState(() => _targetLang = v)),
+              const Divider(height: 24),
+              _section('Reading direction'),
+              Wrap(
+                spacing: 8,
+                children: [
+                  // 🔴 用 ChoiceChip 而不是 RadioListTile：一是与上面的三段
+                  // 选择同一套交互（点一下就是选中，不需要额外说明），二是
+                  // `RadioListTile.groupValue/onChanged` 在新 Flutter 上已废弃，
+                  // 留着会在 analyze 里持续报 deprecation。
+                  ChoiceChip(
+                    label: Text('Right to left'.tl),
+                    selected: _direction == ReadingDirection.rightToLeft,
+                    onSelected: (_) => setState(
+                      () => _direction = ReadingDirection.rightToLeft,
+                    ),
+                  ),
+                  ChoiceChip(
+                    label: Text('Left to right'.tl),
+                    selected: _direction == ReadingDirection.leftToRight,
+                    onSelected: (_) => setState(
+                      () => _direction = ReadingDirection.leftToRight,
+                    ),
+                  ),
+                  ChoiceChip(
+                    label: Text('Top to bottom'.tl),
+                    selected: _direction == ReadingDirection.topToBottom,
+                    onSelected: (_) => setState(
+                      () => _direction = ReadingDirection.topToBottom,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Right to left for Japanese manga, left to right for western page manga, top to bottom for webtoons.'.tl,
+                style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Stages, languages and reading direction are remembered for the next run. The page range is not.'.tl,
+                style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
         ),
       ),
       actions: [
@@ -315,7 +422,7 @@ class _StudioRunDialogState extends State<_StudioRunDialog> {
           child: Text('Cancel'.tl),
         ),
         FilledButton.icon(
-          onPressed: _confirm,
+          onPressed: workload.canStart ? _confirm : null,
           icon: const Icon(Icons.play_arrow, size: 18),
           label: Text('Start'.tl),
         ),

@@ -9,6 +9,29 @@ import 'package:mangrove/foundation/bundled_fonts.dart';
 
 import 'block_resize_geometry.dart';
 
+// ── P10.15 序2: 与产出渲染器**同一组**字号常量 ──────────────────────────────
+//
+// `page_renderer` 的同名常量住在它自己的库里（那条路径刻意不依赖 Flutter
+// 之外的东西），所以这里只能各有一份 —— 改动其一必须同步另一份。数值漂移
+// 的后果不是报错，而是"预览和成品不一样"，正是
+// `font.preview_matches_output` 那条断言在防的静默漂移。
+
+/// Mirrors `page_renderer._minGlyphSize` — the smallest fitted glyph size.
+const double _minGlyphSize = 4.0;
+
+/// Mirrors `page_renderer._minLayoutWidth` — the narrowest layout width.
+///
+/// `TextPainter.width` reports the layout constraint, so the fit test must
+/// compare against this rather than the caller's box.
+const double _minLayoutWidth = 8.0;
+
+/// **Preview-only** legibility floor, in canvas logical pixels.
+///
+/// The renderer has its own floor; this one exists so that a box only a few
+/// screen pixels wide still shows something rather than a smudge. It is
+/// deliberately not mirrored in the renderer.
+const double _minCanvasFontSize = 6.0;
+
 /// A decoded page plus the natural size its block coordinates refer to.
 ///
 /// FT stores `xyxy` in the **source image's** resolution, while the canvas may
@@ -105,6 +128,7 @@ class CanvasTextBlock {
     required this.vertical,
     required this.foreground,
     required this.hasFormat,
+    this.lineHeight = 0,
     this.strokeColor,
     this.strokeWidth = 0,
     this.letterSpacing,
@@ -128,6 +152,16 @@ class CanvasTextBlock {
 
   /// Font size in pixels, FT's unit.
   final double fontSize;
+
+  /// FT's `_detected_font_size`: the height the **original lettering** measured,
+  /// in source pixels (0 = unknown).
+  ///
+  /// 🔴 P10.15 序2：it exists so the canvas can cap the fitted size the same way
+  /// the product renderer does (`page_renderer._fitFontSize` reads the region's
+  /// `lineHeight`, which is exactly this number). Without it the canvas had no
+  /// source-scale anchor at all and simply drew `fontSize × fit`, which is how
+  /// the preview ended up with lettering twice the size of the exported page.
+  final double lineHeight;
 
   final int fontWeight;
   final int alignment;
@@ -197,6 +231,7 @@ class CanvasTextBlock {
     vertical: vertical,
     foreground: foreground,
     hasFormat: hasFormat,
+    lineHeight: lineHeight,
     strokeColor: strokeColor,
     strokeWidth: strokeWidth,
     letterSpacing: letterSpacing,
@@ -507,9 +542,6 @@ class PageCanvasPainter extends CustomPainter {
   void _paintText(Canvas canvas, CanvasTextBlock block, Rect rect, bool selected) {
     final text = block.displayText;
     if (text.isEmpty) return;
-    // FT stores px; the canvas is a scaled view of the page.
-    final fontSize = math.max(6.0, block.fontSize * fit);
-    if (fontSize < 4) return;
     final lineHeight = block.lineSpacing ?? 1.15;
     final base = block.hasTranslation ? block.foreground : untranslated;
     final alpha = block.opacity.clamp(0.0, 1.0).toDouble();
@@ -519,11 +551,8 @@ class PageCanvasPainter extends CustomPainter {
       2 => TextAlign.right,
       _ => TextAlign.left,
     };
-    // FT's `letter_spacing` is a multiplier on the font's natural spacing, not
-    // a pixel count, so it is converted to logical pixels at this font size.
-    final letterSpacing = ((block.letterSpacing ?? 1.0) - 1.0) * fontSize;
 
-    TextStyle style({Paint? foreground}) => TextStyle(
+    TextStyle styleFor(double size, {Paint? foreground}) => TextStyle(
       // 🔴 P1-4: go through [resolveFamily] exactly like the product renderer
       // (`page_renderer._fillStyle`). Passing the raw value made the canvas
       // preview disagree with the exported page for every project whose
@@ -539,36 +568,65 @@ class PageCanvasPainter extends CustomPainter {
       // exported page disagree for Korean/Hanja text, which is precisely the
       // class of silent drift `font.preview_matches_output` guards.
       fontFamilyFallback: bundledFamilyFallbacks(block.fontFamily),
-      fontSize: fontSize,
+      fontSize: size,
       fontWeight: _weight(block.fontWeight),
       color: foreground == null ? fill : null,
       foreground: foreground,
       height: lineHeight,
-      letterSpacing: letterSpacing,
+      // FT's `letter_spacing` is a multiplier on the font's natural spacing, not
+      // a pixel count, so it is converted to logical pixels at this font size.
+      letterSpacing: ((block.letterSpacing ?? 1.0) - 1.0) * size,
     );
 
-    TextPainter build(TextStyle textStyle) => TextPainter(
-      text: TextSpan(text: text, style: textStyle),
-      textDirection: TextDirection.ltr,
-      textAlign: textAlign,
-      maxLines: math.max(1, (rect.height / (fontSize * lineHeight)).floor()),
-      ellipsis: '…',
-    )..layout(maxWidth: rect.width);
+    TextPainter build(
+      double size,
+      TextStyle textStyle, {
+      required double maxWidth,
+    }) =>
+        TextPainter(
+          text: TextSpan(text: text, style: textStyle),
+          textDirection: TextDirection.ltr,
+          textAlign: textAlign,
+        )..layout(maxWidth: math.max(_minLayoutWidth, maxWidth));
+
+    // 🔴 P10.15 序2: the size is fitted by **the same rule the product renderer
+    // uses** (`page_renderer._fitFontSize`), and the fit runs in **source
+    // pixels** (`block.rect`) so the absolute cap (42) and floor (4) mean the
+    // same thing on both sides. It used to be `block.fontSize * fit` — an
+    // unbounded size — which drew lettering larger than its box and then hid the
+    // overflow behind a single-line `…` (the "…" in the S9.5-a screenshot was
+    // the canvas's own ellipsis, not the translation).
+    final fitted = _fitFontSize(
+      text: text,
+      boxWidth: block.rect.width,
+      boxHeight: block.rect.height,
+      lineHeight: block.lineHeight,
+      maxFontSize: block.hasFormat && block.fontSize > 0 ? block.fontSize : null,
+      build: build,
+      styleFor: styleFor,
+    );
+    // Back to canvas pixels for drawing. The floor is a preview-only
+    // legibility affordance and is deliberately **not** mirrored in the
+    // renderer, which has its own floor.
+    final fontSize = math.max(_minCanvasFontSize, fitted * fit);
 
     final stroke = block.strokeColor;
     TextPainter? outline;
     if (stroke != null && block.strokeWidth > 0) {
       outline = build(
-        style(
+        fontSize,
+        styleFor(
+          fontSize,
           foreground: Paint()
             ..style = PaintingStyle.stroke
             ..strokeWidth = block.strokeWidth * fit
             ..strokeJoin = StrokeJoin.round
             ..color = stroke.withValues(alpha: stroke.a * alpha),
         ),
+        maxWidth: rect.width,
       );
     }
-    final painter = build(style());
+    final painter = build(fontSize, styleFor(fontSize), maxWidth: rect.width);
 
     canvas.save();
     // `angle` is FT's per-block rotation. A rotated block used to be drawn
@@ -596,6 +654,53 @@ class PageCanvasPainter extends CustomPainter {
     // square handles and — unlike this marker — is not skipped when the block
     // has no text yet (this method returns early for empty text, which is
     // exactly the state of a block the user just created).
+  }
+
+  /// Largest font size whose wrapped layout fits a `boxWidth × boxHeight` box.
+  ///
+  /// 🔴 **A deliberate mirror of `page_renderer._fitFontSize`** — the two render
+  /// paths share no code (the renderer is `dart:ui`-only on purpose), so the rule
+  /// has to be kept in step by hand. That is the same discipline
+  /// `font.preview_matches_output` exists to guard: preview and product must
+  /// agree, and nothing at runtime compares them.
+  ///
+  /// The cap is the **tighter** of "the source lettering" (`lineHeight`, FT's
+  /// `_detected_font_size`) and "what the user asked for" (`maxFontSize`, FT's
+  /// `font_size`) — and it is a **cap, never a floor**: the shrink-to-fit loop
+  /// below must still be able to go smaller, or a 40px request inside a 20px box
+  /// would overflow the bubble.
+  static double _fitFontSize({
+    required String text,
+    required double boxWidth,
+    required double boxHeight,
+    required double lineHeight,
+    required double? maxFontSize,
+    required TextPainter Function(
+      double size,
+      TextStyle style, {
+      required double maxWidth,
+    })
+    build,
+    required TextStyle Function(double size, {Paint? foreground}) styleFor,
+  }) {
+    var cap = 42.0;
+    if (lineHeight > 0) {
+      cap = math.min(cap, math.max(10.0, lineHeight * 0.9));
+    }
+    if (maxFontSize != null && maxFontSize > 0) {
+      cap = math.min(cap, maxFontSize);
+    }
+    final upper = math.max(10.0, math.min(cap, boxHeight * 0.8));
+    final layoutWidth = math.max(_minLayoutWidth, boxWidth);
+    var size = upper;
+    while (size > _minGlyphSize) {
+      final painter = build(size, styleFor(size), maxWidth: boxWidth);
+      final fits = painter.height <= boxHeight && painter.width <= layoutWidth;
+      painter.dispose();
+      if (fits) return size;
+      size *= 0.8;
+    }
+    return _minGlyphSize;
   }
 
   static FontWeight _weight(int value) => switch (value) {

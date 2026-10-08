@@ -227,17 +227,22 @@ class BtProjectManager extends ChangeNotifier {
     return null;
   }
 
-  /// 从一本**已下载的漫画**开一个工作室工程（**原图不复制**）。
+  /// 从一本**已下载的漫画**开一个工作室工程（**原图复制进 `source/`**）。
   ///
   /// 补的是 `P6 §4.10.2` 表 #3 记下的产品缺口：此前本类只有 `ensureProject`
   /// / `scan`，`ProjectWriter.adopt` 只被 validator 调用，用户在 GUI 里想给
   /// 一本下好的漫画开工程没有路径 —— 整章载体只能靠离线脚本
   /// `tools/_make_chapter_carrier.py` 生成。
   ///
-  /// 三条硬约束（与那个离线脚本同源，详见 `ProjectBootstrap`）：
-  /// 1. 原图不复制 —— `directory` 指向 `downloads/<漫画>`；
+  /// 三条硬约束（详见 `ProjectBootstrap`）：
+  /// 1. **原图复制进 `<工程根>/source/`**，`directory` 指向副本（P10.15 §4.1 ·
+  ///    P1 选项②）—— 抹字是**破坏性**的（`TextInpainter.erase` 就地改像素），
+  ///    底图若取 `downloads/` 里唯一那份原图，一次逻辑错就是**擦掉用户的原
+  ///    图**。复制把这条风险从"数据丢失"降为"重跑一次"，代价是磁盘；
   /// 2. 产物绝不进 `downloads/` —— 由 `ProjectBootstrap.validate` 硬挡；
   /// 3. json 只写实测字段，**不写 `workspace` 键**。
+  ///
+  /// 🔴 `downloads/` 由此降级为**只读保底**：翻译链路不再写它。
   ///
   /// 返回 `null` 表示拿不到工程根（本地库未初始化且没配 `btProjectRoot`）。
   /// [result.error] 非 null 表示被红线或"已存在"挡下了，此时 [result.created]
