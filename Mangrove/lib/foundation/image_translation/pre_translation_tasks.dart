@@ -129,6 +129,7 @@ class PreTranslationTask {
     this.studio = false,
     this.studioJsonPath,
     this.studioChapter,
+    this.studioGroup = '',
   });
 
   final String id;
@@ -159,6 +160,16 @@ class PreTranslationTask {
 
   /// 章节目录前缀（`'1 [Asura Scans]'`；无章节的漫画是空串）。
   final String? studioChapter;
+
+  /// 这一章所属的**翻译组**（术语表的 group 段）。
+  ///
+  /// 非版本化源恒为空串，行为与"没有这个字段"完全一致。
+  ///
+  /// 🔴 为什么存下来而不是跑的时候现算：算它要原漫画的 `ComicChapters`
+  /// （`versionEntryOf(eid)`），而任务里存的是**章节目录名**、不是 `eid`；靠目录
+  /// 名字反查 eid 又是一次猜测。入队那一刻手里正好有全部信息，存一个字符串
+  /// 比在跑的时候再猜一次便宜得多 —— 而且跨重启后猜错是没有声音的。
+  final String studioGroup;
 
   String get comicKey => '$cid@$sourceKey';
 
@@ -211,6 +222,7 @@ class PreTranslationTask {
     if (studio) 'studio': true,
     if (studioJsonPath != null) 'studioJsonPath': studioJsonPath,
     if (studioChapter != null) 'studioChapter': studioChapter,
+    if (studioGroup.isNotEmpty) 'studioGroup': studioGroup,
   };
 
   factory PreTranslationTask.fromJson(Map<String, dynamic> json) {
@@ -238,6 +250,8 @@ class PreTranslationTask {
       studio: json['studio'] == true,
       studioJsonPath: json['studioJsonPath']?.toString(),
       studioChapter: json['studioChapter']?.toString(),
+      // 老记录没有这个键 ⇒ 空串（共用层），正是引入 group 之前的行为。
+      studioGroup: json['studioGroup']?.toString() ?? '',
     );
   }
 }
@@ -469,6 +483,7 @@ class PreTranslationTaskManager with ChangeNotifier {
     required String chapterEid,
     required String chapterTitle,
     required String chapterPrefix,
+    String group = '',
     String cover = '',
   }) {
     if (jsonPath.isEmpty) return null;
@@ -490,6 +505,7 @@ class PreTranslationTaskManager with ChangeNotifier {
       studio: true,
       studioJsonPath: jsonPath,
       studioChapter: chapterPrefix,
+      studioGroup: group,
     );
     currentTasks.insert(0, task);
     _saveActive();

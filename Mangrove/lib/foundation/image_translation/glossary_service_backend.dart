@@ -9,8 +9,10 @@
 // * 这里是旧引擎的**适配层**，S9.5-b 下线旧引擎时它跟着一起删；而编辑器本身
 //   与 `StoreGlossaryBackend`（工作室）都留在原地不动。
 //
-// scope 仍是 `cid@sourceKey`（一本漫画的不同来源各一份），与 `GlossaryStore`
-// 里的工作室 scope（`comicId`）在同一个 map 里并存、互不干扰。
+// scope 是 `cid@sourceKey`（一本漫画的不同来源各一份）—— 与工作室那一侧
+// **同一个 scope**（工作室经绑定表反查回来）。这个后端不带 `group`，落在共用层：
+// 阅读器没有"当前是哪一章"的上下文，而人工确认过的名字本就该对整本漫画生效
+// （`glossary_scope.dart` 的 `glossaryEntryApplies`）。
 
 import 'package:mangrove/foundation/image_translation/llm_translator.dart';
 import 'package:mangrove/foundation/image_translation/translation_service.dart';

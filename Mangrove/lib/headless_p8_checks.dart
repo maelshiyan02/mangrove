@@ -282,6 +282,92 @@ void runP8Checks(
     () => '绿=写-读往返一致 / 故障=只留 json 键时读回来是 null',
   );
 
+  probe(
+    'binding_carries_the_origin_identity',
+    // 工作室手里只有工程 id（`bt_<hash>`），术语表的 scope 只能经绑定表反查回来。
+    // 丢了这两个字段，工作室会回落成 `comicId` —— 而**一个工程 = 一章** ⇒ 同一本
+    // 漫画的 20 章各有一份互不相通的术语表，界面上完全看不出来。
+    () {
+      final table = StudioReaderBindings();
+      table.put(
+        'c1@s1@e1',
+        const StudioReaderBinding(
+          jsonPath: '/p/imgtrans_p.json',
+          comicDirectory: '/d/c',
+          projectDirectory: '/p/source',
+          originScope: 'c1@s1',
+          group: 'Asura Scans',
+        ),
+      );
+      // 走一遍 json：表里存的就是 json，内存里对得上不代表盘上对得上。
+      final read = StudioReaderBindings.from(table.toJson())['c1@s1@e1'];
+      return read != null &&
+          read.originScope == 'c1@s1' &&
+          read.group == 'Asura Scans';
+    },
+    // 故障 = 写回时漏掉这两个键的那一版（读回来是空串 ⇒ 反查失效）。
+    () {
+      final read = StudioReaderBindings.from({
+        'c1@s1@e1': const {
+          'json': '/p/imgtrans_p.json',
+          'comicDirectory': '/d/c',
+          'projectDirectory': '/p/source',
+        },
+      })['c1@s1@e1'];
+      return read != null &&
+          read.originScope == 'c1@s1' &&
+          read.group == 'Asura Scans';
+    },
+    () => '绿=来源身份写-读往返一致 / 故障=漏写时读回来是空串',
+  );
+
+  probe(
+    'legacy_binding_without_the_origin_still_parses',
+    // 🔴 加字段不得让老条目整条作废：整条作废会让阅读器**读不到产物** —— 比
+    // "术语表回落成 comicId"严重得多。
+    () {
+      final read = StudioReaderBinding.fromJson({
+        'json': '/p/imgtrans_p.json',
+        'comicDirectory': '/d/c',
+      });
+      return read != null && read.originScope.isEmpty && read.group.isEmpty;
+    },
+    // 故障 = 把"来源身份"也当成必填字段的那一版解析。
+    () => _strictBinding({
+          'json': '/p/imgtrans_p.json',
+          'comicDirectory': '/d/c',
+        }) !=
+        null,
+    () => '绿=老绑定照旧可读（来源为空）/ 故障=把新字段当必填时会整条作废',
+  );
+
+  probe(
+    'reverse_lookup_ignores_path_shape',
+    // 写绑定那边是 `Directory` 拼出来的，工作室那边是 `File.path` —— 两者可能差
+    // 一个斜杠方向或盘符大小写。"差一点就算不上"的后果是术语表**静默**回落。
+    () {
+      final table = StudioReaderBindings();
+      table.put(
+        'c1@s1@e1',
+        const StudioReaderBinding(
+          jsonPath: r'D:\Mangrove_Windows\p\imgtrans_p.json',
+          comicDirectory: '/d/c',
+          projectDirectory: '/p/source',
+          originScope: 'c1@s1',
+        ),
+      );
+      final hit = table.forJsonPath('d:/mangrove_windows/p/imgtrans_p.json');
+      return hit?.originScope == 'c1@s1';
+    },
+    // 故障 = 拿路径直接做字符串比较（形状不同就查不到）。
+    () {
+      const stored = r'D:\Mangrove_Windows\p\imgtrans_p.json';
+      const asked = 'd:/mangrove_windows/p/imgtrans_p.json';
+      return stored == asked;
+    },
+    () => '绿=反查容忍斜杠/大小写 / 故障=直接字符串比较时查不到',
+  );
+
   // ── 4 · 还要跑哪些页 ────────────────────────────────────────────────
 
   probe(
@@ -671,6 +757,20 @@ StudioReaderBinding? _lenientBinding(Object? raw) {
     jsonPath: raw['json']?.toString() ?? '',
     comicDirectory: raw['comicDirectory']?.toString() ?? '',
     projectDirectory: raw['projectDirectory']?.toString() ?? '',
+  );
+}
+
+/// 把"来源身份"也当成必填字段的那一版解析 —— 老绑定会被它整条作废。
+StudioReaderBinding? _strictBinding(Map<String, Object?> raw) {
+  final json = raw['json']?.toString().trim() ?? '';
+  final comic = raw['comicDirectory']?.toString().trim() ?? '';
+  final origin = raw['originScope']?.toString().trim() ?? '';
+  if (json.isEmpty || comic.isEmpty || origin.isEmpty) return null;
+  return StudioReaderBinding(
+    jsonPath: json,
+    comicDirectory: comic,
+    projectDirectory: '',
+    originScope: origin,
   );
 }
 

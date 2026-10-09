@@ -20,6 +20,7 @@ import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
+import 'package:mangrove/foundation/translation_project/glossary_scope.dart';
 import 'package:mangrove/foundation/translation_project/project.dart';
 import 'package:mangrove/foundation/translation_project/project_bootstrap.dart';
 import 'package:mangrove/foundation/translation_project/project_io.dart';
@@ -95,6 +96,21 @@ abstract final class StudioReaderStore {
     appdata.writeImplicitData();
     markArtifactsChanged();
   }
+
+  /// **工程 json → 它的来源身份**（术语表 scope + 翻译组）。
+  ///
+  /// 工作室那一侧的唯一入口：它手里只有工程 id（`bt_<hash>`），而工程 json 是
+  /// FT 兼容格式、顶层键序被断言锁死（`headless_p3_checks` 的
+  /// `key_order_matches_ft`）⇒ 来源只能记在绑定表里。
+  ///
+  /// 返回 null = 这条工程没有绑定（本表出现之前建的老工程，或者没经阅读器开关
+  /// 建的工程）。**调用方必须显式处理这个 null**，回落到 `comicId` —— 回落
+  /// 成一个"看起来正常但另一份"的 scope，正是这次要消灭的那种分裂。
+  static (String scope, String group)? originForProject(String jsonPath) {
+    final binding = bindings.forJsonPath(jsonPath);
+    if (binding == null || binding.originScope.isEmpty) return null;
+    return (binding.originScope, binding.group);
+  }
 }
 
 /// 阅读器要显示的一页 → 工程产物的字节。
@@ -155,6 +171,7 @@ class StudioReaderTarget {
     required this.comicDirectory,
     required this.chapterName,
     required this.projectName,
+    this.group = glossarySharedGroup,
   });
 
   /// 素材原图根（`downloads/<漫画>`）—— 页键相对**这个**根。
@@ -166,9 +183,16 @@ class StudioReaderTarget {
   /// 建议的工程名。
   final String projectName;
 
+  /// 这一章的翻译组（comix.to 这类版本化源才有；其余恒为空串）。
+  ///
+  /// 与 [chapterName] 同源同序地算出来，因为两者都是"这一章是谁"的一部分：
+  /// 分开算会让一个用 `preferDownloaded` 后的序、一个用原始序，落到不同的版本。
+  final String group;
+
   @override
   String toString() =>
-      'StudioReaderTarget($comicDirectory / "$chapterName" as "$projectName")';
+      'StudioReaderTarget($comicDirectory / "$chapterName" as "$projectName"'
+      '${group.isEmpty ? '' : ' @$group'})';
 }
 
 /// 绑定与工程的实际落地（S9.5-b 的"打开开关 = 该章入队工作室管线"那一半）。
@@ -194,6 +218,12 @@ abstract final class StudioReaderLink {
     if (chapters != null && eid != '0') {
       chapterName = chapterDirectoryName(chapters, eid);
     }
+    // 🔴 与 `chapterName` **同一份** `chapters`（即 `preferDownloaded` 之后的
+    // 那一份）上取组名。若另取一份"原始序"的 chapters，用户下载的是非首选组时
+    // 会拿到目录名与组名对不上的一对。
+    final group = glossaryGroupOf(
+      chapters?.versionEntryOf(eid)?.version.scanlationGroup,
+    );
     final title = LocalManager.getChapterDirectoryName(comic.title);
     final stub = chapterName.isEmpty
         ? title
@@ -203,6 +233,7 @@ abstract final class StudioReaderLink {
       comicDirectory: ProjectBootstrap.normalizeDirectoryPath(base),
       chapterName: chapterName,
       projectName: bounded.isEmpty ? 'studio-project' : bounded,
+      group: group,
     );
   }
 
@@ -217,6 +248,16 @@ abstract final class StudioReaderLink {
     required StudioReaderTarget target,
     bool forceRescan = false,
   }) async {
+    final originScope = glossaryScopeOf(cid: cid, sourceKey: sourceKey);
+    StudioReaderBinding bindingFor(String jsonPath, String projectDirectory) =>
+        StudioReaderBinding(
+          jsonPath: jsonPath,
+          comicDirectory: target.comicDirectory,
+          projectDirectory: projectDirectory,
+          originScope: originScope,
+          group: target.group,
+        );
+
     final existing = StudioReaderStore.bindingFor(
       cid: cid,
       sourceKey: sourceKey,
@@ -225,6 +266,21 @@ abstract final class StudioReaderLink {
     if (!forceRescan &&
         existing != null &&
         File(existing.jsonPath).existsSync()) {
+      // 老绑定（在本表加 `originScope`/`group` 之前写的）在这里就地补齐 —— 不
+      // 补的话工作室永远回落到 `comicId`，而这条绑定看上去完全可用。
+      if (existing.originScope.isEmpty) {
+        final upgraded = bindingFor(
+          existing.jsonPath,
+          existing.projectDirectory,
+        );
+        StudioReaderStore.put(
+          cid: cid,
+          sourceKey: sourceKey,
+          eid: eid,
+          binding: upgraded,
+        );
+        return (upgraded, null);
+      }
       return (existing, null);
     }
 
@@ -247,10 +303,9 @@ abstract final class StudioReaderLink {
     if (!result.created) {
       // "已存在"不是错误：复用既有工程并绑定到它，正是我们想要的结果。
       if (result.jsonFile.existsSync()) {
-        final binding = StudioReaderBinding(
-          jsonPath: result.jsonFile.path,
-          comicDirectory: target.comicDirectory,
-          projectDirectory: '${result.root}/${ProjectBootstrap.sourceDirectoryName}',
+        final binding = bindingFor(
+          result.jsonFile.path,
+          '${result.root}/${ProjectBootstrap.sourceDirectoryName}',
         );
         StudioReaderStore.put(
           cid: cid,
@@ -263,11 +318,7 @@ abstract final class StudioReaderLink {
       return (null, result.error ?? 'create-failed');
     }
 
-    final binding = StudioReaderBinding(
-      jsonPath: result.jsonFile.path,
-      comicDirectory: target.comicDirectory,
-      projectDirectory: result.sourceRoot,
-    );
+    final binding = bindingFor(result.jsonFile.path, result.sourceRoot);
     StudioReaderStore.put(
       cid: cid,
       sourceKey: sourceKey,

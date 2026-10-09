@@ -410,14 +410,17 @@ Future<void> runP4Checks(
 
   probe(
     'wiring.studio_injects_glossary',
-    () async => studioHas('glossary: appGlossary.of('),
+    // 🔴 S9.5-b 之后注入端不再现场拼 scope：`_glossary` 是**反查绑定表 + 带翻译
+    // 组**的那一份（`studio_page.dart`）。判据跟着改成这个新落点 —— 否则这条
+    // 断言会因为"找不到旧写法"而变红，看起来像"术语表没接上"。
+    () async => studioHas('glossary: _glossary,'),
     () async => studioHas('glossary: __never_wired__('),
     () => '工作室构造 StudioRunOptions 时必须传 glossary（此前是空的）',
   );
 
   probe(
     'wiring.studio_merges_reported_terms',
-    () async => studioHas('appGlossary.merge('),
+    () async => studioHas('_mergeGlossary('),
     () async => studioHas('__never_merged__('),
     () => '模型回报的专名必须回写（此前直接丢弃）',
   );

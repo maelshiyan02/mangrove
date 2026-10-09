@@ -56,6 +56,15 @@ edit_check.json
 s6_project_check.json
 s7_export_check.json
 studio_scan.json
+glossary_check.json
+glossary_ui_check.json
+block_ops_check.json
+cache_check.json
+run_plan_check.json
+migrate_sources.json
+pipeline_check.json
+script_check.json
+tools/headless_once.bat
 
 # ---- 6. 本机数据与备份 ----
 *.bak-*

@@ -9,8 +9,9 @@
 // * **解耦** —— 编辑器页面必须**不再**直接依赖 `ImageTranslationService`
 //   （阅读器的旧引擎单例）。这是"工作室能用同一个编辑器"的前提，也是 S9.5-b
 //   删掉旧引擎时它还能活下来的前提。
-// * **接线与文案** —— 工作室确实有入口、确实传的是 `comicId`、按钮 tooltip
-//   确实是中文，且 `headless.dart` 的 i18n 扫描确实**覆盖到了**这个页面。
+// * **接线与文案** —— 工作室确实有入口、确实经**绑定表反查**回来源身份
+//   （不是拿 `comicId` 当 scope）、按钮 tooltip 确实是中文，且 `headless.dart`
+//   的 i18n 扫描确实**覆盖到了**这个页面。
 //
 // ## 反向验证
 //
@@ -54,8 +55,9 @@ class _Fixture {
 
   final Map<String, Object?> map = <String, Object?>{};
 
-  /// 工作室的 scope 就是 `comicId`（工程没有 `sourceKey`）。
-  final String scope = 'MDGH-ch1';
+  /// 工作室的 scope 现在是**来源漫画身份** `cid@sourceKey`（经绑定表反查），
+  /// 不再是 `comicId`。夹具里的具体值不重要，重要的是它是**一个** scope。
+  final String scope = 'cid1@comix.to';
 
   late final GlossaryStore store;
   late final StoreGlossaryBackend backend;
@@ -78,8 +80,21 @@ const _headlessPath = 'lib/headless.dart';
 
 /// 工作室作用域的说明文案。既要在 `translation.json` 里登记，也要真的被页面
 /// 用 `.tl` 调用 —— 登记了却不调用，用户照样看到英文。
+///
+/// 🔴 文案是 S9.5-b 之后的新真相：工作室与阅读器现在读的是**同一份**数据
+/// （scope 都是 `cid@sourceKey`），差别只剩"翻译组那一层"。
+///
+/// 🔴 文案里**不能出现撇号 `'`**：`.tl` 扫描器的正则
+/// （`(['"])((?:[^'"\\]|\\.)*?)\1`，唯一实现在 `headless_p1_checks.dart`）把两种
+/// 引号都当定界符，双引号里的 `chapter's` 会把匹配截断 ⇒ 这条字面量**扫不到**，
+/// 于是"已登记"断言看不出问题、而用户在界面上看到的是英文。第一版就是这么写的，
+/// 当场被 `i18n.studio_scope_notice_is_actually_used` 抓住。
 const _studioNoticeKey =
-    'These terms belong to this studio project. The reader keeps a separate list per source.';
+    'This list belongs to the source comic and is shared with the reader. Edits here apply to the translation group of this chapter.';
+
+/// 阅读器作用域的说明文案。与上面成对：只说半边会让另一半的用户以为术语丢了。
+const _readerNoticeKey =
+    'Shared with the studio. Entries added here apply to every translation group of this comic.';
 
 /// 跑完「工作室术语表 UI 入口」的全部断言。
 Future<void> runP6Checks(
@@ -135,8 +150,12 @@ Future<void> runP6Checks(
 
   probe(
     'backend.writes_land_on_the_shared_keys',
-    // 🔴 持久化位置与形状必须与旧引擎完全一致（`implicitData` 的两个老键），
-    // 否则 S9.5-b 之前两边会各写各的，术语表看起来"时有时无"。
+    // 🔴 持久化**位置与键名**必须与旧引擎完全一致（`implicitData` 的
+    // `imageTranslationComicGlossary`），否则 S9.5-b 之前两边会各写各的，
+    // 术语表看起来"时有时无"。
+    //
+    // 形状是 v2：`{scope: {group: {原文: 译法}}}`。这个后端不带组 ⇒ 落共用层
+    // `''`（与 v1 平表**语义**相同，只是多一层显式的"没有组"）。
     () async {
       final f = _Fixture();
       f.backend.setEntry('娜美', '奈美');
@@ -144,7 +163,9 @@ Future<void> runP6Checks(
       if (g is! Map) return false;
       final scoped = g[f.scope];
       if (scoped is! Map) return false;
-      return scoped['娜美'] == '奈美' && f.writes > 0;
+      final shared = scoped[GlossaryStore.sharedGroup];
+      if (shared is! Map) return false;
+      return shared['娜美'] == '奈美' && f.writes > 0;
     },
     // 故障路径 = 用**新键名**去找同一份数据 ⇒ 找不到才是对的。
     () async {
@@ -152,7 +173,7 @@ Future<void> runP6Checks(
       f.backend.setEntry('娜美', '奈美');
       return f.map.containsKey('imageTranslationComicGlossaryV2');
     },
-    () => '绿=写进 imageTranslationComicGlossary + 立刻落盘 / '
+    () => '绿=写进 imageTranslationComicGlossary 的共用层 + 立刻落盘 / '
         '故障=写成 V2 新键（会与旧引擎分叉）',
   );
 
@@ -219,26 +240,37 @@ Future<void> runP6Checks(
   );
 
   probe(
-    'backend.scopes_are_isolated',
-    // 阅读器按 `cid@sourceKey` 存、工作室按 `comicId` 存，两者在同一个 map 里
-    // 并存。写错 scope 会把一本书的译名串到另一本上。
+    'backend.one_comic_one_scope_across_both_surfaces',
+    // 🔴 S9.5-b 之前这条是**反**的：阅读器存 `cid@sourceKey`、工作室存
+    // `comicId`，两份表互不相认。现在工作室经绑定表反查回来源 ⇒ **同一个
+    // scope**：在阅读器里手填的名字，工作室跑整章时立刻用得上（④ 的承诺）。
+    //
+    // 但"不同漫画互不污染"这半句**永远成立** —— 写错 scope 会把一本书的译名
+    // 串到另一本上，而那种错在界面上看不出来。
     () async {
       // 🔴 刻意让两个 store **共用同一张底层 map**：用两个独立 map 来"证明"
-      // 隔离是假的，它证明的是两个变量不相等。
+      // 隔离是假的，它证明的只是两个变量不相等。
       final shared = <String, Object?>{};
       final reader = GlossaryStore(sink: () => shared, persist: () {});
       final studio = GlossaryStore(sink: () => shared, persist: () {});
-      reader.set('cid@comikey', '甲', 'A');
-      return studio.of('MDGH-ch1').isEmpty;
+      final same = glossaryScopeOf(cid: 'cid1', sourceKey: 'comix.to');
+      final otherSource = glossaryScopeOf(cid: 'cid1', sourceKey: 'comikey');
+      reader.set(same, '甲', 'A');
+      return studio.of(same)['甲'] == 'A' && studio.of(otherSource).isEmpty;
     },
+    // 故障路径 = **只取 cid** 的 scope 推导（漏掉 sourceKey）：同一本漫画的不同
+    // 来源落进同一个 scope ⇒ "互不污染"那半句不成立，同一条判据变红。
     () async {
       final shared = <String, Object?>{};
       final reader = GlossaryStore(sink: () => shared, persist: () {});
-      final studio = GlossaryStore(sink: () => shared, persist: () {});
-      reader.set('cid@comikey', '甲', 'A');
-      return studio.of('MDGH-ch1').isNotEmpty;
+      String flawed(String cid, String? sourceKey) => cid;
+      final a = flawed('cid1', 'comix.to');
+      final b = flawed('cid1', 'comikey');
+      reader.set(a, '甲', 'A');
+      return a == b && reader.of(b).isEmpty;
     },
-    () => '绿=阅读器 scope 不污染工作室 scope / 故障=串到另一边（scope 写错）',
+    () => '绿=同一漫画两界面共用一份、不同来源隔离 / '
+        '故障=只按 cid 推 scope 时不同来源会串',
   );
 
   // ── 2 · 解耦（静态扫描，防"改回去了"） ────────────────────────────────
@@ -311,10 +343,32 @@ Future<void> runP6Checks(
     'wiring.studio_action_opens_the_editor',
     () async =>
         codeHas(_studioPath, 'GlossaryEditorPage(') &&
-        codeHas(_studioPath, 'StoreGlossaryBackend(appGlossary, widget.comicId)'),
+        codeHas(_studioPath, 'StoreGlossaryBackend(') &&
+        codeHas(_studioPath, 'group: _glossaryGroup,') &&
+        // 🔴 这两条才是"scope 来自哪儿"的判据：反查绑定表，而不是拿工程 id 顶替。
+        codeHas(_studioPath, 'originForProject(') &&
+        !codeHas(_studioPath, 'appGlossary.of(widget.comicId)') &&
+        !codeHas(_studioPath, 'appGlossary.merge(widget.comicId'),
+    // 故障路径 = **同一条判据**施于一段旧写法（scope = comicId，工作室与阅读器
+    // 各读一份表，而那正是这次要消灭的分裂）。
+    () async => _scopeComesFromBinding('''
+      final glossary = appGlossary.of(widget.comicId);
+      appGlossary.merge(widget.comicId, response.glossary);
+      backend: StoreGlossaryBackend(appGlossary, widget.comicId),
+    '''),
+    () => '绿=编辑器后端拿反查来的 scope + group / '
+        '故障=旧写法（拿 comicId 当 scope）不满足判据',
+  );
+
+  probe(
+    'wiring.studio_run_uses_the_bound_scope',
+    // 注入端（`StudioRunOptions.glossary`）与编辑器后端必须是**同一个**身份，
+    // 否则用户在编辑器里改的词跑起来不生效 —— 而那看起来像"术语表没接上"。
     () async =>
-        codeHas(_studioPath, 'StoreGlossaryBackend(appGlossary, widget.sourceKey)'),
-    () => '绿=工作室传 Scope=comicId 的后端 / 故障=传了阅读器才有的 sourceKey',
+        codeHas(_studioPath, 'glossary: _glossary,') &&
+        !codeHas(_studioPath, 'glossary: appGlossary.of('),
+    () async => _runScopeMatchesEditor('glossary: appGlossary.of(widget.comicId),'),
+    () => '绿=整章跑的术语表走同一个 _glossary / 故障=注入端各拼一份 ⇒ 判据非恒真',
   );
 
   probe(
@@ -347,6 +401,140 @@ Future<void> runP6Checks(
     // 故障路径 = **对照组**：共享实现所在文件确实含有它 ⇒ 同一条判据为 false。
     () async => !codeHas(_p1Path, r'\.tl(?:Params)'),
     () => '绿=正则只在 p1 的共享实现里 / 故障=对照组（p1）确实含它 ⇒ 判据非恒真',
+  );
+
+  // ── 2.5 · 翻译组那一层（S9.5-b 的用户口径修正） ──────────────────────
+  //
+  // 用户的原话："术语表也仅仅需要在针对 comix.to 网站的时候做区分……只要给
+  // 术语表中的不同原文译文对照设置专门的翻译组匹配，也就是增加 groupId 字段。"
+  //
+  // 落成代码就是：**scope 不含组，组是条目的属性**。下面五条把这条规则拆开钉死。
+
+  probe(
+    'group.read_merges_shared_and_group',
+    // 组上下文里，**共用层 ∪ 本组**一起下发 —— 人工确认过的名字不可能因为
+    // "换了个组"就消失（那会静默改变译文）。
+    () async {
+      final f = _Fixture();
+      final asura = StoreGlossaryBackend(f.store, f.scope, group: 'Asura');
+      f.backend.setEntry('路飞', '鲁夫'); // 落共用层
+      asura.setEntry('娜美', '娜美'); // 落 Asura 桶
+      final merged = asura.entries();
+      return merged['路飞'] == '鲁夫' && merged['娜美'] == '娜美';
+    },
+    // 故障路径 = 同一个夹具换成**别的组**的后端 ⇒ 组桶那条查不到，判据变红。
+    () async {
+      final f = _Fixture();
+      StoreGlossaryBackend(f.store, f.scope, group: 'Asura').setEntry('娜美', '娜美');
+      f.backend.setEntry('路飞', '鲁夫');
+      final merged =
+          StoreGlossaryBackend(f.store, f.scope, group: 'DivaScans').entries();
+      return merged['路飞'] == '鲁夫' && merged['娜美'] == '娜美';
+    },
+    () => '绿=组上下文里取到 共用层+本组 / 故障=换成别的组就查不到本组的条目',
+  );
+
+  probe(
+    'group.same_source_can_differ_per_group',
+    // 组存在的**唯一理由**：同一个原文，两个组各有一份译法，互不覆盖。
+    () async {
+      final f = _Fixture();
+      f.store.set(f.scope, 'Ruffy', '鲁夫', group: 'Asura');
+      f.store.set(f.scope, 'Ruffy', '路飛', group: 'DivaScans');
+      return StoreGlossaryBackend(f.store, f.scope, group: 'Asura')
+              .entries()['Ruffy'] ==
+          '鲁夫' &&
+          StoreGlossaryBackend(f.store, f.scope, group: 'DivaScans')
+              .entries()['Ruffy'] ==
+          '路飛';
+    },
+    // 故障路径 = **组拼进 scope** 的那种（被否掉的）写法：条目被埋进某一个组，
+    // 共用层里查不到 ⇒ 同一条判据变红。这也顺手证明了"scope 里不该有组"。
+    () async {
+      final f = _Fixture();
+      f.store.set('${f.scope}@Asura', 'Ruffy', '鲁夫');
+      f.store.set('${f.scope}@DivaScans', 'Ruffy', '路飛');
+      return StoreGlossaryBackend(f.store, f.scope, group: 'Asura')
+              .entries()['Ruffy'] ==
+          '鲁夫';
+    },
+    () => '绿=同一原文两组各一份、互不覆盖 / 故障=组拼进 scope 时组内的词在共用层查不到',
+  );
+
+  probe(
+    'group.legacy_flat_table_is_lifted_on_read',
+    // v1 的平表 `{scope: {原文: 译法}}` 读一次就升成 `{scope: {'': {...}}}`，
+    // 并且**写回** —— 不写回的话每次读都要再升一次，而其中一次一定会漏。
+    () async {
+      final f = _Fixture();
+      f.map[GlossaryStore.implicitKey] = {
+        f.scope: {'路飞': '鲁夫'},
+      };
+      final read = f.store.of(f.scope);
+      final written = (f.map[GlossaryStore.implicitKey] as Map)[f.scope] as Map;
+      final shared = written[GlossaryStore.sharedGroup];
+      return read['路飞'] == '鲁夫' &&
+          shared is Map &&
+          shared['路飞'] == '鲁夫';
+    },
+    // 故障路径 = "平表照读、不升格"的实现：按 v2 的形状取共用层会取到 null。
+    () async {
+      final f = _Fixture();
+      f.map[GlossaryStore.implicitKey] = {
+        f.scope: {'路飞': '鲁夫'},
+      };
+      final raw = (f.map[GlossaryStore.implicitKey] as Map)[f.scope] as Map;
+      final shared = raw[GlossaryStore.sharedGroup];
+      return shared is Map && shared['路飞'] == '鲁夫';
+    },
+    () => '绿=平表读时升格并写回 / 故障=不升格的话盘上仍是平表、按新形状取不到',
+  );
+
+  probe(
+    'group.block_is_scoped_to_the_comic_not_the_group',
+    // 🔴 阻断是 scope 级的："这个词永远别学"是对这本漫画说的。按组封杀的话，
+    // 换到另一个组同一页又会把它学回来，用户会觉得"删不掉"。
+    () async {
+      final f = _Fixture();
+      f.store.remove(f.scope, '路飞', group: 'Asura', block: true);
+      return f.store.isBlocked(f.scope, '路飞') &&
+          f.store.merge(f.scope, {'路飞': '鲁夫'}, group: 'DivaScans') == 0;
+    },
+    () async {
+      final f = _Fixture();
+      // 故障路径 = 按 (scope, group) 存阻断 ⇒ 另一个组重新学得回来。
+      f.store.remove('${f.scope}@Asura', '路飞', block: true);
+      return f.store.isBlocked(f.scope, '路飞');
+    },
+    () => '绿=封杀跨组生效（换组也学不回来）/ 故障=按组封杀时换组就学回来了',
+  );
+
+  probe(
+    'group.same_group_never_duplicated_by_merge',
+    // 学习是**按组**先到先得：同一个组内已有的译法不被后一页改写，但另一个组
+    // 的桶不受影响（两者是独立的存储分区，不是同一张表的两种过滤）。
+    () async {
+      final f = _Fixture();
+      f.store.merge(f.scope, {'Ruffy': '鲁夫'}, group: 'Asura');
+      final again = f.store.merge(f.scope, {'Ruffy': '路飛'}, group: 'Asura');
+      final other = f.store.merge(f.scope, {'Ruffy': '路飛'}, group: 'DivaScans');
+      return again == 0 &&
+          other == 1 &&
+          f.store.of(f.scope, group: 'Asura')['Ruffy'] == '鲁夫' &&
+          f.store.of(f.scope, group: 'DivaScans')['Ruffy'] == '路飛';
+    },
+    // 故障路径 = **完全不分桶**的那一版（"组"只是显示上的说法）：只有一张平表，
+    // 所以第二个组不可能独立学一份 ⇒ 同一条判据变红。
+    () async {
+      final f = _Fixture();
+      f.store.merge(f.scope, {'Ruffy': '鲁夫'});
+      final again = f.store.merge(f.scope, {'Ruffy': '路飛'});
+      final other = f.store.merge(f.scope, {'Ruffy': '路飛'});
+      return again == 0 &&
+          other == 1 &&
+          f.store.of(f.scope, group: 'DivaScans')['Ruffy'] == '路飛';
+    },
+    () => '绿=组内先到先得、组间各学一份 / 故障=不分桶时第二个组学不进自己的那份',
   );
 
   // ── 3 · 文案（P9.3 的教训：漏登记不报错，只显示英文） ──────────────────
@@ -422,6 +610,22 @@ Future<void> runP6Checks(
   );
 
   probe(
+    'i18n.reader_scope_notice_registered',
+    // 只说工作室那半边，会让另一边的用户以为自己加的术语丢了 —— 两条说明是
+    // **成对**的，缺一条比都不写更糟（它让人以为另一份表不存在）。
+    () async => zhCn.containsKey(_readerNoticeKey),
+    () async => zhCn.containsKey('$_readerNoticeKey (unregistered)'),
+    () => '绿=阅读器作用域说明已登记 / 故障=同名变体查不到 ⇒ 判据非恒真',
+  );
+
+  probe(
+    'i18n.reader_scope_notice_is_actually_used',
+    () async => tlLiterals(_editorPath).contains(_readerNoticeKey),
+    () async => tlLiterals(_editorPath).contains(_readerNoticeKey.toUpperCase()),
+    () => '绿=阅读器说明文案确实走了 .tl / 故障=大小写错的键搜不到',
+  );
+
+  probe(
     'i18n.studio_button_label_is_chinese',
     () async => zhCn['Glossary'] == '术语表',
     () async => zhCn['Glossary'] == 'Glossary',
@@ -456,3 +660,18 @@ Future<void> runP6Checks(
     );
   }
 }
+
+/// 工作室的术语表 scope 是否来自**绑定表反查**，而不是拿 `comicId` 顶替。
+///
+/// 抽成函数是为了让故障路径能跑**同一条判据**（见 "反向验证" 一节）：静态扫描
+/// 类断言的"做错"必须是"同一条逻辑喂给一个真的做错的对象"，不能是"搜一个不
+/// 存在的字符串"—— 后者证明不了判据不是恒真。
+bool _scopeComesFromBinding(String source) =>
+    source.contains('originForProject(') &&
+    !source.contains('appGlossary.of(widget.comicId)') &&
+    !source.contains('appGlossary.merge(widget.comicId');
+
+/// 整章跑的注入端与编辑器后端是否用**同一个**身份（同一个 `_glossary*`）。
+bool _runScopeMatchesEditor(String source) =>
+    source.contains('glossary: _glossary,') &&
+    !source.contains('glossary: appGlossary.of(');

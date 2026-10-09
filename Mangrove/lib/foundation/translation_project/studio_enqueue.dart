@@ -30,6 +30,7 @@ import 'package:mangrove/foundation/image_translation/balloon_clustering.dart';
 import 'package:mangrove/foundation/image_translation/pre_translation_tasks.dart';
 import 'package:mangrove/foundation/image_translation/translation_config.dart';
 import 'package:mangrove/foundation/log.dart';
+import 'package:mangrove/foundation/translation_project/glossary_scope.dart';
 import 'package:mangrove/foundation/translation_project/glossary_store_app.dart';
 import 'package:mangrove/foundation/translation_project/project.dart';
 import 'package:mangrove/foundation/translation_project/project_io.dart';
@@ -151,6 +152,7 @@ abstract final class StudioChapterQueue {
       chapterEid: eid,
       chapterTitle: target.chapterName.isEmpty ? title : target.chapterName,
       chapterPrefix: target.chapterName,
+      group: target.group,
     );
     if (task == null) return StudioEnqueueStatus.failed;
     Log.info(
@@ -311,7 +313,13 @@ StudioRunOptions _runOptionsFor(PreTranslationTask task) {
     readingDirection: direction,
     translate: true,
     recognize: true,
-    // 术语表：与工作室同一条注入端（`studio_page._runPipeline`）。
-    glossary: appGlossary.of(task.cid),
+    // 术语表：与工作室同一条注入端（`studio_page._runPipeline`），现在也
+    // **同一个 scope**（`cid@sourceKey`）—— 这一行以前传的是 `task.cid`，
+    // 而工作室页面传的是 `widget.comicId`（`bt_<hash>`），同一本漫画在两条
+    // 路径上读的是两份表。规则现在只有一处实现：`glossary_scope.dart`。
+    glossary: appGlossary.of(
+      glossaryScopeOf(cid: task.cid, sourceKey: task.sourceKey),
+      group: task.studioGroup,
+    ),
   );
 }

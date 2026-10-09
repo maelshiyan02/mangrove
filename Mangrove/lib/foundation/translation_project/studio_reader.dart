@@ -69,11 +69,24 @@ ReaderPageSource chooseReaderPageSource({
 /// 存的是 **json 的绝对路径**而不是工程名：工程名与 json 名的换算规则改过一次
 /// （`directory` 从 downloads 改成 `source/`，`P10.15 §4.1`），而 json 路径是
 /// 磁盘上的事实。
+///
+/// ## 除了"哪一章 → 哪个工程"，它还记住"这一章是谁"
+///
+/// [originScope] / [group] 是**术语表的身份**（见 `glossary_scope.dart`）。
+/// 为什么必须存在这里：工作室只拿到工程 id（`bt_<hash>`），而工程 json 是 FT
+/// 兼容格式、**顶层键序被断言锁死**（`headless_p3_checks` 的
+/// `key_order_matches_ft`）⇒ 没法把来源写进 json。绑定表是唯一既有又允许加字段
+/// 的落点。
+///
+/// 🔴 没有这两个字段会怎样：工作室只能拿 `comicId` 当 scope，于是同一本漫画的
+/// 20 章各有一份互不相通的术语表 —— 而界面上一切都"正常"。
 class StudioReaderBinding {
   const StudioReaderBinding({
     required this.jsonPath,
     required this.comicDirectory,
     required this.projectDirectory,
+    this.originScope = '',
+    this.group = '',
   });
 
   /// `imgtrans_*.json` 的绝对路径。
@@ -88,14 +101,29 @@ class StudioReaderBinding {
   /// 工程的 `source/` 副本根，仅用于诊断与校验。
   final String projectDirectory;
 
+  /// 来源漫画身份 `cid@sourceKey`（术语表 scope）。
+  ///
+  /// 空串 = 老绑定 / 取不到来源 ⇒ 调用方回落到 `comicId`。
+  final String originScope;
+
+  /// 这一章所属的翻译组（术语表 group）。非版本化源恒为空串。
+  final String group;
+
   Map<String, Object?> toJson() => {
     'json': jsonPath,
     'comicDirectory': comicDirectory,
     'projectDirectory': projectDirectory,
+    // 空值不写：老绑定读回来还是空串，行为与"写了空串"完全一致，
+    // 但盘上少两个恒定无意义的键。
+    if (originScope.isNotEmpty) 'originScope': originScope,
+    if (group.isNotEmpty) 'group': group,
   };
 
   /// 解析一条持久化记录。**缺字段即整条作废**（返回 null）：半条绑定比没有
   /// 绑定更危险 —— 它会以"有工程"的身份通过判据，然后在读页键时静默落原图。
+  ///
+  /// [originScope] / [group] 是**可选**的：老绑定没有它们，回落成空串即可
+  /// （调用方据此回落到 `comicId`），不该让整条绑定作废。
   static StudioReaderBinding? fromJson(Object? raw) {
     if (raw is! Map) return null;
     String field(String key) => raw[key]?.toString().trim() ?? '';
@@ -106,12 +134,14 @@ class StudioReaderBinding {
       jsonPath: json,
       comicDirectory: comic,
       projectDirectory: field('projectDirectory'),
+      originScope: field('originScope'),
+      group: field('group'),
     );
   }
 
   @override
-  String toString() =>
-      'StudioReaderBinding($comicDirectory -> $jsonPath)';
+  String toString() => 'StudioReaderBinding($comicDirectory -> $jsonPath'
+      '${originScope.isEmpty ? '' : ' [$originScope/${group.isEmpty ? '-' : group}]'})';
 }
 
 /// 绑定表：`'<cid>@<sourceKey>@<eid>' -> [StudioReaderBinding]`。
@@ -151,6 +181,29 @@ class StudioReaderBindings {
 
   StudioReaderBinding? operator [](String key) =>
       StudioReaderBinding.fromJson(_raw[key]);
+
+  /// 反查：哪条绑定指向 [jsonPath]。
+  ///
+  /// 这是工作室那一侧的入口 —— 它手里只有工程（`bt_<hash>`），需要经这里拿回
+  /// [StudioReaderBinding.originScope] / [StudioReaderBinding.group] 才知道自己
+  /// 该读写哪一份术语表。
+  ///
+  /// 🔴 比较走 [normaliseReaderPath] + 小写折叠：json 路径在 `implicitData` 里
+  /// 是写定时记下的，而工作室那边是 `Directory.listSync` / `File.path` 拼出来
+  /// 的，两者可能差一个盘符大小写或一个斜杠方向 —— 而"差一点就算不上"的后果
+  /// 是术语表静默回落到 `comicId`。
+  StudioReaderBinding? forJsonPath(String jsonPath) {
+    final wanted = normaliseReaderPath(jsonPath).toLowerCase();
+    if (wanted.isEmpty) return null;
+    for (final entry in _raw.entries) {
+      final binding = StudioReaderBinding.fromJson(entry.value);
+      if (binding == null) continue;
+      if (normaliseReaderPath(binding.jsonPath).toLowerCase() == wanted) {
+        return binding;
+      }
+    }
+    return null;
+  }
 
   void put(String key, StudioReaderBinding binding) =>
       _raw[key] = binding.toJson();

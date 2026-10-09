@@ -174,11 +174,17 @@ class _GlossaryEditorPageState extends State<GlossaryEditorPage> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 工作室与阅读器的表**不是同一份**（scope 不同），不说清楚用户会以为
-          // 自己加的术语丢了。
+          // 工作室与阅读器现在读的是**同一份**数据（scope 都是 `cid@sourceKey`），
+          // 差别只剩"翻译组那一层"。不说清楚这条边界，comix.to 的用户会看到
+          // 两份条数不同的表，然后以为自己加的术语丢了。
           if (_backend.scopeKind == GlossaryScopeKind.studio)
             _notice(
-              "These terms belong to this studio project. The reader keeps a separate list per source."
+              "This list belongs to the source comic and is shared with the reader. Edits here apply to the translation group of this chapter."
+                  .tl,
+            )
+          else
+            _notice(
+              "Shared with the studio. Entries added here apply to every translation group of this comic."
                   .tl,
             ),
           if (inert)

@@ -41,6 +41,7 @@ import 'package:mangrove/foundation/translation_project/rich_text_sync.dart';
 import 'package:mangrove/foundation/translation_project/run_plan.dart';
 import 'package:mangrove/foundation/translation_project/studio_block_ops.dart';
 import 'package:mangrove/foundation/translation_project/studio_pipeline.dart';
+import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
 import 'package:mangrove/foundation/translation_project/text_block.dart';
 import 'package:mangrove/foundation/widget_utils.dart';
 import 'package:mangrove/pages/comic_details_page/glossary_editor.dart';
@@ -87,6 +88,19 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   TranslationProject? _project;
   String _error = '';
   String _title = '';
+
+  /// 术语表的身份（scope + 翻译组）。
+  ///
+  /// 🔴 真相在**绑定表**里，不是 `widget.comicId`。一个工程 = 一章，拿工程 id
+  /// 当 scope 会让同一本漫画的 20 章各有一份互不相通的术语表 —— 与"同一本漫画
+  /// 共用"直接冲突。而工程 json 是 FT 兼容格式、**顶层键序被断言锁死**
+  /// （`headless_p3_checks` 的 `key_order_matches_ft`），来源写不进 json
+  /// ⇒ 只能经绑定表反查（`StudioReaderStore.originForProject`）。
+  ///
+  /// `widget.comicId` 只是**回落**：绑定表出现之前建的老工程没有绑定，那种工程
+  /// 本来就没人往里写过术语 —— 回落成 `comicId` 与回落成"另一份空表"等价。
+  String _glossaryScope = '';
+  String _glossaryGroup = '';
 
   /// Page keys that have something to show: a source image or an artifact.
   /// FT's json also stores keys for files that never existed (phantom `.jpg`
@@ -224,7 +238,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     }
     setState(() => _blockOpBusy = true);
     try {
-      final glossary = appGlossary.of(widget.comicId);
+      final glossary = _glossary;
       final lang = _currentSourceLang();
       final response = await TranslationDispatcher.translateBatch(
         [source],
@@ -256,7 +270,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         syncRichText: true,
       );
       if (response.glossary.isNotEmpty) {
-        appGlossary.merge(widget.comicId, response.glossary);
+        _mergeGlossary(response.glossary);
       }
       Log.info(
         'Studio Block',
@@ -583,7 +597,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       // （`StudioRunOptions.glossary`），但一直没人传 ⇒ 工作室此前跑整章时
       // 术语表恒为空，跨页/跨章人名一致性是个空承诺。
       // 工作室工程没有 sourceKey，scope 直接用 comicId（见 glossary_store.dart）。
-      glossary: appGlossary.of(widget.comicId),
+      glossary: _glossary,
     );
 
     var blocks = 0;
@@ -790,7 +804,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     }
     var learned = 0;
     if (run.glossary.isNotEmpty) {
-      learned = appGlossary.merge(widget.comicId, run.glossary);
+      learned = _mergeGlossary(run.glossary);
     }
     if (run.failed) {
       return _PageStageResult(
@@ -874,7 +888,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     final blocks = page.blocks;
     var processed = 0;
     var learned = 0;
-    final glossary = appGlossary.of(widget.comicId);
+    final glossary = _glossary;
     final size = _pageSizeInPixels(pageKey);
     try {
       // ── 识别 ──────────────────────────────────────────────────────────
@@ -964,7 +978,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
             glossary: glossary,
           );
           if (response.glossary.isNotEmpty) {
-            learned = appGlossary.merge(widget.comicId, response.glossary);
+            learned = _mergeGlossary(response.glossary);
           }
           final applied = <int, String>{};
           for (var k = 0; k < targets.length; k++) {
@@ -1133,12 +1147,16 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     final comic = LocalManager().isInitialized
         ? LocalManager().find(widget.comicId, ComicType.local)
         : null;
+    // 术语表身份：先反查绑定表，拿不到才回落（见 `_glossaryScope` 的注释）。
+    final origin = StudioReaderStore.originForProject(project.jsonFile.path);
     _history.clear();
     setState(() {
       _project = project;
       _pageKeys = keys;
       _error = keys.isEmpty ? 'This project has no readable page image.' : '';
       _title = comic?.title ?? project.jsonFileName;
+      _glossaryScope = origin?.$1 ?? widget.comicId;
+      _glossaryGroup = origin?.$2 ?? '';
       _pageIndex = 0;
       _selectedBlock = -1;
       _selectedPageKey = null;
@@ -1158,6 +1176,22 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     // would just burn a bitmap nobody looks at.
     if (keys.isNotEmpty && !_stripMode) await _loadBase(keys.first);
   }
+
+  /// 下发 / 编辑用的术语表：**共用层 ∪ 本组**（本组同名条目覆盖共用层）。
+  ///
+  /// 判据与注入端同一处：`GlossaryStore.of` 是唯一的合并实现，所以"工作室里
+  /// 看到的"与"发给引擎的"必然一致 —— 分开拼两次就会出现编辑器里改好了、
+  /// 引擎那边没生效的假象。
+  Map<String, String> get _glossary =>
+      appGlossary.of(_glossaryScope, group: _glossaryGroup);
+
+  /// 把模型回报的专名并进**本组**的桶，返回新增条数。
+  ///
+  /// 🔴 写组桶而不是共用层：这是"这一组翻译时学到的说法"，而共用层是人工确认过
+  /// 的名字（`glossary_store.dart` 头部）。混在一起会让某一组的自动学习覆盖掉
+  /// 用户在另一组手填的译法。
+  int _mergeGlossary(Map<String, String> discovered) =>
+      appGlossary.merge(_glossaryScope, discovered, group: _glossaryGroup);
 
   static bool _pageExists(TranslationProject project, String key) {
     if (File(project.originalPath(key)).existsSync()) return true;
@@ -1868,17 +1902,21 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
 
   /// 打开本工程的术语表编辑器（A08 §1.1 · C）。
   ///
-  /// 🔴 scope 是 `comicId`：工作室工程没有 `sourceKey`（见
-  /// `glossary_store.dart` 头部注释），所以它与阅读器里 `cid@sourceKey` 那份
-  /// **不是同一份数据** —— 编辑器页内会常驻一行说明讲清这条边界，而不是让
-  /// 用户以为"我刚加的术语丢了"。
+  /// 🔴 scope 是**来源漫画身份** `cid@sourceKey`、group 是本章所属的翻译组 ——
+  /// 两者都在 `_load` 里经绑定表反查得到（见 `_glossaryScope` 的注释），所以这
+  /// 一份表与阅读器里那份**是同一份数据**。上一版这里是 `widget.comicId`，那让
+  /// 同一本漫画的每一章各有一份表。
   ///
   /// 改动立刻落 `implicitData`（`GlossaryStore` 每次写都 persist），下一次
-  /// 运行自动管线时 `studio_pipeline` 读的就是新表，不需要重开工程。
+  /// 运行自动管线时读的就是新表，不需要重开工程。
   void _openGlossary() {
     context.to(
       () => GlossaryEditorPage(
-        backend: StoreGlossaryBackend(appGlossary, widget.comicId),
+        backend: StoreGlossaryBackend(
+          appGlossary,
+          _glossaryScope,
+          group: _glossaryGroup,
+        ),
       ),
     );
   }

@@ -9,8 +9,11 @@ import 'package:mangrove/foundation/translation_project/glossary_store.dart';
 ///
 /// 🔴 为什么必须是**同一个实例**：工作室与旧引擎都用它。两份实例会各自持有
 /// 自己的 implicitData 视图，一边学到的词另一边看不见 —— 那正是本次迁移要
-/// 消灭的分裂。旧引擎的 key (`cid@sourceKey`) 与工作室的 key (`comicId`)
-/// 在同一个 map 里并存，谁都不用迁移数据。
+/// 消灭的分裂。
+///
+/// 两者的 scope 现在也是**同一个**：`cid@sourceKey`（规则只有一处实现，
+/// `glossary_scope.dart`）。工作室手里只有工程 id，所以它先经绑定表反查回来源
+/// （`studio_reader_app.dart` 的 `originForProject`）。差别只剩"翻译组那一层"。
 final GlossaryStore appGlossary = GlossaryStore(
   // 每次调用重新取：`appdata.implicitData` 在导入备份时是**整体替换**，
   // 缓存住引用会一直服务导入前的旧术语表。
