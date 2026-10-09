@@ -10,6 +10,7 @@ import 'package:mangrove/foundation/widget_utils.dart';
 import 'package:mangrove/utils/translations.dart';
 
 import 'translation_studio/studio_page.dart';
+import 'translation_studio/studio_project_menu.dart';
 
 /// Entry point of the translation studio (P6 §2.9(e)①, revised in S7R).
 ///
@@ -80,7 +81,11 @@ class _TranslationStudioLauncherPageState
     return Scaffold(
       body: SmoothCustomScrollView(
         slivers: [
-          SliverAppbar(title: Text('Translation Studio'.tl)),
+          SliverAppbar(
+            title: Text('Translation Studio'.tl),
+            // 右上角：与工作室详细页**同一个**组件，两份入口共用一条创建链路。
+            actions: const [StudioProjectMenu()],
+          ),
           if (_error.isNotEmpty)
             SliverFillRemaining(
               hasScrollBody: false,
@@ -93,11 +98,15 @@ class _TranslationStudioLauncherPageState
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 32),
                   child: Text(
-                    'No translation project found.\n'
-                    'Set the studio workspace root in Settings, then add an '
-                    'imgtrans_*.json under it.'.tl,
-                    textAlign: TextAlign.center,
+                    // 🔴 单字面量（**不要**拆成相邻两行再对第二行调 `.tl`）：
+                    // 相邻字面量在解析期就被 Dart 拼好了，而 i18n 扫描器匹配到
+                    // 的是后半截 —— 登记表里那个键于是永远不会被查到，界面
+                    // 静默显示英文。这一行原先正是那个写法（`run_dialog.dart`
+                    // 头部记着同一条坑）。
+                    'No translation project found. Use the menu in the top right corner to create one from a downloaded comic.'
+                        .tl,
                     style: ts.s16,
+                    textAlign: TextAlign.center,
                   ),
                 ),
               ),

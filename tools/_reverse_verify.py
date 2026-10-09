@@ -625,6 +625,72 @@ FAULTS = {
     project.artifactPath('inpainted', pageKey); // injected fault""")],
         'inpaint.base_source_is_original',
     ),
+
+    # ---- S9.5-b 追补 · projectEntry.*（「创建翻译工程」UI 入口）----------
+    #
+    # 🔴 这一批的断言**自带**红路径（绿/红喂同一判据、两个实现），但那只证明
+    # "判据在合成输入上会翻脸"。下面三条把故障真的打进**产线源码**，用来证明
+    # 同一个判据在**真实树上**也看得见 —— 合成对照物测不出"锚点漂了/文件挪了"
+    # 这类失效（那会让断言静默恒绿）。
+    'entry_inlines_the_name_rule': (
+        ['lib/foundation/translation_project/studio_reader_app.dart'],
+        [("""      projectName: studioProjectNameFor(
+        comicTitle: comic.title,
+        chapterName: chapterName,
+      ),""",
+          """      // injected fault: the name rule is inlined instead of shared
+      projectName: chapterName.isEmpty
+          ? LocalManager.getChapterDirectoryName(comic.title)
+          : '${LocalManager.getChapterDirectoryName(comic.title)}-${LocalManager.getChapterDirectoryName(chapterName)}',""")],
+        'projectEntry.name_rule_is_shared_with_the_reader_toggle',
+    ),
+    'entry_ignores_downloaded_versions': (
+        ['lib/foundation/translation_project/studio_project_entry.dart'],
+        # 回到"只看原始序"的那一版：下了 Asura 版而列表首版是 DivaScans 版的
+        # 用户会在列表里看到一个目录根本不存在的章。
+        #
+        # ⚠️ 打在**纯逻辑层**而不是 UI 上：规则只有那一份实现，而断言是行为判据
+        # （喂一个"DivaScans 更新 / Asura 已下载"的版本矩阵）。打在 UI 上只会让
+        # "UI 有没有调它"那条**接线**断言红，测不到规则本身。
+        [('  final ordered = chapters.preferDownloaded(preferredKeys);',
+          '  final ordered = chapters; // injected fault: the raw order is used')],
+        'projectEntry.chapter_refs_prefer_downloaded_versions',
+    ),
+    'entry_gives_the_flat_comic_a_blank_eid': (
+        ['lib/foundation/translation_project/studio_project_entry.dart'],
+        # 无章节漫画的 eid 与阅读器 `_currentChapterEid` 的回落（'0'）脱钩
+        # ⇒ 同一章在入口与开关上是两个绑定键。
+        [("""  if (chapters == null) {
+    return const [StudioChapterRef(eid: '0', label: '', chapterName: '')];
+  }""",
+          """  if (chapters == null) {
+    // injected fault: the flat comic gets a blank eid
+    return const [StudioChapterRef(eid: '', label: '', chapterName: '')];
+  }""")],
+        'projectEntry.flat_comic_uses_the_zero_eid',
+    ),
+    'entry_inlines_the_projects_root': (
+        ['lib/foundation/translation_project/studio_reader_app.dart'],
+        # 回到"`LocalManager.path` 上一级 + `/projects`"的内联版。它与
+        # `BtProjectManager.defaultProjectsRoot()` 只差"本地库没初始化时回落到
+        # `btProjectRoot`"这一步 —— 于是**配好了工程根**的环境会被报成
+        # `no-project-root`，而设置页里那个根明明是对的。
+        #
+        # ⚠️ 这条故障证明的正是断言存在的理由：一个"几乎一样"的第二实现。
+        # 合成对照物测不出这种漂移（它是行为不同、文本相似的差异）。
+        [('  static String? _projectsRoot() => '
+          'BtProjectManager.defaultProjectsRoot();',
+          r"""  static String? _projectsRoot() {
+    // injected fault: the root rule is inlined instead of shared
+    final manager = LocalManager();
+    if (manager.isInitialized && manager.path.isNotEmpty) {
+      final parent = Directory(manager.path).parent.path;
+      return '$parent/projects';
+    }
+    return null;
+  }""")],
+        'projectEntry.projects_root_is_the_managed_rule',
+    ),
 }
 
 # File-level faults.

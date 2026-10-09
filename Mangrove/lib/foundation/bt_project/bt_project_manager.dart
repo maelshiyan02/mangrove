@@ -383,7 +383,7 @@ class BtProjectManager extends ChangeNotifier {
       await _collectJsonFiles(rootDir, files, 0);
       for (final file in files) {
         try {
-          final id = _comicIdFor(file.path);
+          final id = comicIdForJsonFile(file.path);
           final mtime = (await file.lastModified()).millisecondsSinceEpoch;
           var project = _projects[id];
           if (project == null || _mtimes[id] != mtime) {
@@ -484,7 +484,14 @@ class BtProjectManager extends ChangeNotifier {
 
   /// Stable 8-hex-char id derived from the json path so the same project keeps
   /// its comic entry (and history) across rescans.
-  static String _comicIdFor(String jsonPath) {
+  ///
+  /// 🔴 Public on purpose: the "create a translation project" entry point
+  /// (`pages/translation_studio/studio_project_menu.dart`) has just written a
+  /// json at a known path and needs the id to navigate into the studio with.
+  /// Re-deriving the hash there would be a **second implementation** of the
+  /// identity rule — and a drifted one shows up as "the project I just created
+  /// is not in the list", with a working-looking project on disk.
+  static String comicIdForJsonFile(String jsonPath) {
     var hash = 0x811c9dc5;
     for (final unit in jsonPath.toLowerCase().codeUnits) {
       hash ^= unit;

@@ -51,6 +51,7 @@ import 'package:mangrove/utils/translations.dart';
 import 'run_dialog.dart';
 import 'studio_block_panel.dart';
 import 'studio_preview.dart';
+import 'studio_project_menu.dart';
 
 /// Editable studio canvas for one FT project (P6 S8).
 ///
@@ -2216,6 +2217,10 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
               icon: const Icon(Icons.menu_book_outlined),
               onPressed: project == null ? null : _openGlossary,
             ),
+            // 右上角最外侧：「翻译工程」可展开菜单。与列表页那一份是**同一个**
+            // 组件（`StudioProjectMenu`）—— 两处各写一遍，加第二个动作时
+            // 必然只加一处。
+            const StudioProjectMenu(),
           ],
         ),
         body: _shortcuts(

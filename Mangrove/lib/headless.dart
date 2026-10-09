@@ -44,6 +44,7 @@ import 'package:mangrove/headless_p5_checks.dart';
 import 'package:mangrove/headless_p6_checks.dart';
 import 'package:mangrove/headless_p7_checks.dart';
 import 'package:mangrove/headless_p8_checks.dart';
+import 'package:mangrove/headless_p9_checks.dart';
 import 'package:mangrove/headless_pipeline_check.dart';
 import 'package:mangrove/headless_script_checks.dart';
 
@@ -2133,6 +2134,11 @@ Future<void> runEditCheck(List<String> args, int commandIndex) async {
       // 所以它**自带**反向验证，不需要 P1/P2 那种"事后补测"清单。见
       // `headless_p8_checks.dart` 头部。
       runP8Checks(check, packageRoot: packageRoot);
+      // ── S9.5-b · 追补：「创建翻译工程」UI 入口 ─────────────────────────
+      //
+      // P8 管**读**（阅读器读哪一份产物），P9 管**建**（工程从哪来）。同样
+      // 每条都是"判据 + 一个故意做错的同类实现"，自带反向验证。
+      runP9Checks(check, packageRoot: packageRoot);
     }
 
     passed = checks.every((c) => c['passed'] == true);
@@ -3123,17 +3129,36 @@ List<String> _missingStudioTooltips() {
   //
   // The file is required to exist: a silently-skipped whitelist entry would
   // make this check pass vacuously the moment the file moved.
+  // 🔴 S9.5-b 追补 widened the source list a **third** time — this time to the
+  // launcher page (`pages/translated_comics_page.dart`). Reason: that page
+  // now carries a `StudioProjectMenu` in its `SliverAppbar` and its empty-state
+  // sentence, i.e. it became part of the studio feature surface. Leaving it out
+  // would keep the very gap this scan exists to close ("we scanned one file of a
+  // feature"), and it already had a real defect hiding there: the empty state
+  // was two adjacent literals with `.tl` on the second one, so the scanner only
+  // ever saw the fragment `imgtrans_*.json under it.` while `tl` looked up the
+  // concatenated sentence.
+  //
+  // The file is required to exist: a silently-skipped whitelist entry would make
+  // this check pass vacuously the moment the file moved.
   final extraFile = File(
     '${root.path}/lib/pages/comic_details_page/glossary_editor.dart',
   );
   if (!extraFile.existsSync()) {
     return ['<${extraFile.path} not found>'];
   }
+  final launcherFile = File(
+    '${root.path}/lib/pages/translated_comics_page.dart',
+  );
+  if (!launcherFile.existsSync()) {
+    return ['<${launcherFile.path} not found>'];
+  }
   final tableFile = File('${root.path}/assets/translation.json');
   final sources = [
     for (final entry in dir.listSync().whereType<File>())
       if (entry.path.endsWith('.dart')) entry,
     extraFile,
+    launcherFile,
   ]..sort((a, b) => a.path.compareTo(b.path));
   if (sources.isEmpty || !tableFile.existsSync()) {
     return const ['<studio sources or translation.json not found>'];

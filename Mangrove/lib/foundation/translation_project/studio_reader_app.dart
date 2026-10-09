@@ -16,6 +16,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:mangrove/foundation/appdata.dart';
+import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/local.dart';
@@ -25,6 +26,7 @@ import 'package:mangrove/foundation/translation_project/project.dart';
 import 'package:mangrove/foundation/translation_project/project_bootstrap.dart';
 import 'package:mangrove/foundation/translation_project/project_io.dart';
 import 'package:mangrove/foundation/translation_project/result_renderer.dart';
+import 'package:mangrove/foundation/translation_project/studio_project_entry.dart';
 import 'package:mangrove/foundation/translation_project/studio_reader.dart';
 
 /// 「素材漫画的某章 → 工作室工程」绑定表的**唯一 owner**。
@@ -224,15 +226,16 @@ abstract final class StudioReaderLink {
     final group = glossaryGroupOf(
       chapters?.versionEntryOf(eid)?.version.scanlationGroup,
     );
-    final title = LocalManager.getChapterDirectoryName(comic.title);
-    final stub = chapterName.isEmpty
-        ? title
-        : '$title-${LocalManager.getChapterDirectoryName(chapterName)}';
-    final bounded = stub.length > 60 ? stub.substring(0, 60) : stub;
+    // 🔴 工程名与「创建翻译工程」入口走**同一个函数**（`studioProjectNameFor`）。
+    // 内联一份在这里，入口再算一份，两者迟早会漂移 —— 而漂移的后果是同一章
+    // 建出两个工程、术语表也分家，界面上完全看不出来。
     return StudioReaderTarget(
       comicDirectory: ProjectBootstrap.normalizeDirectoryPath(base),
       chapterName: chapterName,
-      projectName: bounded.isEmpty ? 'studio-project' : bounded,
+      projectName: studioProjectNameFor(
+        comicTitle: comic.title,
+        chapterName: chapterName,
+      ),
       group: group,
     );
   }
@@ -339,14 +342,11 @@ abstract final class StudioReaderLink {
   }
 
   /// 工程应当建在哪儿（复用 `BtProjectManager` 的唯一规则，别写第二份）。
-  static String? _projectsRoot() {
-    final manager = LocalManager();
-    if (manager.isInitialized && manager.path.isNotEmpty) {
-      final parent = Directory(manager.path).parent.path;
-      if (parent.isNotEmpty) {
-        return '${parent.replaceAll('\\', '/')}/projects';
-      }
-    }
-    return null;
-  }
+  ///
+  /// 🔴 这里原先内联了一份"`LocalManager.path` 的上一级 + `/projects`"。它与
+  /// `BtProjectManager.defaultProjectsRoot()` **几乎**一样，只差最后一步：
+  /// 本地库没初始化时那一份会回落到 `btProjectRoot` 的第一个根，而内联的这份
+  /// 直接返回 null ⇒ 一个已经配好工程根的环境会被报成 `no-project-root`。
+  /// 两处各写一遍的规律就是"几乎一样" —— 差的那一点正好是最难查的。
+  static String? _projectsRoot() => BtProjectManager.defaultProjectsRoot();
 }

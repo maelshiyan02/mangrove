@@ -350,8 +350,15 @@ abstract final class ProjectBootstrap {
     return slash < 0 ? normalized : normalized.substring(slash + 1);
   }
 
-  /// 扫描 [chapterName] 目录，产出页键与实测尺寸。**不写任何文件。**
-  static ProjectBootstrapPlan plan({
+  /// 扫出 [chapterName] 目录里的页图**文件名**（按阅读顺序）。**不写任何文件，
+  /// 也不读任何文件头。**
+  ///
+  /// 🔴 [plan] 与"建工程入口"的可选性判断**共用这一个实现**：入口要在列表里
+  /// 把"扫不出页图的章节"灰掉，而"灰掉的判据"与"真的建不出来"必须是同一条
+  /// —— 各写一遍就会出现"列表里可选、点下去报 chapter-has-no-page"。
+  /// 这里刻意**不**返回尺寸：列出章节的可选性时，读 94 个文件头只为数个数
+  /// 是纯浪费，而 [plan] 需要的尺寸在它自己那里补齐。
+  static List<String> scanPageNames({
     required String comicDirectory,
     required String chapterName,
   }) {
@@ -377,6 +384,24 @@ abstract final class ProjectBootstrap {
       }
     }
     names.sort(_pageNameCompare);
+    return names;
+  }
+
+  /// 扫描 [chapterName] 目录，产出页键与实测尺寸。**不写任何文件。**
+  static ProjectBootstrapPlan plan({
+    required String comicDirectory,
+    required String chapterName,
+  }) {
+    final root = normalizeDirectoryPath(comicDirectory);
+    final chapter = chapterName
+        .replaceAll('\\', '/')
+        .replaceAll(RegExp(r'^/+|/+$'), '');
+    final chapterDir = Directory('$root/$chapter');
+
+    final names = scanPageNames(
+      comicDirectory: comicDirectory,
+      chapterName: chapterName,
+    );
 
     final keys = [for (final name in names) '$chapter/$name'];
     final sizes = <String, PageImageSize>{};
