@@ -309,6 +309,39 @@ class ProjectWriter {
     );
   }
 
+  /// 两阶段产出的**顺序契约**：底图阶段必须先于成品阶段。
+  ///
+  /// ## 为什么这两行值得变成一个函数
+  ///
+  /// `result/` 的渲染以 `inpainted/` 为**输入位图** ——
+  /// `renderProjectResultPage` 的第一步就是 `project.inpaintedPath(pageKey)`。
+  /// 而 [writeArtifacts] 内部是**并发 worker**，所以两个阶段不能放进同一次
+  /// 调用（会读到还没写出来的底图）。
+  ///
+  /// 顺序写反**不会抛异常**，这是它危险的地方：
+  ///
+  /// * 先跑成品 → `renderProjectResultPage` 在 `inpaintedPath == null` 上返回
+  ///   null → 被 [writeArtifacts] 记成 **skipped**（"管线还没产出这一页"，一个
+  ///   完全正常的状态）→ 于是"一张都没出"看起来像"这页本来就没译文"。
+  ///
+  /// 也就是说：**顺序是契约，而违反契约的代价是静默地少一半产物**。S9.5-a 那
+  /// 次 `artifacts written=0 skipped=1` 就是这一类的现场（见
+  /// `renderInpaintedPage` 的文档）。
+  ///
+  /// ## 断言要点（`inpaint.layered_order_bases_first`）
+  ///
+  /// [bases] / [results] 都**不含 await**（断言喂进去的是"同步记一笔"的桩），
+  /// 所以本函数被**调用**之后同步就能读到"第一阶段已开始、第二阶段尚未"。
+  /// 等 future 完成再读，两种顺序都会得到 `bases,results`，断言就永远绿了。
+  static Future<(A, B)> inLayeredOrder<A, B>(
+    Future<A> Function() bases,
+    Future<B> Function() results,
+  ) async {
+    final baseStage = await bases();
+    final resultStage = await results();
+    return (baseStage, resultStage);
+  }
+
   /// Writes artifact bitmaps for [project] under [root].
   ///
   /// [source] produces the bytes; a null result marks the artifact as skipped

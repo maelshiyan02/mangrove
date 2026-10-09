@@ -11,6 +11,7 @@ import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/history.dart';
 import 'package:mangrove/foundation/image_enhance_shader.dart';
 import 'package:mangrove/foundation/image_translation/pre_translation_tasks.dart';
+import 'package:mangrove/foundation/translation_project/studio_enqueue.dart';
 import 'package:mangrove/foundation/js_engine.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/related_source_tasks.dart';
@@ -221,6 +222,11 @@ void checkUpdates() {
   // Delay to make sure navigator context is ready for update dialogs.
   Future.delayed(const Duration(seconds: 2), _checkAppUpdates).wait();
   FollowUpdatesService.initChecker();
+  // 🔴 顺序不可换：先给任务框架装上工作室执行体，再让它去续跑。反过来的话，
+  // 上一次会话遗留的 studio 任务会因为 `studioRunner is null` 被标成 failed
+  // （`pre_translation_tasks.dart::_runStudio` 明写这条），而用户看到的是
+  // "翻译失败了"——一个由启动顺序制造出来的、没有任何线索的失败。
+  registerStudioTaskRunner();
   PreTranslationTaskManager.instance.resumePendingTasks();
 }
 

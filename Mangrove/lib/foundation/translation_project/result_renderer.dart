@@ -78,6 +78,42 @@ Future<Uint8List?> renderProjectResultPage(
   );
 }
 
+/// `inpainted/` 的底图**只从原图取** —— 这是底图来源的唯一真相。
+///
+/// ## 为什么不能从现有的 `inpainted/` 取
+///
+/// 对一份**已经是去字结果**的位图再擦一遍，只会把背景越擦越糊，而且
+/// **每保存一次就更糊一点**：误差是累积的，界面上却看不出任何异常 ——
+/// 用户只会觉得"画质怎么越来越差"。
+///
+/// ## 为什么它值得是一个函数
+///
+/// 否则"底图到底取自哪里"只能靠读 `renderInpaintedPage` 的第三行，而这一行
+/// 恰好是最容易被"顺手优化成复用已有产物"的一行。抽出来之后它有一条可注入
+/// 故障的断言：`inpaint.base_source_is_original`。
+String inpaintedBaseSourcePath(TranslationProject project, String pageKey) =>
+    project.originalPath(pageKey);
+
+/// 这一页能不能产出 `inpainted/`：判据只有一条 —— **解码不许降采样**。
+///
+/// ## 它不是一句算术，是一条坐标契约
+///
+/// `result/` 侧的坐标换算是 `decoded.image.width / decoded.originalWidth`。
+/// 当输入位图是 `inpainted/` 时，这两个值是**同一个文件的宽** ⇒ `scale == 1.0`，
+/// 页面 regions 被当作**源坐标**直接使用。一旦这里放行一个被 `_decodeBounded`
+/// 缩过的底图，那个 `scale == 1.0` 就变成谎言：框按源坐标落在缩小的图上，
+/// **位置全错而不报错**。
+///
+/// 所以超大页（> 12 MP 或 > 8000 px）宁可**不产出** `inpainted/`
+/// （`result/` 会如实地把它记成 skipped），也不产出一个破坏坐标契约的文件。
+///
+/// 抽成函数是为了让这条契约能被注入故障验证（`inpaint.base_requires_no_downscale`）：
+/// 内联的 `a != b` 换个写法就再也测不出它保护的是什么。
+bool canProduceInpaintedBase({
+  required int decodedWidth,
+  required int originalWidth,
+}) => decodedWidth == originalWidth;
+
 /// Renders one project page's **text-free** base (`inpainted/`).
 ///
 /// ## 为什么这个函数必须存在（S9.5-a 补的一场欠账）
@@ -124,14 +160,19 @@ Future<Uint8List?> renderInpaintedPage(
   if (page == null) return null;
   final regions = page.regions;
   if (regions.isEmpty) return null;
-  final source = File(project.originalPath(pageKey));
+  final source = File(inpaintedBaseSourcePath(project, pageKey));
   if (!source.existsSync()) return null;
   final bytes = await source.readAsBytes();
   if (bytes.isEmpty) return null;
 
   final decoded = await _decodeBounded(bytes);
   // 见上文：降采样会让 `result/` 的坐标换算失去意义，宁可不产出。
-  if (decoded.image.width != decoded.originalWidth) return null;
+  if (!canProduceInpaintedBase(
+    decodedWidth: decoded.image.width,
+    originalWidth: decoded.originalWidth,
+  )) {
+    return null;
+  }
   final scale = decoded.image.width / decoded.originalWidth;
 
   final eraseRects = <IntRect>[
@@ -197,7 +238,7 @@ Future<Uint8List?> renderMaskPage(
   if (page == null) return null;
   final regions = page.regions;
   if (regions.isEmpty) return null;
-  final source = File(project.originalPath(pageKey));
+  final source = File(inpaintedBaseSourcePath(project, pageKey));
   if (!source.existsSync()) return null;
   final bytes = await source.readAsBytes();
   if (bytes.isEmpty) return null;
@@ -205,7 +246,12 @@ Future<Uint8List?> renderMaskPage(
   final decoded = await _decodeBounded(bytes);
   // Same reason as `renderInpaintedPage`: a downscaled mask would no longer
   // line up with the source-resolution boxes.
-  if (decoded.image.width != decoded.originalWidth) return null;
+  if (!canProduceInpaintedBase(
+    decodedWidth: decoded.image.width,
+    originalWidth: decoded.originalWidth,
+  )) {
+    return null;
+  }
   final scale = decoded.image.width / decoded.originalWidth;
 
   final eraseRects = <IntRect>[

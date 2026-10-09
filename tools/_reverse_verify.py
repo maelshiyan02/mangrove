@@ -27,6 +27,9 @@ P = 'studio_pipeline.dart'      # lib/foundation/translation_project/
 H = 'headless_p1_checks.dart'   # lib/
 S = 'studio_page.dart'          # lib/pages/translation_studio/
 
+PW = 'project_writer.dart'      # lib/foundation/translation_project/
+RR = 'result_renderer.dart'     # lib/foundation/translation_project/
+
 # P2 (P9.7)
 G = 'block_resize_geometry.dart'  # lib/components/
 C = 'text_block_canvas.dart'      # lib/components/
@@ -589,6 +592,38 @@ FAULTS = {
         [('    open(OUT, "w").close()\n',
           '    open(OUT, mode="w").close()  # injected fault: same truncation\n')],
         'harness.truncates_output_before_run',
+    ),
+    # ---- inpaint.* (S9.5-a 的新代码，S9.5-b 补的三处抽口) -----------------
+    'inpaint_layered_order_reversed': (
+        [f'lib/foundation/translation_project/{PW}'],
+        # 成品先于底图。`result/` 以 `inpainted/` 为输入位图，反过来跑
+        # `renderProjectResultPage` 会在 `inpaintedPath == null` 上返回 null，
+        # 被 `writeArtifacts` 记成 **skipped** —— "一张都没出"看起来像
+        # "这页本来就没译文"。整个替换**能编译**（`final` 各自推断），所以
+        # 报出来的是断言 FAIL，而不是一次没测量的 build failed。
+        [("""    final baseStage = await bases();
+    final resultStage = await results();""",
+          """    final resultStage = await results(); // injected fault: 成品先于底图
+    final baseStage = await bases();""")],
+        'inpaint.layered_order_bases_first',
+    ),
+    'inpaint_base_allows_downscale': (
+        [f'lib/foundation/translation_project/{RR}'],
+        # 放行降采样底图 ⇒ `result/` 侧的 `scale == 1.0` 变成谎言：
+        # 框按源坐标落在缩小的图上，位置全错而不报错。
+        [('}) => decodedWidth == originalWidth;',
+          '}) => decodedWidth > 0; // injected fault: 降采样也放行')],
+        'inpaint.base_requires_no_downscale',
+    ),
+    'inpaint_base_from_inpainted': (
+        [f'lib/foundation/translation_project/{RR}'],
+        # 底图改从**已去字的** `inpainted/` 取 ⇒ 每保存一次就更糊一点，
+        # 而界面上看不出任何异常。
+        [("""String inpaintedBaseSourcePath(TranslationProject project, String pageKey) =>
+    project.originalPath(pageKey);""",
+          """String inpaintedBaseSourcePath(TranslationProject project, String pageKey) =>
+    project.artifactPath('inpainted', pageKey); // injected fault""")],
+        'inpaint.base_source_is_original',
     ),
 }
 

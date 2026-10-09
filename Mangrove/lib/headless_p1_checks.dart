@@ -21,6 +21,8 @@ import 'package:mangrove/foundation/image_translation/balloon_clustering.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
 import 'package:mangrove/foundation/translation_project/edit_command.dart';
 import 'package:mangrove/foundation/translation_project/project.dart';
+import 'package:mangrove/foundation/translation_project/project_writer.dart';
+import 'package:mangrove/foundation/translation_project/result_renderer.dart';
 import 'package:mangrove/foundation/translation_project/rich_text_sync.dart';
 import 'package:mangrove/foundation/translation_project/studio_pipeline.dart';
 import 'package:mangrove/foundation/translation_project/text_block.dart';
@@ -882,7 +884,73 @@ void _pipelineChecks(
     );
   }
 
-  // --- 9) 反向验证本身必须被记录 -----------------------------------------
+  // --- 9) 两阶段产出的三个契约（S9.5-a 的新代码，此前零反向验证） ---------
+  //
+  // 三条都是"违反不报错、只是静默地少一半产物"那一类，所以它们必须有一个
+  // 能被注入故障的地方（`A08 §6.2` 记的就是这三处抽口）。
+
+  // 9a) 顺序契约：底图必须先于成品。
+  //
+  // 🔴 判据必须**同步**读，而且**只能**同步读：两个回调都不含 await，所以
+  // `inLayeredOrder(...)` 一旦被调用，第一阶段已经开始、第二阶段还没有。
+  // 若改成 `await` 完再读，两种顺序都会得到 `bases,results` —— 断言就永远绿了
+  // （那正是这处抽口最容易写错的地方）。本函数是同步的，正好逼出这个判据。
+  //
+  // 三种写错的方式都会被打红：
+  //   * 两阶段对调        → 同步读到 `results`；
+  //   * 两个阶段并发起跑  → 同步读到 `bases,results`；
+  //   * 一次都不跑        → 同步读到空串。
+  final orderLog = <String>[];
+  // ignore: unawaited_futures
+  ProjectWriter.inLayeredOrder<void, void>(
+    () async {
+      orderLog.add('bases');
+    },
+    () async {
+      orderLog.add('results');
+    },
+  );
+  final synchronousOrder = orderLog.join(',');
+  check(
+    'inpaint.layered_order_bases_first',
+    synchronousOrder == 'bases',
+    'sync=[$synchronousOrder]（必须是 bases）—— '
+    'result/ 以 inpainted/ 为输入位图；反过来跑只会把成品记成 skipped，'
+    '"一张都没出"看起来像"这页没译文"',
+  );
+
+  // 9b) 降采样不许出底图。
+  final sameWidth = canProduceInpaintedBase(
+    decodedWidth: 8000,
+    originalWidth: 8000,
+  );
+  final downscaled = canProduceInpaintedBase(
+    decodedWidth: 4000,
+    originalWidth: 8000,
+  );
+  check(
+    'inpaint.base_requires_no_downscale',
+    sameWidth && !downscaled,
+    '同宽=$sameWidth；降采样=$downscaled（必须 false）—— '
+    '否则 result/ 侧的 scale==1.0 变成谎言，框按源坐标落在缩小的图上',
+  );
+
+  // 9c) 底图只从原图取。
+  final inpaintProbe = TranslationProject.create(
+    jsonFile: File('${Directory.systemTemp.path}/_p1_inpaint_probe.json'),
+    directory: Directory.systemTemp.path,
+  );
+  final baseSource = inpaintedBaseSourcePath(inpaintProbe, '0/1.webp');
+  final forbiddenSource = inpaintProbe.artifactPath('inpainted', '0/1.webp');
+  check(
+    'inpaint.base_source_is_original',
+    baseSource == inpaintProbe.originalPath('0/1.webp') &&
+        baseSource != forbiddenSource,
+    'source=$baseSource；禁止=$forbiddenSource '
+    '(对已去字的位图再擦一遍会越擦越糊，且每保存一次更糊一点)',
+  );
+
+  // --- 10) 反向验证本身必须被记录 ----------------------------------------
   //
   // 断言不报错不代表它在检查正确的东西。这条把"每条断言都被注入故障验证过
   // 失败"变成可核对的记录，而不是一句"应该测过了"。清单在 docs/P9.6 §五。
@@ -922,6 +990,9 @@ void _pipelineChecks(
     'pipeline.cancel_token_works',
     'pipeline.report_counts_failures',
     'pipeline.studio_does_not_use_legacy_engine',
+    'inpaint.layered_order_bases_first',
+    'inpaint.base_requires_no_downscale',
+    'inpaint.base_source_is_original',
   };
   // 🔴 两个清单**合起来**必须覆盖 `known`，互不相交，且 `reverseVerified` 非空。
   //

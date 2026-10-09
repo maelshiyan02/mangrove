@@ -17,6 +17,7 @@ import 'package:mangrove/foundation/image_translation/translation_service.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
+import 'package:mangrove/foundation/translation_project/studio_pipeline.dart';
 import 'package:mangrove/network/images.dart';
 
 enum PreTranslationTaskStatus { running, paused, completed, canceled, failed }
@@ -85,6 +86,28 @@ class PreTranslationChapter {
   }
 }
 
+/// 一个工作室整章跑的进度与结局。
+///
+/// 刻意只有三个数字：任务卡要的只有这三样。旧引擎那套"分组缓冲 + 断点游标"
+/// 是**旧缓存**的续跑语义，工作室不需要（它按 `result/` 判哪些页还没跑
+/// —— `studioPagesNeedingWork`），硬搬过来只会让两条路的语义互相污染。
+typedef StudioTaskOutcome = ({int done, int failed, bool canceled});
+
+/// 工作室整章跑的**执行体**，由 `studio_enqueue.dart` 在启动时注入。
+///
+/// 🔴 为什么是一个注入的闭包而不是直接调用：本文件属于**旧引擎的任务框架**，
+/// 让它去 import `TranslationProject` / `StudioChapterRunner` 就等于把工作室的
+/// 工程模型拖进旧引擎（`P6 §S9.5` 交付 4 明写"只接**展示**，不把旧缓存写入口
+/// 拉进工作室"—— 反向同理：旧框架只该知道"有个东西在跑、跑完了"）。
+/// 这样本文件对工作室的全部认知就是 [PreTranslationTask.studio] 与
+/// [PreTranslationTask.studioJsonPath] 两个字段。
+typedef StudioTaskRunner =
+    Future<StudioTaskOutcome> Function(
+      PreTranslationTask task,
+      CancellationToken token,
+      void Function(int done, int total) onProgress,
+    );
+
 /// A background job that pre-translates selected chapters of one comic so the
 /// rendered pages are cached before the user opens the reader.
 ///
@@ -103,6 +126,9 @@ class PreTranslationTask {
     this.cover = '',
     this.status = PreTranslationTaskStatus.running,
     this.finishedAt,
+    this.studio = false,
+    this.studioJsonPath,
+    this.studioChapter,
   });
 
   final String id;
@@ -115,6 +141,24 @@ class PreTranslationTask {
   final DateTime createdAt;
   PreTranslationTaskStatus status;
   DateTime? finishedAt;
+
+  /// S9.5-b · 这是**工作室管线**的任务，不是旧引擎的。
+  ///
+  /// 两者共享的只有"出现在任务列表里 + 可取消 + 有进度"这三件事
+  /// （`P6 §S9.5` 交付 4）。跑法完全不同：旧路走 [ImageTranslationService]，
+  /// 新路走 `StudioChapterRunner`（由 [PreTranslationTaskManager.studioRunner]
+  /// 注入）。**判据只有这一个字段**，所以"这条任务怎么跑"在整份文件里只分叉
+  /// 一次（[_run] 的第一行），不存在"某个角落还按旧的跑"。
+  final bool studio;
+
+  /// studio 模式的工程 `imgtrans_*.json` 绝对路径。
+  ///
+  /// 持久化的**唯一理由**是跨重启续跑：重启后 [PreTranslationTaskManager]
+  /// 靠它重建整章跑的输入（工程 → 这一章的页 → 还缺 `result/` 的页）。
+  final String? studioJsonPath;
+
+  /// 章节目录前缀（`'1 [Asura Scans]'`；无章节的漫画是空串）。
+  final String? studioChapter;
 
   String get comicKey => '$cid@$sourceKey';
 
@@ -164,6 +208,9 @@ class PreTranslationTask {
     'finishedAt': finishedAt?.toIso8601String(),
     'status': status.name,
     'chapters': chapters.map((c) => c.toJson()).toList(),
+    if (studio) 'studio': true,
+    if (studioJsonPath != null) 'studioJsonPath': studioJsonPath,
+    if (studioChapter != null) 'studioChapter': studioChapter,
   };
 
   factory PreTranslationTask.fromJson(Map<String, dynamic> json) {
@@ -186,6 +233,11 @@ class PreTranslationTask {
             (e) => PreTranslationChapter.fromJson(Map<String, dynamic>.from(e)),
           )
           .toList(),
+      // 旧记录没有这两个键 ⇒ 一律按 legacy 解析（`fromJson` 的容错规矩与
+      // `failedPages` 一致：老数据不因为新字段而整条作废）。
+      studio: json['studio'] == true,
+      studioJsonPath: json['studioJsonPath']?.toString(),
+      studioChapter: json['studioChapter']?.toString(),
     );
   }
 }
@@ -308,6 +360,26 @@ class PreTranslationTaskManager with ChangeNotifier {
   final _runningIds = <String>{};
   final _activities = <String, PreTranslationActivity>{};
 
+  /// studio 任务的取消令牌，键是 `task.id`。
+  ///
+  /// 🔴 这就是交付 4 说的"把 `CancellationToken` 接进任务列表"：用户在任务卡上
+  /// 点取消 → [cancel] 顺手 `token.cancel()` → 工作室管线在**下一个页边界**
+  /// 抛 `PipelineCanceled` 停下（`StudioChapterRunner` 里那个 `throwIfCanceled`）。
+  /// 没有这一行，"可取消"就只是把卡片从列表里挪走，而管线还在后台跑完 94 页。
+  final _studioTokens = <String, CancellationToken>{};
+
+  /// studio 整章跑的执行体；由 `studio_enqueue.dart` 在启动时注入。
+  ///
+  /// 是 `static` 且**可为 null**：headless 的 `edit-check` 在 `init()` 之前就
+  /// 跑完了，那时没有任何人注册它 —— 于是"studio 任务但没人能跑"必须是一个
+  /// **响亮的失败**（见 [_runStudio]），而不是静默地什么都不做。
+  static StudioTaskRunner? studioRunner;
+
+  /// 注册 studio 执行体。重复注册覆盖（启动路径只有一条，但测试会重入）。
+  static void registerStudioRunner(StudioTaskRunner runner) {
+    studioRunner = runner;
+  }
+
   /// Live stage detail for a running job; null once it stops. Not persisted —
   /// a restart resumes from the committed counters, not from mid-group state.
   PreTranslationActivity? activityOf(String taskId) => _activities[taskId];
@@ -367,6 +439,57 @@ class PreTranslationTaskManager with ChangeNotifier {
       cover: cover,
       chapters: chapters,
       createdAt: DateTime.now(),
+    );
+    currentTasks.insert(0, task);
+    _saveActive();
+    notifyListeners();
+    unawaited(_run(task));
+    return task;
+  }
+
+  /// S9.5-b · 把一个**工作室工程**的整章跑排进任务列表。
+  ///
+  /// ## 与 [start] 的三处不同（每一处都有理由，别照抄 start）
+  ///
+  /// 1. **不查 `isReadyForComic`**。那条判据锁的是旧引擎的缓存键与模型开关；
+  ///    工作室的输入是**磁盘上的工程**，能不能跑由 [StudioTaskRunner] 决定
+  ///    （它自己会在缺模型/缺 LLM 时失败并回报）。在这里拦一道，只会让
+  ///    "模型装了但 `isReadyForComic` 因为别的原因为 false"变成静默不跑。
+  /// 2. **一章一任务**（`P6 §4.10.1` #14 拍板 ①）。一个工程就是一"章"
+  ///    （`ProjectBootstrap.plan` 按 `comicDirectory + chapterName` 建），所以
+  ///    `chapters` 恒为一条。
+  /// 3. **`total` 可以后知**：工程里还缺 `result/` 的页数要读盘才知道，所以
+  ///    这里传 0，由执行体在开工前用 `onProgress` 报上来。
+  PreTranslationTask? startStudio({
+    required String cid,
+    required String sourceKey,
+    required ComicType comicType,
+    required String title,
+    required String jsonPath,
+    required String chapterEid,
+    required String chapterTitle,
+    required String chapterPrefix,
+    String cover = '',
+  }) {
+    if (jsonPath.isEmpty) return null;
+    var existing = currentTasks
+        .where((t) => t.comicKey == '$cid@$sourceKey' && t.isRunning)
+        .firstOrNull;
+    if (existing != null) {
+      return existing;
+    }
+    var task = PreTranslationTask(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      cid: cid,
+      sourceKey: sourceKey,
+      comicType: comicType,
+      title: title,
+      cover: cover,
+      chapters: [PreTranslationChapter(eid: chapterEid, title: chapterTitle)],
+      createdAt: DateTime.now(),
+      studio: true,
+      studioJsonPath: jsonPath,
+      studioChapter: chapterPrefix,
     );
     currentTasks.insert(0, task);
     _saveActive();
@@ -474,6 +597,9 @@ class PreTranslationTaskManager with ChangeNotifier {
 
   void cancel(String id) {
     _canceledIds.add(id);
+    // 🔴 studio 模式：把令牌也点掉。它是在**页边界**检查的，所以这次取消会
+    // 停在当前页之后、不会跑完整章（`StudioChapterRunner` 的 `throwIfCanceled`）。
+    _studioTokens[id]?.cancel();
     var task = currentTasks.where((t) => t.id == id).firstOrNull;
     if (task == null) {
       notifyListeners();
@@ -515,9 +641,14 @@ class PreTranslationTaskManager with ChangeNotifier {
 
   /// Pauses a running pre-translation job. The worker loop checks this state
   /// between pages and waits until [resume] is called or the job is canceled.
+  ///
+  /// 🔴 studio 任务**不支持暂停**，这里直接不动它：`StudioChapterRunner` 只认
+  /// `CancellationToken`，没有"暂停"这个状态。如果照旧把 status 改成 paused，
+  /// 卡片会显示"已暂停"而管线其实在继续跑 —— 那正是这个项目最忌讳的
+  /// "UI 在说谎"。任务卡也因此不给 studio 任务画暂停按钮（`tasks_page.dart`）。
   void pause(String id) {
     var task = currentTasks.where((t) => t.id == id).firstOrNull;
-    if (task == null || !task.isRunning) return;
+    if (task == null || !task.isRunning || task.studio) return;
     task.status = PreTranslationTaskStatus.paused;
     _saveActive();
     notifyListeners();
@@ -582,25 +713,31 @@ class PreTranslationTaskManager with ChangeNotifier {
     _activities[task.id] = PreTranslationActivity();
     _refreshKeepAlive(task);
     try {
-      for (var chapter in task.chapters) {
-        if (_canceledIds.contains(task.id)) break;
-        if (chapter.canceled) continue;
-        await _waitWhilePaused(task);
-        if (_canceledIds.contains(task.id)) break;
-        await _runChapter(task, chapter);
-      }
-      // Auto-retry the failed pages once: a transient error (network blip, rate
-      // limit) on the first pass is common, and one automatic sweep clears most
-      // of them without the user noticing. Only the pages that actually failed
-      // are re-run; succeeded pages are untouched.
-      if (!_canceledIds.contains(task.id) &&
-          task.status == PreTranslationTaskStatus.running) {
-        await _retryFailedPasses(task);
-      }
-      if (task.status == PreTranslationTaskStatus.running) {
-        task.status = task.failed > 0 && task.done == 0
-            ? PreTranslationTaskStatus.failed
-            : PreTranslationTaskStatus.completed;
+      // 🔴 这条分叉是**唯一**一处"这条任务怎么跑"。旧路的循环与重试原样保留在
+      // else 里，一行没动 —— S9.5-b 只是把工作室那一条接进来，不是替换旧路。
+      if (task.studio) {
+        await _runStudio(task);
+      } else {
+        for (var chapter in task.chapters) {
+          if (_canceledIds.contains(task.id)) break;
+          if (chapter.canceled) continue;
+          await _waitWhilePaused(task);
+          if (_canceledIds.contains(task.id)) break;
+          await _runChapter(task, chapter);
+        }
+        // Auto-retry the failed pages once: a transient error (network blip, rate
+        // limit) on the first pass is common, and one automatic sweep clears most
+        // of them without the user noticing. Only the pages that actually failed
+        // are re-run; succeeded pages are untouched.
+        if (!_canceledIds.contains(task.id) &&
+            task.status == PreTranslationTaskStatus.running) {
+          await _retryFailedPasses(task);
+        }
+        if (task.status == PreTranslationTaskStatus.running) {
+          task.status = task.failed > 0 && task.done == 0
+              ? PreTranslationTaskStatus.failed
+              : PreTranslationTaskStatus.completed;
+        }
       }
     } catch (e, s) {
       Log.error('Pre-translation', '$e', s);
@@ -608,6 +745,9 @@ class PreTranslationTaskManager with ChangeNotifier {
     } finally {
       _canceledIds.remove(task.id);
       _runningIds.remove(task.id);
+      // studio 任务的令牌随任务一起丢掉：管线已经停了，留着它只会让下一次
+      // 同 id 的任务（不会发生，id 是时间戳）拿到一个已取消的令牌。
+      _studioTokens.remove(task.id);
       // The coalescing timer is shared by every running job, so it is not this
       // job's to cancel; the notifyListeners below already flushes this one.
       _activities.remove(task.id);
@@ -620,6 +760,58 @@ class PreTranslationTaskManager with ChangeNotifier {
       onTaskFinished?.call(task);
       notifyListeners();
     }
+  }
+
+  /// studio 模式：把整章交给注入的执行体（[StudioTaskRunner]）。
+  ///
+  /// 本方法**不认识** `TranslationProject` / `StudioChapterRunner` —— 它只做四
+  /// 件事：建令牌、报进度、定状态、写日志。工作室那半边的知识全部留在
+  /// `studio_enqueue.dart` 里（见 [StudioTaskRunner] 的说明）。
+  Future<void> _runStudio(PreTranslationTask task) async {
+    final chapter = task.chapters.isEmpty ? null : task.chapters.first;
+    final runner = studioRunner;
+    if (chapter == null) {
+      task.status = PreTranslationTaskStatus.failed;
+      return;
+    }
+    if (runner == null) {
+      // 没有执行体 = 这一次跑**什么都没做**。静默标成"完成"会把
+      // "阅读器永远显示原图"变成一个没有任何线索的现象。
+      Log.error(
+        'Pre-translation',
+        'studio task ${task.id}: no runner registered '
+        '(studioRunner is null — see StudioTaskRunner)',
+      );
+      chapter.failed = 1;
+      task.status = PreTranslationTaskStatus.failed;
+      return;
+    }
+    final token = CancellationToken();
+    _studioTokens[task.id] = token;
+    // 开局就已被取消（上一次会话遗留的 running 任务被用户点掉）时不要白跑。
+    if (_canceledIds.contains(task.id)) token.cancel();
+
+    final StudioTaskOutcome outcome;
+    try {
+      outcome = await runner(task, token, (done, total) {
+        chapter.total = total;
+        chapter.done = done;
+        _notifyActivity();
+      });
+    } catch (e, s) {
+      Log.error('Pre-translation', 'studio task ${task.id} threw: $e', s);
+      task.status = PreTranslationTaskStatus.failed;
+      return;
+    }
+    chapter.done = outcome.done;
+    chapter.failed = outcome.failed;
+    // 已经被 [cancel] 收走的任务不必再定状态（它此刻已经在 history 里了）。
+    if (task.status != PreTranslationTaskStatus.running) return;
+    task.status = outcome.canceled
+        ? PreTranslationTaskStatus.canceled
+        : (outcome.failed > 0 && outcome.done == 0
+              ? PreTranslationTaskStatus.failed
+              : PreTranslationTaskStatus.completed);
   }
 
   /// Suspends the loop while [task] is paused, returning as soon as it resumes

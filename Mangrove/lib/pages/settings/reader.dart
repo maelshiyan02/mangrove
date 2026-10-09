@@ -6,11 +6,19 @@ class ReaderSettings extends StatefulWidget {
     this.onChanged,
     this.comicId,
     this.comicSource,
+    this.chapterEid,
   });
 
   final void Function(String key)? onChanged;
   final String? comicId;
   final String? comicSource;
+
+  /// 当前正在读的章节 id。
+  ///
+  /// 🔴 S9.5-b 之后"翻译"开关是**每章**的（`P6 §4.10.1` #14 拍板 ①），所以
+  /// 面板必须知道是哪一章 —— 否则第二章会把第一章的开关状态当成自己的
+  /// （设置项是按漫画存的），而界面看起来完全正常。
+  final String? chapterEid;
 
   @override
   State<ReaderSettings> createState() => _ReaderSettingsState();
@@ -18,6 +26,10 @@ class ReaderSettings extends StatefulWidget {
 
 class _ReaderSettingsState extends State<ReaderSettings> {
   late bool _translationAdvanced;
+
+  /// 开关正在等磁盘（建工程 / 写绑定）。期间显示成禁用，避免用户连点两次
+  /// 触发两次入队。
+  bool _translationBusy = false;
 
   @override
   void initState() {
@@ -33,7 +45,82 @@ class _ReaderSettingsState extends State<ReaderSettings> {
     setState(
       () =>
           _translationAdvanced = preset == TranslationPerformancePreset.custom,
-    );
+    );  }
+
+  /// 把这一章的"翻译"开关排进/退出工作室管线。
+  ///
+  /// 🔴 打开**不是**等一次跑完再返回：建工程 + 整章检测/翻译要几分钟到几十分钟，
+  /// 面板上转圈那么久等于把 UA 冻住。这里只等"入队"这一步（建工程、写绑定、
+  /// 排进任务列表），跑的过程在任务列表里看、在那里取消。
+  Future<void> _toggleChapterTranslation(bool value) async {
+    final cid = widget.comicId;
+    final sourceKey = widget.comicSource;
+    final eid = widget.chapterEid;
+    if (cid == null || sourceKey == null) return;
+
+    // BT 工程自己就是产物（`renderBtPage`），不进工作室管线。
+    if (BtProjectManager.isBtComic(cid)) {
+      ImageTranslationService.setEnabledForComic(cid, sourceKey, value);
+      appdata.saveData();
+      setState(() {});
+      widget.onChanged?.call("enableImageTranslation");
+      return;
+    }
+    if (eid == null) return;
+
+    setState(() => _translationBusy = true);
+    var message = '';
+    if (value) {
+      final comic = LocalManager().find(cid, ComicType.local);
+      final status = await StudioChapterQueue.enqueue(
+        cid: cid,
+        sourceKey: sourceKey,
+        eid: eid,
+        title: comic?.title ?? '',
+        comicType: ComicType.local,
+      );
+      message = switch (status) {
+        StudioEnqueueStatus.queued => "Added to translation tasks".tl,
+        StudioEnqueueStatus.alreadyRunning => "Translation is already running".tl,
+        StudioEnqueueStatus.upToDate => "This chapter is already translated".tl,
+        StudioEnqueueStatus.noLocalCopy =>
+          "Download this comic before translating it".tl,
+        StudioEnqueueStatus.noPage => "No page image found for this chapter".tl,
+        StudioEnqueueStatus.failed => "Could not start translation".tl,
+      };
+    } else {
+      // 关开关 = 取消在跑的任务 + 解绑。**不删工程、不删产物** —— 那是用户在
+      // 工作室里的劳动成果，开关表达的是"现在不读它"。
+      final canceled = StudioChapterQueue.cancelIfRunning(
+        cid: cid,
+        sourceKey: sourceKey,
+      );
+      StudioChapterQueue.unbind(cid: cid, sourceKey: sourceKey, eid: eid);
+      message = canceled ? "Translation canceled".tl : "AI translation disabled".tl;
+    }
+    if (!mounted) return;
+    setState(() => _translationBusy = false);
+    App.rootContext.showMessage(message: message);
+    widget.onChanged?.call("enableImageTranslation");
+  }
+
+  /// 这一章现在有没有绑定工程。BT 漫画回落到旧的按漫画开关（它们的译文来自
+  /// BT 工程本身，不经过绑定表）。
+  bool _isChapterTranslated() {
+    final cid = widget.comicId;
+    final sourceKey = widget.comicSource;
+    final eid = widget.chapterEid;
+    if (cid == null || sourceKey == null) return false;
+    if (BtProjectManager.isBtComic(cid)) {
+      return ImageTranslationService.isEnabledForComic(cid, sourceKey);
+    }
+    if (eid == null) return false;
+    return StudioReaderStore.bindingFor(
+          cid: cid,
+          sourceKey: sourceKey,
+          eid: eid,
+        ) !=
+        null;
   }
 
   void _markTranslationCustom(String key) {
@@ -1022,36 +1109,37 @@ class _ReaderSettingsState extends State<ReaderSettings> {
               actionTitle: "Help".tl,
               callback: _showTranslationHelp,
             ),
-            // Translation is per-comic on purpose (it spends tokens): the
-            // switch only appears when a specific comic is in context (opened
-            // from the reader / detail page), and toggles that comic alone.
+            // 🔴 S9.5-b：这个开关的语义**变了**（`P6 §S9.5` 交付 1）。
+            //
+            //   旧：打开 = 翻开一页就**当场**翻译它（读时即时翻译，产物进
+            //       阅读器的 OCR 缓存，工作室看不见）。
+            //   新：打开 = **这一章入队工作室管线**（建/复用工程 → 跑检测/识别/
+            //       翻译 → 出 `result/`），阅读器只负责读**工程产物**。
+            //
+            // 所以开关的**真相是绑定表**（`studioReaderBindings[cid@src@eid]`），
+            // 不是 `appdata` 里的一个布尔。拿布尔当真相会出现"设置说开着、
+            // 绑定早就不在了"的开关 —— 一个按下之前就已经在说谎的控件。
             if (widget.comicId != null && widget.comicSource != null)
               ListTile(
-                title: Text("Translate pages while reading".tl),
+                title: Text("Translate this chapter".tl),
                 subtitle: Text(
-                  "Applies to this comic only. The original shows until a page finishes translating."
+                  "Queues this chapter for the translation studio. The original shows until the finished pages are ready."
                       .tl,
                 ),
-                trailing: Switch(
-                  value: ImageTranslationService.isEnabledForComic(
-                    widget.comicId!,
-                    widget.comicSource!,
-                  ),
-                  onChanged: (v) {
-                    ImageTranslationService.setEnabledForComic(
-                      widget.comicId!,
-                      widget.comicSource!,
-                      v,
-                    );
-                    appdata.saveData();
-                    setState(() {});
-                    widget.onChanged?.call("enableImageTranslation");
-                  },
-                ),
+                trailing: _translationBusy
+                    ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Switch(
+                        value: _isChapterTranslated(),
+                        onChanged: (v) => _toggleChapterTranslation(v),
+                      ),
               )
             else
               ListTile(
-                title: Text("Translate pages while reading".tl),
+                title: Text("Translate this chapter".tl),
                 subtitle: Text(
                   "Enable this per comic from its detail page or the in-reader settings."
                       .tl,

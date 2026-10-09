@@ -69,23 +69,28 @@ void main() {
       expect(p.fallbackUrl, isNot(p.diskCacheKey));
     });
 
-    // A translated page is rendered on device; a decode failure there says
-    // nothing about how the server encoded the original.
-    test('a translated reader page reports no url', () {
+    // A page drawn from the project's own artifacts is produced on device; a
+    // decode failure there says nothing about how the server encoded the
+    // original, and there is no second encoding to redirect to.
+    test('a page bound to a studio project reports no url', () {
       final p = ReaderImageProvider(
         'https://img.example.invalid/p/001.avif',
         'src',
         'cid',
         'eid',
         1,
-        translationKey: 'tr',
-        translationConfig: const TranslationConfig(
-          sourceLang: 'ja',
-          targetLang: 'zh',
-          mode: InpaintMode.patch,
-        ),
+        studioJsonPath: '/projects/foo/imgtrans_foo.json',
+        studioComicDirectory: '/downloads/foo',
       );
       expect(p.fallbackUrl, isNull);
+    });
+
+    // The switch being off is the *absence* of a binding, so the original-art
+    // fallback has to come back with it (S9.5-b V2: 关开关 → 回原图且无残留).
+    test('an unbound reader page keeps the original-art fallback', () {
+      const imageKey = 'https://img.example.invalid/p/001.avif';
+      final p = ReaderImageProvider(imageKey, 'src', 'cid', 'eid', 1);
+      expect(p.fallbackUrl, imageKey);
     });
   });
 }

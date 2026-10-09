@@ -43,6 +43,7 @@ import 'package:mangrove/headless_p4_checks.dart';
 import 'package:mangrove/headless_p5_checks.dart';
 import 'package:mangrove/headless_p6_checks.dart';
 import 'package:mangrove/headless_p7_checks.dart';
+import 'package:mangrove/headless_p8_checks.dart';
 import 'package:mangrove/headless_pipeline_check.dart';
 import 'package:mangrove/headless_script_checks.dart';
 
@@ -2073,6 +2074,13 @@ Future<void> runEditCheck(List<String> args, int commandIndex) async {
           'pipeline.blocks_become_letterable',
           'pipeline.cancel_token_works',
           'pipeline.report_counts_failures',
+          // inpaint.* —— 3 条（S9.5-b S1 补的欠账）。2026-10-09 实测：
+          // `python tools/_rv_drive.py inpaint_layered_order_reversed
+          // inpaint_base_allows_downscale inpaint_base_from_inpainted`
+          // ⇒ 三条各自的 target 都 FAIL、无连带破坏。见 `builds/reverse_verification.json`。
+          'inpaint.layered_order_bases_first',
+          'inpaint.base_requires_no_downscale',
+          'inpaint.base_source_is_original',
         ],
         // 🔴 尚未做过故障注入的那一条。故障 `pipeline_studio_uses_legacy` 在
         // 43/54 那一轮的"从未开始"名单里（见 `docs/P9.6 §5.3`、`A08 §4`）。
@@ -2119,6 +2127,12 @@ Future<void> runEditCheck(List<String> args, int commandIndex) async {
           'pipeline.resume_unknown_page_is_empty',
         ],
       );
+      // ── S9.5-b · 阅读侧读工程产物 ────────────────────────────────────
+      //
+      // 这一批的每一条都是"判据 + 一个故意做错的同类实现"（绿/红两遍同判据），
+      // 所以它**自带**反向验证，不需要 P1/P2 那种"事后补测"清单。见
+      // `headless_p8_checks.dart` 头部。
+      runP8Checks(check, packageRoot: packageRoot);
     }
 
     passed = checks.every((c) => c['passed'] == true);

@@ -2,10 +2,9 @@ import 'dart:async' show Future;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
-import 'package:mangrove/foundation/image_translation/translation_config.dart';
-import 'package:mangrove/foundation/image_translation/translation_service.dart';
 import 'package:mangrove/foundation/js_engine.dart';
 import 'package:mangrove/foundation/log.dart';
+import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
 import 'package:mangrove/network/images.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/translations.dart';
@@ -13,25 +12,25 @@ import 'base_image_provider.dart';
 import 'reader_image.dart' as image_provider;
 import 'package:mangrove/foundation/appdata.dart';
 
-/// Resolves the reader's translated variant without coupling the decision to
-/// image loading. A non-null result is displayed immediately; otherwise a
-/// ready local engine may continue the existing background translation path.
-@visibleForTesting
-Future<Uint8List?> resolveReaderTranslation({
-  required Future<Uint8List?> Function() renderStored,
-  required bool isEngineReady,
-  required VoidCallback schedule,
-}) async {
-  final rendered = await renderStored();
-  if (rendered != null) {
-    return rendered;
-  }
-  if (isEngineReady) {
-    schedule();
-  }
-  return null;
-}
-
+/// S9.5-b · 阅读器不再有"读时即时翻译"这条路。
+///
+/// ## 消失了什么
+///
+/// 这里原本是 `resolveReaderTranslation(renderStored:, isEngineReady:, schedule:)`：
+/// 先读旧引擎的文本缓存，读不到就**当场** `schedule()` 一次翻译并先显示原图。
+/// 那是"打开开关 = 读时翻译"的开关语义。
+///
+/// ## 换成了什么
+///
+/// 开关改成"**该章入队工作室管线**"（`P6 §S9.5` 交付 1/2），阅读侧只读**工程
+/// 产物**（[StudioReaderRenderer]）。于是阅读路径上不再有任何"翻译"动作 ——
+/// 它要么有产物可显示，要么显示原图，**不会**在翻页时开始一次网络请求。
+///
+/// ## 引擎层原样保留
+///
+/// `ImageTranslationService` / `image_translation/` 一个文件都没删：它们仍是
+/// 工作室管线（`StudioPagePipeline`）的检测/OCR/翻译腿，也仍是
+/// `PreTranslationTaskManager` 的后端。退出的只是**阅读器的进入点**。
 class ReaderImageProvider
     extends BaseImageProvider<image_provider.ReaderImageProvider> {
   /// Image provider for normal image.
@@ -42,13 +41,9 @@ class ReaderImageProvider
     this.eid,
     this.page, {
     this.enableResize = false,
-    this.translationKey,
-    this.legacyTranslationKey,
-    this.translationConfig,
-    this.translated = false,
-    this.comicTitle = '',
-    this.comicCover = '',
-    this.chapterTitle = '',
+    this.studioJsonPath,
+    this.studioComicDirectory,
+    this.studioRevision = 0,
     this.btProjectDir,
   });
 
@@ -62,33 +57,32 @@ class ReaderImageProvider
 
   final int page;
 
-  /// Cache key of the offline-translated variant of this page, or null when
-  /// translation is off. When set, a cached or synced stored translation is
-  /// shown before falling back to the original and background translation.
-  final String? translationKey;
+  /// `imgtrans_*.json` of the studio project this page's translation lives in.
+  ///
+  /// Non-null = 「这本素材漫画的这一章绑定了工作室工程，且开关打开」。阅读时
+  /// 由 [StudioReaderRenderer] 决定读 `result/` 还是拿 `inpainted/` 现绘，读不到
+  /// 就回落到原图（S9.5-b）。
+  final String? studioJsonPath;
 
-  /// The key this page's translation was stored under before [translationKey]
-  /// switched to the page ordinal. Non-null only while [imageKey] is the one
-  /// that wrote it, which is what makes the older row addressable at all.
-  final String? legacyTranslationKey;
+  /// 素材原图根（`downloads/<漫画>`）。工程页键是相对**这个**根的路径，与
+  /// 工程的 `directory`（`source/` 副本根）不同 —— 见
+  /// `studio_reader.dart` 的 [relativePageKey]。
+  final String? studioComicDirectory;
 
-  /// This comic's own language pair + text-removal mode. Non-null exactly when
-  /// [translationKey] is.
-  final TranslationConfig? translationConfig;
-
-  /// Whether the translated page is already known to exist. Only used to
-  /// change the provider identity so the reader can swap the image in place
-  /// once a background translation completes.
-  final bool translated;
-
-  final String comicTitle;
-  final String comicCover;
-  final String chapterTitle;
+  /// 产物变更计数（`StudioReaderStore.revision`）。
+  ///
+  /// 🔴 只为了改**图片缓存键**：工作室重生成完 `result/` 之后，同一条阅读路径
+  /// 必须拿到一个新的 provider，否则 Flutter 的 imageCache 会一直显示旧图。
+  final int studioRevision;
 
   /// Path of the imgtrans_*.json of the BallonsTranslator project this page
   /// belongs to. Non-null marks BT mode: the page is rendered from BT's
-  /// inpainted image + stored translations instead of the raw original, and
-  /// [translationKey] stays null so the offline pipeline stays out of it.
+  /// inpainted image + stored translations instead of the raw original.
+  ///
+  /// 🔴 它与 [studioJsonPath] 是**两条不同的路**，别合并：
+  /// BT 模式的 `imageKey` **已经**在工程的 `directory` 里（`BtProjectManager
+  /// .getImages` 就用 `displayPath` 出图），而素材漫画的 `imageKey` 在
+  /// `downloads/` 下，要靠"同一个相对页键"映射过去。
   final String? btProjectDir;
 
   @override
@@ -140,57 +134,19 @@ class ReaderImageProvider
         Log.error('BT Project', e, s);
       }
     }
-    if (translationKey != null) {
-      var config = translationConfig ?? TranslationConfig.of(cid, sourceKey);
-      var chapter = ImageTranslationService.chapterIdentity(
-        cid: cid,
-        sourceKey: sourceKey,
-        eid: eid,
-        config: config,
-        comicTitle: comicTitle,
-        comicCover: comicCover,
-        chapterTitle: chapterTitle,
-      );
-      var translatedFile = await ImageTranslationService.instance
-          .findTranslated(translationKey!, config.mode);
-      if (translatedFile != null) {
-        ImageTranslationService.instance.markTranslated(
-          translationKey!,
-          config.mode,
+    if (studioJsonPath != null) {
+      // 素材漫画：译文来自**工程产物**（`result/` 优先，其次 `inpainted/` + 块
+      // 现绘），不再是"读时即时翻译"。取不到就落到下面的原图分支 —— 阅读路径
+      // 上不再有任何"翻译"动作，翻页永远不会触发一次网络请求。
+      try {
+        final rendered = await StudioReaderRenderer.render(
+          jsonPath: studioJsonPath!,
+          imagePath: imageKey,
+          comicDirectory: studioComicDirectory ?? '',
         );
-        return await translatedFile.readAsBytes();
-      }
-      var rendered = await resolveReaderTranslation(
-        renderStored: () => ImageTranslationService.instance.renderStoredPage(
-          translationKey!,
-          imageBytes!,
-          config.mode,
-          chapter: chapter,
-          legacyCacheKey: legacyTranslationKey,
-        ),
-        isEngineReady: ImageTranslationService.isReadyForLang(
-          config.sourceLang,
-        ),
-        schedule: () {
-          // No synced result exists, but local models are usable: show the
-          // original for now and translate it in the background. When it lands
-          // the provider cache is evicted and the next resolve picks it up.
-          ImageTranslationService.instance.schedule(
-            translationKey!,
-            cid,
-            sourceKey,
-            imageBytes!,
-            config,
-            () {
-              ImageTranslationService.evictImage(this);
-            },
-            chapter: chapter,
-            legacyCacheKey: legacyTranslationKey,
-          );
-        },
-      );
-      if (rendered != null) {
-        return rendered;
+        if (rendered != null) return rendered;
+      } catch (e, s) {
+        Log.error('Studio Reader', e, s);
       }
     }
     if (appdata.settings['enableCustomImageProcessing']) {
@@ -262,7 +218,10 @@ class ReaderImageProvider
   @override
   String get key =>
       "$imageKey@$sourceKey@$cid@$eid@$enableResize"
-      "${translationKey == null ? '' : '@tr:$translated'}"
+      // 工作室产物重生成完（`result/` 落地）之后必须换一个新 provider，否则
+      // Flutter 的 imageCache 会一直把旧图还回来 —— 这就是 [studioRevision]
+      // 存在的唯一理由（V3：工作室改一个字，阅读器该页立刻变）。
+      "${studioJsonPath == null ? '' : '@studio:${studioJsonPath!}@$studioRevision'}"
       // The json mtime changes on every BT save, so a project edit evicts the
       // cached render without touching unrelated pages.
       "${btProjectDir == null ? '' : '@bt:${BtProjectManager().jsonMtimeMs(cid)}'}";
@@ -273,10 +232,18 @@ class ReaderImageProvider
   String get diskCacheKey =>
       ImageDownloader.imageCacheKey(imageKey, sourceKey, cid, eid);
 
-  /// A translated page is rendered locally, so a decode failure there says
-  /// nothing about the server's encoding of the original.
+  /// A page drawn from the project's own artifacts is produced **locally**, so a
+  /// decode failure there says nothing about how the server encoded the
+  /// original — there is no second encoding to ask for, and recording one would
+  /// poison the URL for the pages that really do come from the network.
+  ///
+  /// 所以只在「这一章绑定了工作室工程」时抑制回落；开关关掉时
+  /// [studioJsonPath] 为 null，原图的 avif 回落照旧生效（V2）。
+  ///
+  /// （BT 模式不在此列：它的 `imageKey` 本来就是工程目录里的 `file://` 路径，
+  /// 而 `_onFrameDecodeFailed` 对非网络 URL 直接跳过 —— 抑制与否没有区别。）
   @override
-  String? get fallbackUrl => translationKey == null ? imageKey : null;
+  String? get fallbackUrl => studioJsonPath == null ? imageKey : null;
 }
 
 /// Reads one page file from the local library.

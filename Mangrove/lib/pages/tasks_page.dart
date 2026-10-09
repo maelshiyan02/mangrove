@@ -595,11 +595,15 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
-              tooltip: "Pause".tl,
-              icon: const Icon(Icons.pause),
-              onPressed: () => preTranslationManager.pause(task.id),
-            ),
+            // 🔴 studio（工作室管线）任务没有"暂停"：`StudioChapterRunner` 只认
+            // `CancellationToken`。画一个按下去没反应的暂停键 = UI 在说谎，
+            // 所以这个按钮对 studio 任务直接不出现（manager.pause 也拒绝）。
+            if (!task.studio)
+              IconButton(
+                tooltip: "Pause".tl,
+                icon: const Icon(Icons.pause),
+                onPressed: () => preTranslationManager.pause(task.id),
+              ),
             IconButton(
               tooltip: "Cancel".tl,
               icon: const Icon(Icons.close),

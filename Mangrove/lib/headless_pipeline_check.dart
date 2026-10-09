@@ -21,12 +21,17 @@
 /// | 页面解析 | `original → inpainted → mask`（`studio_page._resolvePageFile`） |
 /// | 页宽 | `project.imageInfo[key]`（`studio_page._pageSizeInPixels`） |
 /// | 单页管线 | `StudioPagePipeline().runPage(...)` |
+/// | 整章循环 | **`StudioChapterRunner.run(...)`** —— 与阅读侧入队**同一个函数** |
 /// | 去重 | `overlapsExistingBlock(page, rect)` |
 /// | 落地 | `captureBlockListEdit` + `EditHistory.push`（**硬规矩 3** 的唯一入口） |
 /// | 保存 | `ProjectWriter.save(root: project.workspace, keepBackup: true)` |
 /// | 出图 | `ProjectWriter.writeArtifacts(kinds: {result})` + `renderProjectResultPage` |
 ///
 /// 只要有一环"另写一套"，它验的就不是工作室，而是工装自己。
+///
+/// 🔴 第 3 行是 S9.5-b 加的：整章循环本来长在本文件的 `_runOnce` 里，现在搬进了
+/// `studio_chapter_runner.dart` —— 因为**应用**（阅读页开关 = 该章入队）也需要
+/// 同一个循环。留在两处的话，工装验的就不再是产品跑的那条路（`P6 §S9.5` 交付 1）。
 ///
 /// ## 输出
 ///
@@ -48,89 +53,17 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-
-import 'package:crypto/crypto.dart';
 
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/image_translation/balloon_clustering.dart';
 import 'package:mangrove/foundation/image_translation/translation_config.dart';
-import 'package:mangrove/foundation/log.dart';
-import 'package:mangrove/foundation/translation_project/edit_command.dart';
 import 'package:mangrove/foundation/translation_project/project.dart';
 import 'package:mangrove/foundation/translation_project/project_io.dart';
-import 'package:mangrove/foundation/translation_project/project_writer.dart';
-import 'package:mangrove/foundation/translation_project/result_renderer.dart';
+import 'package:mangrove/foundation/translation_project/studio_chapter_runner.dart';
 import 'package:mangrove/foundation/translation_project/studio_pipeline.dart';
 
 void _cli(Map<String, dynamic> data) =>
     print('[CLI PRINT] ${jsonEncode(data)}');
-
-/// 一页的全程记录。字段名与 `StudioPageRun` 对齐但**不复用**它 —— 工装要多记
-/// "落盘前后"的观测量，那是管线不知道的事。
-class _PageRecord {
-  _PageRecord(this.pageKey);
-
-  final String pageKey;
-  int blocksBefore = 0;
-  int blocksAfter = 0;
-  int detected = 0;
-  int landed = 0;
-  int deduped = 0;
-  int skipped = 0;
-  String? baseSource;
-  String? error;
-  bool imageInfoMissing = false;
-  int resultBytes = 0;
-  String? resultHash;
-
-  Map<String, Object?> toJson() => {
-    'page': pageKey,
-    'blocksBefore': blocksBefore,
-    'detected': detected,
-    'deduped': deduped,
-    'landed': landed,
-    'blocksAfter': blocksAfter,
-    'skippedLines': skipped,
-    'base': baseSource,
-    'imageInfoMissing': imageInfoMissing,
-    if (error != null) 'error': error,
-    'resultBytes': resultBytes,
-    if (resultHash != null) 'resultHash': resultHash,
-  };
-}
-
-class _Round {
-  _Round(this.label);
-
-  final String label;
-  final pages = <_PageRecord>[];
-  int resultWritten = 0;
-  int resultSkipped = 0;
-  int resultFailed = 0;
-  int resultOnDisk = 0;
-  int inpaintedWritten = 0;
-  int inpaintedSkipped = 0;
-  int totalLanded = 0;
-  int failedPages = 0;
-  final skippedReasons = <String, int>{};
-  Map<String, Object?> stage = const <String, Object?>{};
-
-  Map<String, Object?> toJson() => {
-    'label': label,
-    'stages': stage,
-    'totalLanded': totalLanded,
-    'failedPages': failedPages,
-    'inpaintedWritten': inpaintedWritten,
-    'inpaintedSkipped': inpaintedSkipped,
-    'resultWritten': resultWritten,
-    'resultSkipped': resultSkipped,
-    'resultFailed': resultFailed,
-    'resultOnDisk': resultOnDisk,
-    'resultAbsentReasons': skippedReasons,
-    'pages': [for (final p in pages) p.toJson()],
-  };
-}
 
 Future<void> runPipelineCheck(List<String> args, int commandIndex) async {
   final jsonIndex = args.indexOf('--json');
@@ -213,7 +146,7 @@ Future<void> runPipelineCheck(List<String> args, int commandIndex) async {
   final allKeys = <String>[];
   for (final key in project.pageOrder) {
     if (chapterFilter != null && !key.startsWith('$chapterFilter/')) continue;
-    if (_resolveBase(project, key) != null) allKeys.add(key);
+    if (StudioChapterRunner.resolveBase(project, key) != null) allKeys.add(key);
   }
   final keys = limit > 0 && limit < allKeys.length
       ? allKeys.sublist(0, limit)
@@ -251,13 +184,17 @@ Future<void> runPipelineCheck(List<String> args, int commandIndex) async {
   );
 
   // ---- 逐轮 ----
-  final rounds = <_Round>[];
+  final rounds = <StudioChapterRun>[];
   var live = project;
   for (var r = 0; r < repeat; r++) {
     // 第 2 轮起从盘上重读：否则比的是内存里的同一份对象，"幂等"无从谈起。
     if (r > 0) live = await TranslationProjectIo.load(live.jsonFile);
-    final round = _Round('run${r + 1}');
-    await _runOnce(live, keys, options, round);
+    final round = await StudioChapterRunner.run(
+      project: live,
+      pageKeys: keys,
+      options: options,
+      label: 'run${r + 1}',
+    );
     rounds.add(round);
     _cli({
       'status': 'running',
@@ -395,237 +332,4 @@ Future<void> runPipelineCheck(List<String> args, int commandIndex) async {
     },
   );
   exit(passed ? 0 : 1);
-}
-
-Future<void> _runOnce(
-  TranslationProject project,
-  List<String> keys,
-  StudioRunOptions options,
-  _Round round,
-) async {
-  final pipeline = StudioPagePipeline();
-  final history = EditHistory();
-  final cancel = CancellationToken();
-
-  var detectPages = 0;
-  var detectBlocks = 0;
-  var detectSkipped = 0;
-  var landed = 0;
-  var deduped = 0;
-
-  for (final pageKey in keys) {
-    final record = _PageRecord(pageKey);
-    round.pages.add(record);
-    final page = project.pages[pageKey];
-    record.blocksBefore = page?.blocks.length ?? 0;
-    // 失败页也要报出真实的落盘前块数，否则 `blocksAfter: 0` 会被读成"原来就没有块"。
-    record.blocksAfter = record.blocksBefore;
-
-    final base = _resolveBase(project, pageKey);
-    if (base == null) {
-      record.error = 'no page image on disk';
-      continue;
-    }
-    record.baseSource = base.$2;
-    final size = _pageSizeInPixels(project, pageKey);
-    record.imageInfoMissing = size.$2;
-
-    final Uint8List bytes;
-    try {
-      bytes = await base.$1.readAsBytes();
-    } catch (e) {
-      record.error = 'read failed: $e';
-      continue;
-    }
-
-    final run = await pipeline.runPage(
-      pageKey,
-      bytes,
-      options: options,
-      pageWidth: size.$1.round(),
-      cancel: cancel,
-    );
-    if (run.error != null) {
-      record.error = '${run.error}';
-      continue;
-    }
-    record.detected = run.blocks.length;
-    record.skipped = run.skipped;
-    detectPages++;
-    detectBlocks += run.blocks.length;
-    detectSkipped += run.skipped;
-
-    if (page == null) {
-      record.error = 'page key not in project';
-      continue;
-    }
-    // 去重：**只读**既有块（`overlapsExistingBlock` 明写绝不改动它们）。
-    final fresh = [
-      for (final block in run.blocks)
-        if (!overlapsExistingBlock(page, block.rect)) block,
-    ];
-    record.deduped = run.blocks.length - fresh.length;
-    record.landed = fresh.length;
-    landed += fresh.length;
-    deduped += record.deduped;
-
-    if (fresh.isNotEmpty) {
-      // 🔴 硬规矩 3：任何写 `pages[key]` 的路径都必须走登记入口，否则
-      // `result/` 增量重渲会漏页 —— 这里与 Create/Delete 块共用同一条。
-      final command = captureBlockListEdit(
-        page.rawBlocks,
-        () => page.addBlocks(fresh),
-        pageKey: pageKey,
-        label: 'Pipeline detect',
-      );
-      if (!command.isEmpty) history.push(command);
-    }
-    record.blocksAfter = page.blocks.length;
-    round.totalLanded += record.landed;
-  }
-
-  round.failedPages = round.pages.where((p) => p.error != null).length;
-  final dirty = history.dirtyPages;
-
-  // ---- 保存（统一契约，与工作室 Ctrl+S 同一条） ----
-  final saveReport = await ProjectWriter.save(
-    root: project.workspace,
-    project: project,
-    keepBackup: true,
-  );
-  history.markSaved();
-
-  // ---- 出图（两阶段，与 `studio_page._regenerateResults` 同一条） ----
-  //
-  // 🔴 顺序不可交换：`result/` 以 `inpainted/` 为**输入位图**，而
-  // `writeArtifacts` 内部是并发 worker —— 放进同一次调用会读到还没写出来的
-  // 底图。全量（不走脏页 filter），理由见文件头。
-  final baseReport = await ProjectWriter.writeArtifacts(
-    root: project.workspace,
-    project: project,
-    kinds: const {ProjectArtifactKind.inpainted},
-    concurrency: 2,
-    source: (kind, pageKey) => renderInpaintedPage(project, pageKey),
-  );
-  final artifactReport = await ProjectWriter.writeArtifacts(
-    root: project.workspace,
-    project: project,
-    kinds: const {ProjectArtifactKind.result},
-    concurrency: 2,
-    source: (kind, pageKey) => renderProjectResultPage(project, pageKey),
-  );
-  round.inpaintedWritten = baseReport.written.length;
-  round.inpaintedSkipped = baseReport.skipped.length;
-  round.resultWritten = artifactReport.written.length;
-  round.resultSkipped = artifactReport.skipped.length;
-  round.resultFailed = artifactReport.failed.length;
-
-  // 逐页取**盘上**哈希：这是"内容哈希与重跑一致"的唯一来源。
-  for (final record in round.pages) {
-    final file = File(
-      ProjectWriter.artifactPath(
-        project.workspace,
-        ProjectArtifactKind.result,
-        record.pageKey,
-      ),
-    );
-    if (!file.existsSync()) continue;
-    final data = await file.readAsBytes();
-    round.resultOnDisk++;
-    record.resultBytes = data.length;
-    record.resultHash = sha256.convert(data).toString().substring(0, 16);
-  }
-  // 没出图的页，说清是哪一类原因 —— 只看"0 张"分不清。
-  //
-  // 🔴 顺序即语义：**检测失败的页必须先报检测失败**。第一版按
-  // "页键缺失 → 无译文 → 无底图 → 渲染器返回 null" 的顺序取第一个成立的，
-  // 于是 94 页全部报成 `no translated region` —— 字面没错（确实没有 region），
-  // 但它把真正的根因（`No Impeller context is available`，解码在第一行就挂了）
-  // 藏在了第二层。这正是本项目最忌讳的那类"静默分歧"：一个数字看起来正常，
-  // 成因却是另一回事。
-  for (final record in round.pages) {
-    if (record.resultBytes > 0) continue;
-    final reason = _absentReason(
-      project,
-      record.pageKey,
-      project.pages[record.pageKey],
-      record.error,
-    );
-    round.skippedReasons[reason] = (round.skippedReasons[reason] ?? 0) + 1;
-  }
-
-  round.stage = {
-    'detect': {
-      'pages': detectPages,
-      'blocks': detectBlocks,
-      'skippedLines': detectSkipped,
-    },
-    'land': {
-      'landed': landed,
-      'deduped': deduped,
-      'dirtyPages': dirty.length,
-    },
-    'save': {
-      'json': saveReport.jsonFile.path,
-      'jsonBytes': saveReport.bytes,
-      'artifactDirs': saveReport.artifactDirectories
-          .map((d) => d.split(RegExp(r'[\\/]')).last)
-          .toList(),
-    },
-    'result': {
-      'inpaintedWritten': round.inpaintedWritten,
-      'inpaintedSkipped': round.inpaintedSkipped,
-      'written': round.resultWritten,
-      'skipped': round.resultSkipped,
-      'failed': round.resultFailed,
-      'onDisk': round.resultOnDisk,
-    },
-  };
-
-  for (final (artifact, error) in artifactReport.failed) {
-    Log.error('pipeline-check', 'result ${artifact.path}: $error');
-  }
-}
-
-/// 为什么这一页没有 `result/` 文件 —— 成因分开报，**根因优先**。
-String _absentReason(
-  TranslationProject project,
-  String pageKey,
-  ProjectPage? page,
-  String? pageError,
-) {
-  // 上游就挂了的页，先说上游。没有这一支，解码/OCR 的失败会被降级成
-  // "这一页没有译文"，读起来像"这页本来就没文字"。
-  if (pageError != null) return 'upstream failed: $pageError';
-  if (page == null) return 'page key missing';
-  if (page.regions.isEmpty) return 'no translated region';
-  final inpainted = project.inpaintedPath(pageKey);
-  if (inpainted == null || !File(inpainted).existsSync()) {
-    return 'no inpainted base';
-  }
-  return 'renderer returned null';
-}
-
-/// 与 `studio_page._resolvePageFile` 同一条回退链，附带来源标签。
-(File, String)? _resolveBase(TranslationProject project, String pageKey) {
-  final original = File(project.originalPath(pageKey));
-  if (original.existsSync()) return (original, 'original');
-  for (final kind in const ['inpainted', 'mask']) {
-    final file = File(project.artifactPath(kind, pageKey));
-    if (file.existsSync()) return (file, kind);
-  }
-  return null;
-}
-
-/// 与 `studio_page._pageSizeInPixels` 同一条：FT 的 `image_info`，缺则回落
-/// 1200×1800。第二项报告"是否回落了" —— 回落会让 `clusterBalloons` 的列切分
-/// 用一个**不是这页真实宽度**的值，是聚类质量的隐形变量。
-(double, bool) _pageSizeInPixels(TranslationProject project, String pageKey) {
-  final info = project.imageInfo[pageKey];
-  final width = info is Map ? (info['width'] as num?)?.toDouble() : null;
-  final height = info is Map ? (info['height'] as num?)?.toDouble() : null;
-  if (width == null || height == null || width <= 0 || height <= 0) {
-    return (1200.0, true);
-  }
-  return (width, false);
 }

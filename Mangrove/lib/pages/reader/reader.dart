@@ -36,6 +36,7 @@ import 'package:mangrove/foundation/image_provider/reader_image.dart';
 import 'package:mangrove/foundation/image_translation/translation_config.dart';
 import 'package:mangrove/foundation/image_translation/translation_service.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/missing_pages.dart';

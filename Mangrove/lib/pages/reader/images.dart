@@ -2494,62 +2494,41 @@ ImageProvider _createImageProviderFromKey(
   final chapterNumber = chapter ?? reader.chapter;
   final eid =
       reader.widget.chapters?.ids.elementAtOrNull(chapterNumber - 1) ?? '0';
-  String? translationKey;
-  String? legacyTranslationKey;
-  TranslationConfig? translationConfig;
-  var translated = false;
-  // BT comics render from the imgtrans json; the offline translation pipeline
-  // never touches them (translationKey stays null).
+  final sourceKey = reader.type.comicSource?.key;
+  // BT comics render from the imgtrans json; a studio binding never applies to
+  // them (their `imageKey` already lives inside the project's `directory`).
   final isBtComic = BtProjectManager.isBtComic(reader.cid);
-  // Gate on the per-comic switch alone (which syncs over WebDAV), not on model
-  // readiness: a device without translation models can still render a translated
-  // page from a stored result that synced across (see renderStoredPage). When
-  // models ARE present, missing pages get translated on demand as before.
-  if (!isBtComic &&
-      !reader.showOriginalPages &&
-      ImageTranslationService.isEnabledForComic(
-        reader.cid,
-        reader.type.sourceKey,
-      )) {
-    translationKey = ImageTranslationService.cacheKeyFor(
-      reader.type.comicSource?.key,
-      reader.cid,
-      eid,
-      page,
-    );
-    legacyTranslationKey = ImageTranslationService.legacyCacheKeyFor(
-      imageKey,
-      reader.type.comicSource?.key,
-      reader.cid,
-      eid,
-    );
-    translationConfig = TranslationConfig.of(
-      reader.cid,
-      reader.type.comicSource?.key,
-    );
-    translated = ImageTranslationService.instance.isTranslated(
-      translationKey,
-      translationConfig.mode,
-    );
-  }
+  // S9.5-b · 开关语义已经变了。它不再表示"打开 = 读时即时翻译"，而是
+  // "**这一章已经入队工作室管线**"（`P6 §S9.5` 交付 1）：打开开关时
+  // `StudioReaderLink.ensureBinding` 为该章建/绑一个工程，这里只是读回那条
+  // 绑定。于是阅读器需要的是"读到哪个工程"，而不是任何翻译配置 ——
+  // 翻译配置属于管线，属于工作室，不属于翻页。
+  //
+  // 🔴 绑定缺失 = 这一章没跑过管线 = 显示原图。这里**不**去看旧引擎的即时缓存
+  // （`ImageTranslationService`）：那张缓存已经没人维护，读它等于把一份过期
+  // 产物冒充成译文。
+  final binding = isBtComic || reader.showOriginalPages
+      ? null
+      : StudioReaderStore.bindingFor(
+          cid: reader.cid,
+          sourceKey: sourceKey,
+          eid: eid,
+        );
   return ReaderImageProvider(
     imageKey,
-    reader.type.comicSource?.key,
+    sourceKey,
     reader.cid,
     eid,
     page,
     enableResize: reader
         .mode
         .isContinuous, // For continuous mode, we need to resize the image to improve performance
-    translationKey: translationKey,
-    legacyTranslationKey: legacyTranslationKey,
-    translationConfig: translationConfig,
-    translated: translated,
-    comicTitle: reader.widget.name,
-    comicCover: reader.widget.history.cover,
-    chapterTitle:
-        reader.widget.chapters?.titles.elementAtOrNull(chapterNumber - 1) ??
-        reader.widget.name,
+    studioJsonPath: binding?.jsonPath,
+    studioComicDirectory: binding?.comicDirectory,
+    // 产物变更计数只影响**缓存键**：工作室重生成完 `result/` 之后，同一条阅读
+    // 路径必须拿到一个新 provider，否则 Flutter 的 imageCache 会一直显示旧图
+    // （V3：改一个字，阅读器该页立刻变）。
+    studioRevision: StudioReaderStore.revision,
     btProjectDir: isBtComic
         ? BtProjectManager().projectFor(reader.cid)?.jsonFile.path
         : null,

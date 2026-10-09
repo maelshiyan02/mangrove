@@ -92,11 +92,21 @@ def tree_is_clean():
                 # The legitimate mentions live in the assertion set's own prose
                 # and in its `known` list.
                 for line in text.splitlines():
-                    if 'injected fault' not in line:
+                    marker = line.find('injected fault')
+                    if marker < 0:
                         continue
                     if 'docs/P9.6' in line or 'docs/P9.7' in line:
                         continue
-                    if line.strip() == "'injected fault',":
+                    # 🔴 判据是"它是不是一句**注释**"，不是"这行有没有这几个字"。
+                    # 每一个故障都是往代码里塞一条注释（`// injected fault` /
+                    # `# injected fault`），而断言集的 detail 文案里写着
+                    # `'injected fault$unverified'` —— 那是一句合法的说明文字。
+                    # 早先这里用 `line.strip() == "'injected fault',"` 做豁免，
+                    # 字符串后来改成了带后缀的插值，豁免就不再匹配，于是**每一次
+                    # `_rv_drive` 都被自己的守卫挡在门口**（而且看起来像"树不干净"
+                    # 这种最不该误报的结论）。改成看注释符，两者就分得开了。
+                    head = line[:marker]
+                    if '//' not in head and '#' not in head:
                         continue
                     hits.append(
                         f'{os.path.relpath(path, ROOT)}: {line.strip()}')

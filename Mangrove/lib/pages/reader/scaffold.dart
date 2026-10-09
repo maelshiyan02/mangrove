@@ -1118,6 +1118,10 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
       ReaderSettings(
         comicId: context.reader.cid,
         comicSource: context.reader.type.sourceKey,
+        // 🔴 S9.5-b：翻译开关是**每章**的，面板必须知道是哪一章。推导与
+        // `images.dart::_createImageProviderFromKey` 逐字同源（章节目录表的
+        // ids，无章节的漫画是 `'0'`）—— 两处不一致会让开关指向另一章的绑定。
+        chapterEid: _currentChapterEid(),
         onChanged: (key) {
           if (key == "readerMode") {
             context.reader.mode = ReaderMode.fromKey(
@@ -1172,6 +1176,16 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
       ),
       width: 400,
     );
+  }
+
+  /// 当前这一章的 eid，与 `images.dart::_createImageProviderFromKey` 逐字同源。
+  ///
+  /// 无章节的漫画（`chapters == null`）恒为 `'0'` —— 与下载任务、任务列表里
+  /// 的用法一致（那里也是拿 `'0'` 当一个"整本只有一章"的 id）。
+  String _currentChapterEid() {
+    final reader = context.reader;
+    return reader.widget.chapters?.ids.elementAtOrNull(reader.chapter - 1) ??
+        '0';
   }
 
   void _openSideBar(Widget widget, {double width = 400}) {

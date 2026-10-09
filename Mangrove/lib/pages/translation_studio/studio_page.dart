@@ -1765,30 +1765,35 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       // `mask/` + `inpainted/` 定为"保存时同步产出"，但 S8 把它推迟给 S9、
       // S9 又没捡回来，于是**没有任何代码生产 `inpainted/`** → `result/`
       // 永远 0 张且不报错（证据见 `renderInpaintedPage` 的文档）。
-      final bases = await ProjectWriter.writeArtifacts(
-        root: project.workspace,
-        project: project,
-        kinds: const {
-          ProjectArtifactKind.mask,
-          ProjectArtifactKind.inpainted,
-        },
-        filter: filter,
-        concurrency: 2,
-        source: (kind, pageKey) => kind == ProjectArtifactKind.mask
-            // 🔴 mask 与 inpainted 放进**同一次**调用是安全的：两者都只依赖
-            // 原图 + regions，互不读取对方的产物（`renderInpaintedPage` 不看
-            // mask，`renderMaskPage` 不看 inpainted）。真正不可交换的是它们
-            // 与 `result/` 的顺序 —— 那个必须单独一轮。
-            ? renderMaskPage(project, pageKey)
-            : renderInpaintedPage(project, pageKey),
-      );
-      final report = await ProjectWriter.writeArtifacts(
-        root: project.workspace,
-        project: project,
-        kinds: const {ProjectArtifactKind.result},
-        filter: filter,
-        concurrency: 2,
-        source: (kind, pageKey) => renderProjectResultPage(project, pageKey),
+      // 顺序由 `inLayeredOrder` 表达而不是靠"两个相邻的 await"——后者写反了
+      // 不报错，只是静静地少一半产物（见该函数的文档与
+      // `inpaint.layered_order_bases_first`）。
+      final (bases, report) = await ProjectWriter.inLayeredOrder(
+        () => ProjectWriter.writeArtifacts(
+          root: project.workspace,
+          project: project,
+          kinds: const {
+            ProjectArtifactKind.mask,
+            ProjectArtifactKind.inpainted,
+          },
+          filter: filter,
+          concurrency: 2,
+          source: (kind, pageKey) => kind == ProjectArtifactKind.mask
+              // 🔴 mask 与 inpainted 放进**同一次**调用是安全的：两者都只依赖
+              // 原图 + regions，互不读取对方的产物（`renderInpaintedPage` 不看
+              // mask，`renderMaskPage` 不看 inpainted）。真正不可交换的是它们
+              // 与 `result/` 的顺序 —— 那个必须单独一轮。
+              ? renderMaskPage(project, pageKey)
+              : renderInpaintedPage(project, pageKey),
+        ),
+        () => ProjectWriter.writeArtifacts(
+          root: project.workspace,
+          project: project,
+          kinds: const {ProjectArtifactKind.result},
+          filter: filter,
+          concurrency: 2,
+          source: (kind, pageKey) => renderProjectResultPage(project, pageKey),
+        ),
       );
       // 🔴 对账表（P10.15 §3.1-B）：每次重生成后落一份**逐页**证据。
       //

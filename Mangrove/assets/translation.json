@@ -1,5 +1,14 @@
 {
   "zh_CN": {
+    "Translate this chapter": "翻译这一章",
+    "Queues this chapter for the translation studio. The original shows until the finished pages are ready.": "把这一章排进翻译工作室。产物出来之前显示原图。",
+    "Added to translation tasks": "已加入翻译任务",
+    "Translation is already running": "翻译任务已经在跑",
+    "This chapter is already translated": "这一章已经翻译过了",
+    "Download this comic before translating it": "请先下载这本漫画再翻译",
+    "No page image found for this chapter": "这一章没有可读的页面图",
+    "Could not start translation": "无法开始翻译",
+    "Translation canceled": "已取消翻译",
     "Customize chapter order": "自定义章节顺序",
     "Drag chapters or use the arrows to reorder. Changes apply to this comic only.": "拖动章节或点击上下箭头调整顺序，仅对这部漫画生效。",
     "Chapter group": "章节分组",
@@ -1562,6 +1571,15 @@
     "Translate failed.": "翻译失败。"
   },
   "zh_TW": {
+    "Translate this chapter": "翻譯這一章",
+    "Queues this chapter for the translation studio. The original shows until the finished pages are ready.": "把這一章排進翻譯工作室。產物出來之前顯示原圖。",
+    "Added to translation tasks": "已加入翻譯任務",
+    "Translation is already running": "翻譯任務已經在跑",
+    "This chapter is already translated": "這一章已經翻譯過了",
+    "Download this comic before translating it": "請先下載這本漫畫再翻譯",
+    "No page image found for this chapter": "這一章沒有可讀的頁面圖",
+    "Could not start translation": "無法開始翻譯",
+    "Translation canceled": "已取消翻譯",
     "Customize chapter order": "自訂章節順序",
     "Drag chapters or use the arrows to reorder. Changes apply to this comic only.": "拖曳章節或點擊上下箭頭調整順序，僅對這部漫畫生效。",
     "Chapter group": "章節分組",
