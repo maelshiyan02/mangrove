@@ -53,7 +53,7 @@ Future<int> main(List<String> args) async {
   final projectPath = args.isNotEmpty
       ? args.first
       : 'D:/Mangrove_Windows/ComicLibrary/downloads/'
-            'Error the Echo/imgtrans_Error the Echo.json';
+            'Fixture Comic/imgtrans_Fixture Comic.json';
 
   stdout.writeln('=== S6 codec conformance (vs Python json.dumps) ===');
   var codecFailures = 0;

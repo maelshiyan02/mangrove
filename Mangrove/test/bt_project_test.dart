@@ -85,7 +85,7 @@ Map<String, dynamic> btJsonFixture({
 /// Creates `root/<comic>/<chapter>/<page>` image files plus the imgtrans json,
 /// mimicking BT's on-disk layout. Returns the json file.
 Future<File> writeBtFixture(Directory root) async {
-  final comicDir = Directory('${root.path}/Error the Echo');
+  final comicDir = Directory('${root.path}/Fixture Comic');
   await Directory('${comicDir.path}/0').create(recursive: true);
   for (final page in ['1.webp', '2.webp', '3.webp']) {
     await File('${comicDir.path}/0/$page').writeAsBytes([1, 2, 3]);
@@ -93,7 +93,7 @@ Future<File> writeBtFixture(Directory root) async {
   final json = btJsonFixture(
     directory: comicDir.path.replaceAll('\\', '/'),
   );
-  final file = File('${comicDir.path}/imgtrans_Error the Echo.json');
+  final file = File('${comicDir.path}/imgtrans_Fixture Comic.json');
   await file.writeAsString(jsonEncode(json));
   return file;
 }
@@ -165,7 +165,7 @@ void main() {
     expect(project.pageKeysForChapter(2), ['0/3.webp']);
     expect(project.pageKeysForChapter(3), isEmpty);
 
-    await File('${tempRoot.path}/Error the Echo/0/2.webp').delete();
+    await File('${tempRoot.path}/Fixture Comic/0/2.webp').delete();
     expect(project.pageKeysForChapter(1), ['0/1.webp']);
   });
 

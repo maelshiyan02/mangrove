@@ -68,24 +68,35 @@ ComicCardKind comicCardKindOf(String? id) {
 bool isDerivedComicCard(String? id) =>
     comicCardKindOf(id) != ComicCardKind.downloaded;
 
-/// 「本地」栏 / 本地库列表**不收**的产物卡前缀。
+/// 主页「本地」栏**不收**的产物卡前缀（工程 + 成品）。
 ///
-/// 目前只有工程卡（`bt_<hash>`）：它已经有自己的家 —— 主页的「翻译工作室」分区
-/// 与工作室画布。再在「本地」里出现一次，用户看到的是"本地库里有 `MDGH-ch1`"，
-/// 而那是 `projects/MDGH-ch1` 里的一个**工程**，不是一部下载的漫画。
+/// 收录范围与磁盘上的 `ComicLibrary/downloads/` **一一对应** —— 即"我下载/导入
+/// 的素材"。两类产物各有各的家：
 ///
-/// 🔴 成品卡（`ft_<hash>`）**不在这里**，这是有意的：它是可读的漫画，而目前没有
-/// 任何别的地方能进它 —— 从本地库拿掉等于把用户自己发布的东西藏起来。它该怎么
-/// 展示（独立分区 / 角标 / 跟着工程走）是个产品决定。
-const List<String> hiddenFromLocalLibraryPrefixes = [BtProjectManager.idPrefix];
+/// * 工程（`bt_<hash>`）→ 主页「翻译工作室」分区 + 工作室画布；
+/// * 成品（`ft_<hash>`）→ 本地库页的「成品」段（它是一本可读漫画，不能没有
+///   入口，但也不必挤在「本地」里 —— 挤进来就是 2026-10-09 那个"本地库里有
+///   `MDGH-ch1`"的同款困惑）。
+///
+/// 🔴 本地库页**不用**这份清单：它按 [ComicCardKind] 三分展示，工程与成品各有
+/// 一段（见 `local_comics_page.dart`）。"隐藏"只对"这一栏只该有素材"的地方成立。
+const List<String> hiddenFromHomeLocalPrefixes = [
+  BtProjectManager.idPrefix,
+  FinishedExport.idPrefix,
+];
 
-/// 这一张卡该不该出现在「本地」栏 / 本地库列表里。
+/// 这一张卡该不该出现在主页「本地」栏。
 ///
-/// 判据**由 [hiddenFromLocalLibraryPrefixes] 推出来**，不是另写一遍前缀：
-/// 两处各写一遍就会出现"某一栏按 A 规则过滤、另一栏按 B 规则"，而用户看到的
-/// 是同一份列表在两个地方不一样长。
-bool isShownInLocalLibrary(String? id) {
+/// 判据**由 [hiddenFromHomeLocalPrefixes] 推出来**，不是另写一遍前缀。
+bool isShownInHomeLocal(String? id) {
   if (id == null) return true;
-  return !hiddenFromLocalLibraryPrefixes.any((p) => id.startsWith(p));
+  return !hiddenFromHomeLocalPrefixes.any((p) => id.startsWith(p));
 }
+
+/// 本地库页「来源」分段控件的三段——与磁盘上 `ComicLibrary/` 的三个下属文件夹
+/// 一一对应。
+///
+/// 🔴 文案**不放在**这个文件里：它是纯逻辑层，不该持有 UI 字符串（`.tl` 的字面
+/// 量也要能被 i18n 扫描器扫到，那要求它在 dart 文件里就地出现）。
+const List<ComicCardKind> localLibraryKinds = ComicCardKind.values;
 

@@ -13,8 +13,6 @@ import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/favorites.dart';
 import 'package:mangrove/foundation/history.dart';
 import 'package:mangrove/foundation/home_layout.dart';
-import 'package:mangrove/foundation/image_translation/translation_service.dart';
-import 'package:mangrove/foundation/image_translation/translation_store.dart';
 import 'package:mangrove/foundation/read_later.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
@@ -987,12 +985,12 @@ class _LocalState extends State<_Local> {
   /// `comic_type` 同样登记成 [ComicType.local] —— 所以按类型分不开，只能按
   /// id 前缀分。不排除的话主页"本地"里就会冒出 `MDGH-ch1` 这种工程名
   /// （2026-10-09 实测），可它根本不是一本下载的漫画。
-  /// 排除清单取自 [hiddenFromLocalLibraryPrefixes]，与本地库页同源。
+  /// 排除清单取自 [hiddenFromHomeLocalPrefixes]，与本地库页同源。
   List<LocalComic> _recent() =>
-      LocalManager().getRecentExcludingPrefixes(hiddenFromLocalLibraryPrefixes);
+      LocalManager().getRecentExcludingPrefixes(hiddenFromHomeLocalPrefixes);
 
   int _count() =>
-      LocalManager().countExcludingPrefixes(hiddenFromLocalLibraryPrefixes);
+      LocalManager().countExcludingPrefixes(hiddenFromHomeLocalPrefixes);
 
   void onLocalComicsChange() {
     setState(() {

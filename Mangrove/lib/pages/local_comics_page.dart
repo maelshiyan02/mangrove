@@ -57,6 +57,26 @@ class _LocalComicsPageState extends State<LocalComicsPage>
 
   LocalComicStatus? currentTab; // null means "全部" (all)
 
+  /// 当前选中的**来源**段（素材 / 工程 / 成品），与 `ComicLibrary/` 的三个下属
+  /// 文件夹一一对应。默认「素材」—— 打开本地库想看的是自己下载的漫画，不是工程。
+  ComicCardKind kindFilter = ComicCardKind.downloaded;
+
+  /// 只有素材才有下载状态；工程/成品段把状态 tab 整行藏掉（否则会出现
+  /// "成品 + 下载中"这种永不为空也不会非空的格子）。
+  bool get _statusTabsVisible => kindFilter == ComicCardKind.downloaded;
+
+  void _selectKind(ComicCardKind kind) {
+    if (kindFilter == kind) return;
+    setState(() {
+      kindFilter = kind;
+      // 换段时状态筛选必须回到"全部"：tab 藏起来期间用户看不见它，回来时如果
+      // 还停在第 3 格，看到的是一个"什么都不显示"的列表，而原因看不见。
+      currentTab = null;
+      _tabController.index = 0;
+      comics = _collectComics();
+    });
+  }
+
   /// Download tasks we've attached a listener to, so tiles repaint as bytes
   /// arrive instead of only when a task starts/finishes. Mirrors the sync in
   /// DownloadingPage (#P5/S1).
@@ -139,11 +159,11 @@ class _LocalComicsPageState extends State<LocalComicsPage>
         .map((task) => task.toLocalComic())
         .toList();
     all = [...downloadingComics, ...all];
-    // FT 工程卡不是漫画：它没有下载状态，混在每个列表里只会添乱。它归主页
-    // "翻译工作室"分区（点开是工作室画布），不归本地库。
-    // 判据取自 [isShownInLocalLibrary]，与主页"本地"分区同源 —— 两处各自
-    // 写一遍 `isBtComic` 就会漂移（实测：主页漏排 → 主页显示 `MDGH-ch1`）。
-    all = all.where((c) => isShownInLocalLibrary(c.id)).toList();
+    // 按**来源**分（素材 / 工程 / 成品）。判据取自 [comicCardKindOf] —— 三者
+    // 在 `local.db` 里同表混排、`comic_type` 又都是 `local`，只能按 id 前缀分。
+    // 各处各写一遍 `startsWith('bt_')` 就会漂移（实测：主页漏排 → 主页显示
+    // `MDGH-ch1`，而那是 `projects/` 里的一个工程）。
+    all = all.where((c) => comicCardKindOf(c.id) == kindFilter).toList();
     return currentTab == null
         ? all
         : all.where((c) => c.status == currentTab).toList();
@@ -333,6 +353,37 @@ class _LocalComicsPageState extends State<LocalComicsPage>
     );
   }
 
+  /// 第一级筛选：**来源**（素材 / 工程 / 成品）。
+  ///
+  /// 与磁盘上 `ComicLibrary/` 的三个下属文件夹一一对应 —— 用户说"明明已经分成
+  /// 三个文件夹了"，那界面上就该有三段，而不是把三类混在一张列表里。
+  Widget _buildKindSegments(BuildContext context) {
+    final label = <ComicCardKind, String>{
+      ComicCardKind.downloaded: "Artwork".tl,
+      ComicCardKind.project: "Project".tl,
+      ComicCardKind.product: "Published".tl,
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: SegmentedButton<ComicCardKind>(
+        segments: [
+          for (final kind in localLibraryKinds)
+            ButtonSegment<ComicCardKind>(
+              value: kind,
+              label: Text(label[kind]!),
+              icon: Icon(switch (kind) {
+                ComicCardKind.downloaded => Icons.local_library_outlined,
+                ComicCardKind.project => Icons.translate_rounded,
+                ComicCardKind.product => Icons.auto_stories_outlined,
+              }),
+            ),
+        ],
+        selected: {kindFilter},
+        onSelectionChanged: (next) => _selectKind(next.first),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     List<Widget> selectActions = [
@@ -465,6 +516,10 @@ class _LocalComicsPageState extends State<LocalComicsPage>
               actions: multiSelectMode ? selectActions : null,
             ),
           if (!searchMode && !multiSelectMode)
+            SliverToBoxAdapter(
+              child: Material(child: _buildKindSegments(context)),
+            ),
+          if (!searchMode && !multiSelectMode && _statusTabsVisible)
             SliverToBoxAdapter(
               child: Material(
                 child: AppTabBar(

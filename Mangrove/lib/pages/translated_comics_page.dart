@@ -4,7 +4,6 @@ import 'package:mangrove/components/components.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
-import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/widget_utils.dart';
 import 'package:mangrove/utils/translations.dart';

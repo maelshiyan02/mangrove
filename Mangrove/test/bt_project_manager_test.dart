@@ -76,7 +76,7 @@ void main() {
       appdata.settings['btProjectRoot'] = '';
       await tempRoot.delete(recursive: true);
     });
-    await writeManagerFixture(tempRoot, 'Error the Echo');
+    await writeManagerFixture(tempRoot, 'Fixture Comic');
     appdata.settings['btProjectRoot'] = tempRoot.path;
     // The registered id hashes the OS-native path from a directory listing.
     String? listedJson;
@@ -104,7 +104,7 @@ void main() {
     // The first page file disappears (a wrong export batch was deleted):
     // cover and page listing move on to the remaining existing files without
     // any database involvement.
-    await File('${tempRoot.path}/Error the Echo/0/1.webp').delete();
+    await File('${tempRoot.path}/Fixture Comic/0/1.webp').delete();
     expect((await manager.loadCover(id))!.key, '0/2.webp');
     expect((await manager.getImages(id, 1)).length, 2);
   });

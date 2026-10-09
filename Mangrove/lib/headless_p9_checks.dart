@@ -247,39 +247,62 @@ void runP9Checks(CheckSink check, {required Directory packageRoot}) {
   // 按 id 前缀分。主页"本地"分区漏了这一刀，于是出现 `MDGH-ch1` 这种工程名。
 
   probe(
-    'local_library_hides_project_cards_only',
-    // 三行实测 id（`local.db` 2026-10-09）。**有意**只隐藏 `bt_`：
-    // - `bt_` 归主页"翻译工作室"分区，点开是画布，重复列在本地库没有意义；
-    // - `ft_` 是**成品**，它是一本可读的漫画，且除了本地库没有别的入口 ——
-    //   藏掉它就再也打不开了。怎么"展示"它是产品决定，但不能"消失"。
+    'the_library_splits_by_card_kind',
+    // 本地库页按 [ComicCardKind] **三分**（素材 / 工程 / 成品），与磁盘上
+    // `ComicLibrary/` 的三个下属文件夹一一对应。三行实测 id（`local.db`
+    // 2026-10-09）。
+    // 🔴 认不出来的前缀一律归 `downloaded`：多列一条素材是可解释的（点进去会说
+    // 这一本没有页图），少列一条是静默的（用户找不到自己下好的漫画）。
     () =>
-        !isShownInLocalLibrary('bt_d2844d22') &&
-        isShownInLocalLibrary('ft_0166fe70') &&
-        isShownInLocalLibrary('gm28k//my-dragon-girlfriend-has-returned') &&
-        isShownInLocalLibrary(null),
-    // 故障路径 = 什么都不隐藏的那一版（它在 `bt_` 上就让判据不成立）。
-    () => !_showsEverythingInLocalLibrary('bt_d2844d22'),
-    () => '绿=本地库只隐藏 bt_ 工程卡，ft_ 成品仍可见 / 故障=不隐藏的版本不成立',
+        comicCardKindOf('bt_d2844d22') == ComicCardKind.project &&
+        comicCardKindOf('ft_0166fe70') == ComicCardKind.product &&
+        comicCardKindOf('gm28k//my-dragon-girlfriend-has-returned') ==
+            ComicCardKind.downloaded &&
+        comicCardKindOf(null) == ComicCardKind.downloaded &&
+        localLibraryKinds.length == 3,
+    // 故障路径 = 按 `comicType` 分类的那一版：`bt_`/`ft_` 都是 `local`，
+    // `ft_` 会被误判成工程（⇒ 合取式在它身上不成立）。
+    () =>
+        _kindByComicType(isLocalType: true) == ComicCardKind.project &&
+        _kindByComicType(isLocalType: true) == ComicCardKind.product &&
+        _kindByComicType(isLocalType: false) == ComicCardKind.downloaded,
+    () => '绿=按 id 前缀三分（bt_=工程 / ft_=成品 / 其余=素材） / '
+        '故障=按 comicType 分类的版本把 ft_ 判成工程',
   );
 
   probe(
-    'home_and_library_share_one_hidden_prefix_list',
+    'home_local_section_shows_artwork_only',
+    // 主页「本地」栏的收录范围 = `ComicLibrary/downloads/`（**只有素材**）：
+    // 工程归「翻译工作室」分区，成品归本地库页的「成品」段。三者都不该挤在一栏
+    // —— 挤进来就是"本地库里有 MDGH-ch1"那个困惑。
+    () =>
+        !isShownInHomeLocal('bt_d2844d22') &&
+        !isShownInHomeLocal('ft_0166fe70') &&
+        isShownInHomeLocal('gm28k//my-dragon-girlfriend-has-returned') &&
+        isShownInHomeLocal(null),
+    // 故障路径 = 什么都不排除的那一版（它在 `bt_` 上就让判据不成立）。
+    () => !_showsEverythingInHomeLocal('bt_d2844d22'),
+    () => '绿=主页本地栏只收素材（排除 bt_/ft_）/ 故障=不排除的版本不成立',
+  );
+
+  probe(
+    'home_and_library_read_the_same_card_kind_module',
     // 🔴 主页「本地」与本地库页**各写一遍** `isBtComic` 就必然漂移 —— 实测正是
-    // 主页漏排。两处都必须只引用 `hiddenFromLocalLibraryPrefixes`。
+    // 主页漏排。两处都必须只读 `comic_card_kind.dart`。
     () =>
         _usesSharedHiddenPrefixList(
           // 🔴 只能扫**这一段**：`home_page.dart` 的「翻译工作室」分区本来就该用
           // `isBtComic`（那一栏要的正是工程卡），整文件扫会误判。
           _classBodyOf(code(_homePagePath), 'class _LocalState'),
         ) &&
-        _usesSharedHiddenPrefixList(
+        _librarySplitsByCardKind(
           _methodBodyOf(code(_localComicsPath), 'List<LocalComic> _collectComics()'),
         ),
     // 故障路径 = 内联 `BtProjectManager.isBtComic` 的那一版。
     () => _usesSharedHiddenPrefixList(
       'all = all.where((c) => !BtProjectManager.isBtComic(c.id)).toList();',
     ),
-    () => '绿=两处（主页本地分区 / 本地库页列表）都引用共享排除清单 / '
+    () => '绿=两处（主页本地分区 / 本地库页列表）都读同一份卡片判据 / '
         '故障=内联 isBtComic 的版本不满足判据',
   );
 
@@ -679,21 +702,34 @@ String? _problemWithoutLength(String name) {
   return null;
 }
 
-/// 什么都不隐藏的那一版"本地库可见性"（红路径的对照物）。
-bool _showsEverythingInLocalLibrary(String? id) => true;
+/// 什么都不排除的那一版"主页本地栏可见性"（红路径的对照物）。
+bool _showsEverythingInHomeLocal(String? id) => true;
+
+/// 按 `comicType == ComicType.local` 分类的那一版卡片判据。
+///
+/// `bt_`/`ft_` 两张产物卡**都**是按 `local` 登记的 ⇒ 这一版会把 `ft_` 判成工程，
+/// 而真正从网络源下载的素材（`comic_type` 是源类型）被判成素材 —— 恰好是
+/// "成品混进工程段、素材倒是对的"这种半对，最难发现。
+ComicCardKind _kindByComicType({required bool isLocalType}) =>
+    isLocalType ? ComicCardKind.project : ComicCardKind.downloaded;
+
+/// 本地库页是不是按 [comicCardKindOf] 三分，而不是就地写前缀判断。
+bool _librarySplitsByCardKind(String source) =>
+    source.contains('comicCardKindOf(') &&
+    !source.contains('BtProjectManager.isBtComic');
 
 /// 一个页面是不是**引用共享排除清单**，而不是就地再写一遍 `isBtComic`。
 ///
 /// 🔴 反向条件不能省：只查"有没有引用清单"的话，一份**同时**引用清单又内联
 /// `isBtComic` 的代码也会通过，而漂移照样会发生。
 ///
-/// "共享"的两种形态都算：主页直接传 `hiddenFromLocalLibraryPrefixes` 给查询，
-/// 本地库页调 `isShownInLocalLibrary`（它内部由同一份清单推出来）。
+/// "共享"的两种形态都算：主页直接传 `hiddenFromHomeLocalPrefixes` 给查询，
+/// 或调 `isShownInHomeLocal`（它内部由同一份清单推出来）。
 /// 🔴 反向条件不能省：只查"有没有引用"的话，一份**同时**引用又内联 `isBtComic`
 /// 的代码也会通过，而漂移照样会发生。
 bool _usesSharedHiddenPrefixList(String source) =>
-    (source.contains('hiddenFromLocalLibraryPrefixes') ||
-        source.contains('isShownInLocalLibrary')) &&
+    (source.contains('hiddenFromHomeLocalPrefixes') ||
+        source.contains('isShownInHomeLocal')) &&
     !source.contains('BtProjectManager.isBtComic');
 
 /// 切出一个**顶层类**的正文（[decl] 形如 `class _LocalState`）。
