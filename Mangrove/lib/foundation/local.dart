@@ -783,6 +783,60 @@ class LocalManager with ChangeNotifier {
     return res.first[0] as int;
   }
 
+  /// 同 [getRecent]，但排除 id 以 [excludePrefixes] 之一开头的卡。
+  ///
+  /// 🔴 前缀**由调用方传入**（`comic_card_kind.dart::hiddenFromLocalLibraryPrefixes`）
+  /// 而不是写死在这里：本文件只负责"按前缀排除"这件事，不该知道 `bt_`/`ft_`
+  /// 这些产品概念 —— 写死进来之后，主页与本地库页就会各自维护一份前缀。
+  List<LocalComic> getRecentExcludingPrefixes(
+    List<String> excludePrefixes, {
+    int limit = 20,
+  }) {
+    final where = _prefixExclusionWhere(excludePrefixes);
+    final res = _db.select(
+      '''
+      SELECT * FROM comics
+      WHERE $where
+      ORDER BY created_at DESC
+      LIMIT $limit;
+      ''',
+      _prefixExclusionArgs(excludePrefixes),
+    );
+    return res.map((row) => LocalComic.fromRow(row)).toList();
+  }
+
+  /// 同 [count]，但排除 id 以 [excludePrefixes] 之一开头的卡。
+  int countExcludingPrefixes(List<String> excludePrefixes) {
+    final where = _prefixExclusionWhere(excludePrefixes);
+    final res = _db.select(
+      '''
+      SELECT COUNT(*) FROM comics
+      WHERE $where;
+      ''',
+      _prefixExclusionArgs(excludePrefixes),
+    );
+    return res.first[0] as int;
+  }
+
+  /// 一条排除若干个 id 前缀的 SQL 条件（参数化）。
+  ///
+  /// 🔴 用 `substr(id, 1, n) <> ?` 而不是 `id NOT LIKE 'bt_%'`：`LIKE` 里的 `_`
+  /// 是**单字符通配符**，`'bt_%'` 会连 `btX…` 一起命中（`btx` 这种前缀目前不
+  /// 存在，但那是巧合，不是保证）。`substr` 是精确比较，且长度跟着前缀走。
+  String _prefixExclusionWhere(List<String> excludePrefixes) {
+    final kept = excludePrefixes.where((p) => p.isNotEmpty).toList();
+    if (kept.isEmpty) return '1 = 1';
+    return kept.map((_) => 'substr(id, 1, ?) <> ?').join(' AND ');
+  }
+
+  /// [_prefixExclusionWhere] 对应的参数，顺序与它拼出的占位符一致。
+  List<Object?> _prefixExclusionArgs(List<String> excludePrefixes) => [
+    for (final prefix in excludePrefixes.where((p) => p.isNotEmpty)) ...[
+      prefix.length,
+      prefix,
+    ],
+  ];
+
   LocalComic? findByName(String name) {
     final res = _db.select(
       '''

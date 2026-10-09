@@ -208,6 +208,27 @@ class StudioReaderBindings {
   void put(String key, StudioReaderBinding binding) =>
       _raw[key] = binding.toJson();
 
+  /// 这一本漫画（`cid@sourceKey`）已经绑过工程的 `eid` 集合。
+  ///
+  /// 用于"这一章有没有绑过工程"的**批量**判断（详情页的已翻译筛选、章节列表
+  /// 的状态标记）：一次遍历就够，不必对每一章各拼一次键再查一次表。
+  ///
+  /// 🔴 前缀用 [key] 这个**同一个**函数拼出来（`eid` 传空串），不手写
+  /// `'$cid@$sourceKey@'`：手写一遍之后 [key] 的拼法一改，这里会静默地一个都
+  /// 匹配不上 —— 返回空集合，表现为"筛选之后一章都没有"，而不是报错。
+  Set<String> eidsFor({required String cid, required String? sourceKey}) {
+    final prefix = key(cid: cid, sourceKey: sourceKey, eid: '');
+    final result = <String>{};
+    for (final entryKey in _raw.keys) {
+      if (!entryKey.startsWith(prefix)) continue;
+      // 坏条目（`fromJson` 返回 null）不算"已翻译"：它读的时候会被跳过，
+      // 这里也不该把它当成一条存在的绑定。
+      if (StudioReaderBinding.fromJson(_raw[entryKey]) == null) continue;
+      result.add(entryKey.substring(prefix.length));
+    }
+    return result;
+  }
+
   void remove(String key) => _raw.remove(key);
 
   /// 一份**只含合法条目**的普通 Map，用于写回 implicitData。

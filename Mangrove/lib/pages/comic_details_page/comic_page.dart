@@ -52,6 +52,10 @@ import 'package:mangrove/pages/reader/reader.dart';
 import 'package:mangrove/pages/webdav_migration_dialog.dart';
 import 'package:mangrove/pages/search_result_page.dart';
 import 'package:mangrove/pages/settings/settings_page.dart';
+import 'package:mangrove/foundation/translation_project/studio_enqueue.dart';
+import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
+import 'package:mangrove/pages/translation_studio/studio_enqueue_message.dart';
+import 'package:mangrove/pages/translation_studio/studio_project_menu.dart';
 import 'package:mangrove/utils/file_type.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/local_comic_scanner.dart';
@@ -998,6 +1002,12 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh'.tl,
           ),
+        // 「创建翻译工程」入口的**第三份**（另两份在工作室详细页与工程列表页）。
+        // 挂在详情页是因为"我要给这一本建工程"这个念头正是在这里产生的 ——
+        // 而在这里还要再从一长串漫画里挑出刚打开的这一本，等于把已知的事问第二
+        // 遍。所以传 `presetComicId`：向导直接站到第 2 步（选章节）。
+        // 🔴 组件是**同一个** `StudioProjectMenu`，差异只有开局步数。
+        StudioProjectMenu(presetComicId: comic.id),
         IconButton(
           onPressed: showMoreActions,
           icon: const Icon(Icons.more_horiz),
@@ -2279,6 +2289,19 @@ class _SelectDownloadChapterState extends State<_SelectDownloadChapter> {
 /// Chapter multi-select for background pre-translation. Mirrors
 /// [_SelectDownloadChapter] but has no "already done" disabled rows — a
 /// chapter can always be re-queued (cached pages are skipped at run time).
+///
+/// 🔴 **目前没有任何调用方**（2026-10-09 全仓 `grep` 核实：只有本文件里这一处
+/// 定义）。上游 Venera 的「已翻译」入口在改名切割时没有跟着进来，于是它连它
+/// 构造的 `_SelectPreTranslateChapter(translatedView: true)` 一起变成了死代码
+/// —— 包括那条 `translatedView` 分支上的状态页签与「重新翻译」。
+///
+/// 之所以**先留着**并把它内部的判据改对（下面那段 `translatedIds`）：它是"已
+/// 翻译章节 → 重新翻译"这条流的现成实现，而工作室队列恰好是幂等的（全都有
+/// `result/` 时返回 `upToDate`，一次重译不会白跑）。要不要把它重新接回来是个
+/// **产品决定**（接在哪、叫什么），不该由一次重构顺手决定。
+///
+/// ⚠️ 谁要是把它接回来：不要再读 `ImageTranslationService.storedPageCount`
+/// 当"已翻译"的判据 —— 那条已经改完了，别改回去。
 void openTranslatedChaptersPage(
   BuildContext context,
   StoredTranslationComic comic,
@@ -2349,20 +2372,40 @@ void openTranslatedChaptersPage(
       return;
     }
 
-    // A legacy page row may predate the chapter index. Hydrating it here makes
-    // the status tabs accurate without requiring a new translation run.
-    final translatedIds = <String>{...storedById.keys};
-    for (var entry in entries) {
-      if (translatedIds.contains(entry.$1)) continue;
-      final pages = ImageTranslationService.storedPageCount(
-        comic.comicId,
-        comic.sourceKey,
-        entry.$1,
-        comicTitle: title,
-        comicCover: cover,
-        chapterTitle: entry.$2,
+    // 「这一章已翻译」的判据 = **工作室绑定表**里有这一章的绑定。
+    //
+    // 🔴 与阅读器**同一条判据**：阅读器对非 BT 漫画只看
+    // `StudioReaderStore.bindingFor(...) != null`（`reader/images.dart` 的非 BT
+    // 分支），所以这里说"已翻译"的章，翻进去真的会显示产物；反之亦然。两个界面
+    // 各用一条判据，就会出现"这里说已翻译、里面是原图" —— 而那种差异没有任何
+    // 一处会报错。
+    //
+    // 旧引擎那一侧在这里下线：`TranslationStore().chaptersFor(...)` 与
+    // `ImageTranslationService.storedPageCount(...)` 读的是 `image_translation.db`
+    // 的即时缓存，而那份缓存**已经没有人在读**（`chooseReaderPageSource` 不下线
+    // 到它）。拿它当"已翻译"，等于把一份过期产物冒充成译文。
+    final translatedIds = <String>{};
+    if (BtProjectManager.isBtComic(comic.comicId)) {
+      // BT 工程漫画的译文来自工程**自己**（`bt_` 卡不经过绑定表）—— 它的
+      // 章节页就在工程里，沿用原来的按页计数。
+      for (var entry in entries) {
+        final pages = ImageTranslationService.storedPageCount(
+          comic.comicId,
+          comic.sourceKey,
+          entry.$1,
+          comicTitle: title,
+          comicCover: cover,
+          chapterTitle: entry.$2,
+        );
+        if (pages > 0) translatedIds.add(entry.$1);
+      }
+    } else {
+      translatedIds.addAll(
+        StudioReaderStore.eidsFor(
+          cid: comic.comicId,
+          sourceKey: comic.sourceKey,
+        ),
       );
-      if (pages > 0) translatedIds.add(entry.$1);
     }
     stored = TranslationStore().chaptersFor(
       comic.sourceKey,

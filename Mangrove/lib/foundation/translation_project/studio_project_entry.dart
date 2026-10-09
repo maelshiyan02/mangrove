@@ -7,7 +7,7 @@
 //
 // | 步 | 判断 | 出错的样子 |
 // |---|---|---|
-// | 1 | 这本漫画**能不能**建工程 | 列表里混进 `bt_` 产物（建出来指向产物自己）；或混进没下载的漫画（复制原图时全缺） |
+// | 1 | 这本漫画**能不能**建工程 | 列表里混进 `bt_` 工程 / `ft_` 成品（建出来指向产物自己）；**或反过来，真正的素材一本都不列** —— 判据写成 `comicType == local` 时就是这个症状 |
 // | 2 | 这一章**有没有**页图 | 选了一个空目录，"建出来"的工程 0 页 —— 在工作室里只表现为一张空白 |
 // | 3 | 工程名怎么算 | 入口算的名字与阅读器开关算的名字**不一致** ⇒ 同一章建出两个工程 |
 //
@@ -71,22 +71,34 @@ String? studioProjectNameProblem(String name) {
 
 /// 一本漫画是不是"建工程"的候选。
 ///
-/// 三条判据缺一条都会静默产生一个建不出来的工程：
+/// 判据只有**两句**，但第一版把两句都写成了另一件事（见文末），于是界面上出现
+/// 的是"素材列表里只有一本**成品**、真正的素材一本都不在"。
 ///
-/// 1. [isLocalDownload] —— 工程要把原图**复制**进 `source/`
-///    （`ProjectBootstrap` 的硬约束 1），在线漫画没有原图可复制；
-/// 2. [!isBtProject] —— `bt_<hash>` 本身就是**产物**，给产物再建工程会让
-///    新工程的原图指向上一层的中间产物；
-/// 3. [chapterCount] > 0 —— 一章都没有时列表里会出现一本"点进去什么都不能选"
-///    的漫画，而它的失败原因（没有页图）在界面上看不出来。
+/// 1. [!isDerivedCard] —— `bt_<hash>` 是**工程**、`ft_<hash>` 是**成品**，两者
+///    都是从素材派生出来的产物。给产物再建工程，新工程的"原图"会指向上一层的
+///    中间产物（`projects/<名>/source/` 或 `translated/<名>/`）；
+/// 2. [hasLocalPages] —— 工程要把原图**复制**进 `source/`（`ProjectBootstrap`
+///    的硬约束 1）。判据是"本地真的有一章/一页"，用 `downloadedChapters`。
 ///
-/// 三条都写成**外部传进来的布尔/计数**，是为了让判据能在 headless 里被
-/// 直接喂故障（`isBtProject: true` 必须让它变 false），不必先搭一个库。
+/// 🔴 第 2 条**不能**写成 `comicType == ComicType.local`。`ComicType.local` 的
+/// 含义是"这本漫画的来源类型是本地"，而本流水线注册的**产物卡**（`bt_`/`ft_`）
+/// 恰恰也被登记成 `local`；反过来，从 comix.to 这类源**下载**到本地的漫画，
+/// `comicType` 是源类型（`496108553` 这种），却是最正统的素材。
+/// 实测（2026-10-09，`local.db` 三行）：`ft_` 成品卡被放行，只下了 9 话的
+/// `My Dragon Girlfriend Has Returned` 被排除。
+///
+/// [isFlat] 是"页直接躺在漫画根下、没有章节目录"的漫画（本地导入一个纯图片
+/// 文件夹）。它 `chapters == null` **且** `downloadedChapters` 为空，但它能读、
+/// 也照样能建工程 —— 所以必须单独放行。宁可多列一条（点进去会说"这一本没有
+/// 含页图的章节"），也不要少列一条（用户找不到自己的素材）。
+///
+/// 三条都写成**外部传进来的布尔**，是为了让判据能在 headless 里被直接喂故障
+/// （`isDerivedCard: true` 必须让它变 false），不必先搭一个库。
 bool studioProjectComicEligible({
-  required bool isLocalDownload,
-  required bool isBtProject,
-  required int chapterCount,
-}) => isLocalDownload && !isBtProject && chapterCount > 0;
+  required bool isDerivedCard,
+  required bool hasLocalPages,
+  required bool isFlat,
+}) => !isDerivedCard && (hasLocalPages || isFlat);
 
 /// 建工程时可选的**一章**（UI 侧的原始输入）。
 ///

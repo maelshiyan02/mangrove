@@ -48,7 +48,7 @@ import 'package:flutter/material.dart';
 
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
-import 'package:mangrove/foundation/comic_type.dart';
+import 'package:mangrove/foundation/comic_card_kind.dart';
 import 'package:mangrove/foundation/context.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
@@ -65,12 +65,22 @@ import 'studio_page.dart';
 /// "重扫工程根""从剪贴板导入"之类的动作时，只加一个 `PopupMenuItem`。
 const String _createAction = 'create';
 
-/// 「创建翻译工程」入口。挂在工作室详细页与工程列表页的右上角。
+/// 「创建翻译工程」入口。挂在**三处**：工作室详细页、工程列表页、漫画详情页。
 ///
 /// 用可展开菜单（`PopupMenuButton`）而不是一个裸按钮：后续动作往菜单里加，
 /// 不必再往 `AppBar.actions` 里挤一排图标 —— 那一排已经有十来个了。
+///
+/// [presetComicId] 是"用户此刻正在看哪一本漫画"。给了它、且那一本**可建工程**
+/// 时，向导从第 2 步（选章节）开始：在详情页里再让用户从一长串漫画里挑出自己
+/// 刚刚打开的那一本，是把已经知道的事情又问一遍。
+///
+/// 🔴 它只是**预先选中**，不是"锁定"：第 2 步仍可【上一步】回到选漫画。这条
+/// 很重要 —— 详情页那一份与另外两处**共用同一个** `_StudioProjectDialog`，
+/// 差异只有开局站在第几步，所以"三处入口行为不一致"这类漂移不可能发生。
 class StudioProjectMenu extends StatelessWidget {
-  const StudioProjectMenu({super.key});
+  const StudioProjectMenu({super.key, this.presetComicId});
+
+  final String? presetComicId;
 
   @override
   Widget build(BuildContext context) {
@@ -78,7 +88,9 @@ class StudioProjectMenu extends StatelessWidget {
       tooltip: 'Translation project'.tl,
       icon: const Icon(Icons.more_vert),
       onSelected: (value) {
-        if (value == _createAction) unawaited(createStudioProject(context));
+        if (value == _createAction) {
+          unawaited(createStudioProject(context, presetComicId: presetComicId));
+        }
       },
       itemBuilder: (context) => [
         PopupMenuItem<String>(
@@ -131,10 +143,13 @@ class StudioProjectOutcome {
 ///
 /// 🔴 提示语用 [App.rootContext] 发：紧接着就是一次页面跳转，用被跳走的那个
 /// `context` 发提示会让它随页面一起消失（"什么都没提示"）。
-Future<void> createStudioProject(BuildContext context) async {
+Future<void> createStudioProject(
+  BuildContext context, {
+  String? presetComicId,
+}) async {
   final outcome = await showDialog<StudioProjectOutcome>(
     context: context,
-    builder: (_) => const _StudioProjectDialog(),
+    builder: (_) => _StudioProjectDialog(presetComicId: presetComicId),
   );
   if (outcome == null || !context.mounted) return;
   await context.to(() => TranslationStudioPage(comicId: outcome.comicId));
@@ -169,7 +184,10 @@ class _ComicChoice {
 /// 三步都**先选后确认**（点一行 = 选中，按【下一步】才前进），而不是点一行就
 /// 自动跳走：整章建工程要复制几十上百个文件，值得让用户在看清楚之前停一下。
 class _StudioProjectDialog extends StatefulWidget {
-  const _StudioProjectDialog();
+  const _StudioProjectDialog({this.presetComicId});
+
+  /// 见 [StudioProjectMenu.presetComicId]。
+  final String? presetComicId;
 
   @override
   State<_StudioProjectDialog> createState() => _StudioProjectDialogState();
@@ -197,6 +215,15 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
     super.initState();
     _comics = _loadComicChoices();
     _name = TextEditingController();
+    // 详情页进来的：它已经知道是哪一本，直接站到第 2 步。**找不到就照常从
+    // 第 1 步开始** —— 详情页也可能是某本没下载的在线漫画，那时"你看的这一本"
+    // 根本不可建工程，列表才是正确答案。
+    final preset = _choiceForId(widget.presetComicId);
+    if (preset != null) {
+      _comic = preset;
+      _step = 1;
+      unawaited(_scanChapters(preset));
+    }
   }
 
   @override
@@ -207,25 +234,35 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
 
   // ── 候选（步 1） ────────────────────────────────────────────────────
 
+  _ComicChoice? _choiceForId(String? id) {
+    if (id == null) return null;
+    for (final choice in _comics) {
+      if (choice.comic.id == id) return choice;
+    }
+    return null;
+  }
+
   /// 本地库里所有**建得出工程**的漫画。
   ///
-  /// 🔴 判据走纯逻辑层的 `studioProjectComicEligible`（三条：本地下载 / 不是
-  /// `bt_` 产物 / 至少一章）。写在这里内联一份就会出现"列表里有、点进去没有"
-  /// 的条目，而那种条目的失败原因看不出来。
+  /// 🔴 判据走纯逻辑层的 `studioProjectComicEligible`。它只有两句："不是产物卡"
+  /// 且"本地真的有页"。第一版把它写成了 `comicType == ComicType.local`，结果
+  /// 只列出 `ft_` **成品**卡、把真正下到本地的素材全排除了（见该函数的注释）。
+  /// 身份用 `isDerivedComicCard`（`bt_` 工程 / `ft_` 成品），**不看** `comicType`。
   List<_ComicChoice> _loadComicChoices() {
     final manager = LocalManager();
     if (!manager.isInitialized) return const [];
     final choices = <_ComicChoice>[];
     for (final comic in manager.getComics(LocalSortType.defaultSort)) {
-      final chapters = _chapterRefsFor(comic);
       if (!studioProjectComicEligible(
-        isLocalDownload: comic.comicType == ComicType.local,
-        isBtProject: BtProjectManager.isBtComic(comic.id),
-        chapterCount: chapters.length,
+        isDerivedCard: isDerivedComicCard(comic.id),
+        hasLocalPages: comic.downloadedChapters.isNotEmpty,
+        // `chapters == null` = 页直接躺在漫画根下的"扁平"漫画（本地导入一个
+        // 纯图片文件夹）。它 `downloadedChapters` 是空的，但照样能建工程。
+        isFlat: comic.chapters == null,
       )) {
         continue;
       }
-      choices.add(_ComicChoice(comic: comic, chapters: chapters));
+      choices.add(_ComicChoice(comic: comic, chapters: _chapterRefsFor(comic)));
     }
     return choices;
   }

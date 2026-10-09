@@ -79,15 +79,7 @@ class _ReaderSettingsState extends State<ReaderSettings> {
         title: comic?.title ?? '',
         comicType: ComicType.local,
       );
-      message = switch (status) {
-        StudioEnqueueStatus.queued => "Added to translation tasks".tl,
-        StudioEnqueueStatus.alreadyRunning => "Translation is already running".tl,
-        StudioEnqueueStatus.upToDate => "This chapter is already translated".tl,
-        StudioEnqueueStatus.noLocalCopy =>
-          "Download this comic before translating it".tl,
-        StudioEnqueueStatus.noPage => "No page image found for this chapter".tl,
-        StudioEnqueueStatus.failed => "Could not start translation".tl,
-      };
+      message = studioEnqueueMessage(status);
     } else {
       // 关开关 = 取消在跑的任务 + 解绑。**不删工程、不删产物** —— 那是用户在
       // 工作室里的劳动成果，开关表达的是"现在不读它"。

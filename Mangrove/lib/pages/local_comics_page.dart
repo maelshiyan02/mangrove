@@ -3,6 +3,7 @@ import 'package:mangrove/components/components.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
+import 'package:mangrove/foundation/comic_card_kind.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/export_tasks.dart';
 import 'package:mangrove/foundation/local.dart';
@@ -138,10 +139,11 @@ class _LocalComicsPageState extends State<LocalComicsPage>
         .map((task) => task.toLocalComic())
         .toList();
     all = [...downloadingComics, ...all];
-    // FT projects are not comics: their download status is meaningless and
-    // they would clutter every list here. They live in the home page's
-    // "翻译工作室" section instead, which opens the studio canvas.
-    all = all.where((c) => !BtProjectManager.isBtComic(c.id)).toList();
+    // FT 工程卡不是漫画：它没有下载状态，混在每个列表里只会添乱。它归主页
+    // "翻译工作室"分区（点开是工作室画布），不归本地库。
+    // 判据取自 [isShownInLocalLibrary]，与主页"本地"分区同源 —— 两处各自
+    // 写一遍 `isBtComic` 就会漂移（实测：主页漏排 → 主页显示 `MDGH-ch1`）。
+    all = all.where((c) => isShownInLocalLibrary(c.id)).toList();
     return currentTab == null
         ? all
         : all.where((c) => c.status == currentTab).toList();

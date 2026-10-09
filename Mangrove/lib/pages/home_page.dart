@@ -5,6 +5,7 @@ import 'package:mangrove/components/components.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/background_keepalive.dart';
 import 'package:mangrove/foundation/battery_optimization.dart';
+import 'package:mangrove/foundation/comic_card_kind.dart';
 import 'package:mangrove/foundation/comic_collection_store.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/consts.dart';
@@ -980,17 +981,30 @@ class _LocalState extends State<_Local> {
   late List<LocalComic> local;
   late int count;
 
+  /// 🔴 "本地"分区只列**真正下载的素材**，不列 `bt_` 工程卡。
+  ///
+  /// 工程卡也是 `local.db` 里的一行（`BtProjectManager` 自己写的），而且它的
+  /// `comic_type` 同样登记成 [ComicType.local] —— 所以按类型分不开，只能按
+  /// id 前缀分。不排除的话主页"本地"里就会冒出 `MDGH-ch1` 这种工程名
+  /// （2026-10-09 实测），可它根本不是一本下载的漫画。
+  /// 排除清单取自 [hiddenFromLocalLibraryPrefixes]，与本地库页同源。
+  List<LocalComic> _recent() =>
+      LocalManager().getRecentExcludingPrefixes(hiddenFromLocalLibraryPrefixes);
+
+  int _count() =>
+      LocalManager().countExcludingPrefixes(hiddenFromLocalLibraryPrefixes);
+
   void onLocalComicsChange() {
     setState(() {
-      local = LocalManager().getRecent();
-      count = LocalManager().count;
+      local = _recent();
+      count = _count();
     });
   }
 
   @override
   void initState() {
-    local = LocalManager().getRecent();
-    count = LocalManager().count;
+    local = _recent();
+    count = _count();
     LocalManager().addListener(onLocalComicsChange);
     super.initState();
   }

@@ -39,6 +39,7 @@ import 'package:mangrove/foundation/image_translation/script_translator.dart';
 import 'package:mangrove/pages/app_lock_setup.dart';
 import 'package:mangrove/pages/disclaimer.dart';
 import 'package:mangrove/pages/guide_page.dart';
+import 'package:mangrove/pages/translation_studio/studio_enqueue_message.dart';
 import 'package:mangrove/pages/settings/sync_config_qr.dart';
 import 'package:mangrove/pages/webdav_libraries_page.dart';
 import 'package:mangrove/utils/app_lock.dart';

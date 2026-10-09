@@ -200,15 +200,23 @@ abstract mixin class _ComicPageActions {
     return true;
   }
 
-  /// Queues selected chapters for background pre-translation so their pages are
-  /// rendered and cached before the user opens the reader (no in-reader wait).
+  /// Queues selected chapters for background translation so their finished pages
+  /// exist before the user opens the reader (no in-reader wait).
+  ///
+  /// 🔴 S9.5-b 追补：入队端从**旧引擎**换成**工作室队列**
+  /// （`StudioChapterQueue.enqueue`）—— 与阅读器开关、建工程入口是**同一条**
+  /// 链路。旧引擎的 `PreTranslationTaskManager.start(...)` 把成品写进
+  /// `image_translation.db` 的即时缓存，而那份缓存**已经没有人在读**
+  /// （`studio_reader.dart::chooseReaderPageSource` 明确不再下线到它）—— 于是
+  /// "预翻译完成"之后翻进去看到的仍然是原图，而后台白烧了一整章的算力。
+  /// 工作室队列把成品写进工程的 `result/`，那正是阅读器与导出都在读的那一份。
   void preTranslate() {
-    if (!ImageTranslationService.isEnabledForComic(comic.id, comic.sourceKey)) {
-      App.rootContext.showMessage(
-        message: "Enable AI translation in the reader for this comic first".tl,
-      );
-      return;
-    }
+    // 🔴 这里原先还有一道 `ImageTranslationService.isEnabledForComic` 的闸门。
+    // S9.5-b 之后它的含义变成了"这一章的开关开着"，而**开关就是那条绑定**
+    // （`settings/reader.dart::_isChapterTranslated`）。拿它当"能不能入队"的
+    // 前置条件会让人绕死：开关要绑定，绑定要入队，入队要开关 —— 第一次使用
+    // 永远走不通，而提示语还会说"请先打开开关"。
+    // 真正的前置条件只有一条：模型与服务已就位（下面这个）。
     if (!_ensureTranslationReady()) {
       return;
     }
@@ -253,25 +261,28 @@ abstract mixin class _ComicPageActions {
       }
     }
 
-    void startJob(List<int> selected) {
+    /// 把选中的每一章排进工作室队列，然后**只报一句**话。
+    ///
+    /// 一句话的聚合规则在 `studioEnqueueBatchMessage` 里（唯一实现）—— 循环里
+    /// 逐章 `showMessage` 会把提示栏刷成一串，用户只看得见最后一条。
+    Future<void> startJob(List<int> selected) async {
       if (selected.isEmpty) return;
-      var picked = [
-        for (var i in selected)
-          PreTranslationChapter(eid: entries[i].$1, title: entries[i].$2),
-      ];
-      var task = PreTranslationTaskManager.instance.start(
-        cid: comic.id,
-        sourceKey: comic.sourceKey,
-        comicType: comic.comicType,
-        title: comic.title,
-        cover: comic.cover,
-        chapters: picked,
-      );
-      App.rootContext.showMessage(
-        message: task == null
-            ? "A pre-translation task is already running".tl
-            : "Pre-translation started".tl,
-      );
+      final statuses = <StudioEnqueueStatus>[];
+      for (var i in selected) {
+        statuses.add(
+          await StudioChapterQueue.enqueue(
+            cid: comic.id,
+            sourceKey: comic.sourceKey,
+            // `entries[i].$1` 就是这一章的 `eid`（章节 key），与阅读器算
+            // `_currentChapterEid` 用的是同一份 chapters 上的同一个键。
+            eid: entries[i].$1,
+            title: comic.title,
+            comicType: comic.comicType,
+            cover: comic.cover,
+          ),
+        );
+      }
+      App.rootContext.showMessage(message: studioEnqueueBatchMessage(statuses));
     }
 
     // A chapter-less comic has no picker to open, but pre-translation still

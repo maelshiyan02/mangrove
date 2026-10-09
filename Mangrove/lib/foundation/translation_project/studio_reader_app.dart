@@ -66,6 +66,12 @@ abstract final class StudioReaderStore {
     )];
   }
 
+  /// 这一本漫画已经绑过工程的 `eid` 集合。见 [StudioReaderBindings.eidsFor]。
+  static Set<String> eidsFor({
+    required String cid,
+    required String? sourceKey,
+  }) => bindings.eidsFor(cid: cid, sourceKey: sourceKey);
+
   static void put({
     required String cid,
     required String? sourceKey,

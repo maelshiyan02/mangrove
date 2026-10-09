@@ -26,6 +26,7 @@ library;
 
 import 'dart:io';
 
+import 'package:mangrove/foundation/comic_card_kind.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/translation_project/studio_project_entry.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
@@ -40,6 +41,10 @@ const _readerAppPath =
 const _bootstrapPath =
     'lib/foundation/translation_project/project_bootstrap.dart';
 const _btManagerPath = 'lib/foundation/bt_project/bt_project_manager.dart';
+const _homePagePath = 'lib/pages/home_page.dart';
+const _localComicsPath = 'lib/pages/local_comics_page.dart';
+const _localDartPath = 'lib/foundation/local.dart';
+const _cardKindPath = 'lib/foundation/comic_card_kind.dart';
 
 class _Probe {
   const _Probe(this.name, this.green, this.red, this.detail);
@@ -134,81 +139,180 @@ void runP9Checks(CheckSink check, {required Directory packageRoot}) {
   // ── 2 · 候选人筛选：三条判据 ──────────────────────────────────────────
 
   probe(
-    'bt_projects_are_not_candidates',
-    // `bt_<hash>` 本身是产物，给它再建工程会让新工程的"原图"指向上一层的
-    // 中间产物。
+    'derived_cards_are_not_candidates',
+    // `bt_<hash>` 是**工程**、`ft_<hash>` 是**成品**，两者都是从素材派生出来的
+    // 产物。给产物再建工程，新工程的"原图"会指向上一层的中间产物
+    // （`projects/<名>/source/` 或 `translated/<名>/`）。
+    // 🔴 注意：不能顺手写成"在线漫画被排除" —— 从 comix.to 下载到本地的漫画
+    // 是最正统的素材，而它**不是** `ComicType.local`（见下一条）。
     () =>
         !studioProjectComicEligible(
-          isLocalDownload: true,
-          isBtProject: true,
-          chapterCount: 3,
+          isDerivedCard: true,
+          hasLocalPages: true,
+          isFlat: false,
         ),
-    // 故障路径 = 忽略 `isBtProject` 的那一版（它会返回 true ⇒ 判据翻脸）。
+    // 故障路径 = 忽略 `isDerivedCard` 的那一版（它返回 true ⇒ 判据翻脸）。
     () =>
-        !_eligibleIgnoringBt(
-          isLocalDownload: true,
-          isBtProject: true,
-          chapterCount: 3,
+        !_eligibleIgnoringDerivedCard(
+          isDerivedCard: true,
+          hasLocalPages: true,
+          isFlat: false,
         ),
-    () => '绿=bt_ 产物被排除 / 故障=忽略该判据的版本会放它进来',
+    () => '绿=bt_/ft_ 产物被排除 / 故障=忽略该判据的版本会放它进来',
   );
 
   probe(
-    'online_comics_are_not_candidates',
-    // 工程要把原图复制进 `source/`；在线漫画没有原图可复制。
+    'the_source_type_is_not_the_eligibility_rule',
+    // 🔴 本批**最要紧**的一条，钉的就是 2026-10-09 实测出来的那个真 bug：第一版
+    // 把"是不是素材"写成 `comicType == ComicType.local`，于是
+    // - `ft_` 成品卡（也是 `local`）被放行 —— 列表里唯一一本就是它；
+    // - 从 comix.to 下载到本地的 `My Dragon Girlfriend Has Returned`
+    //   （`comic_type = 496108553`，即源类型）被排除 —— 真正的素材一本都不在。
+    //
+    // 判据：判据函数**只吃三个布尔**，源码里不许出现按 `comicType` 分类的写法。
     () =>
-        !studioProjectComicEligible(
-          isLocalDownload: false,
+        studioProjectComicEligible(
+          isDerivedCard: false,
+          hasLocalPages: true,
+          isFlat: false,
+        ),
+    // 故障路径 = 真按 `comicType` 分类的那一版。三行实测数据：
+    // 下载素材（`comic_type` 是源类型 `496108553`）**必须**仍被判为素材。
+    () =>
+        _eligibleByComicType(
+          isLocalType: false, // ← 从网络源下载到本地：不是 ComicType.local
           isBtProject: false,
-          chapterCount: 5,
+          chapterCount: 9,
         ),
     () =>
-        !_eligibleIgnoringLocal(
-          isLocalDownload: false,
-          isBtProject: false,
-          chapterCount: 5,
-        ),
-    () => '绿=在线漫画被排除 / 故障=忽略该判据的版本会放它进来',
+        '绿=从网络源下载到本地的漫画仍是素材 / '
+        '故障=按 comicType 分类的那版会把它排除掉（2026-10-09 实测三行的形态）',
   );
 
   probe(
-    'comics_without_a_chapter_are_not_candidates',
-    // 一章都没有 ⇒ 列表里会出现一本"点进去什么都不能选"的漫画，而它的失败
-    // 原因（没有页图）在界面上看不出来。
+    'eligibility_never_reads_the_comic_type',
+    // 上一条是**行为**，这一条钉**源码**：判据函数体里不许出现 `comicType`。
+    // 🔴 只能扫**函数体** —— 文件头的注释里必然要写"不能写成
+    // `comicType == ComicType.local`"，整文件扫 `contains('comicType')` 恒真，
+    // 那是恒真的装饰品（M11）。
+    () => _eligibilityBodyHasNoComicType(code(_entryPath)),
+    () => _eligibilityBodyHasNoComicType(_eligibilityByComicTypeSource),
+    () => '绿=判据函数体不出现 comicType / 故障=按 comicType 分类的那版被抓出来',
+  );
+
+  probe(
+    'comics_without_local_pages_are_not_candidates',
+    // 工程要把原图**复制**进 `source/`（`ProjectBootstrap` 的硬约束 1）。本地一页
+    // 都没有 ⇒ 建出来的工程 0 页，而界面上只是一张空白，看不出为什么。
     () =>
         !studioProjectComicEligible(
-          isLocalDownload: true,
-          isBtProject: false,
-          chapterCount: 0,
+          isDerivedCard: false,
+          hasLocalPages: false,
+          isFlat: false,
         ),
     () =>
-        !_eligibleIgnoringChapterCount(
-          isLocalDownload: true,
-          isBtProject: false,
-          chapterCount: 0,
+        !_eligibleIgnoringLocalPages(
+          isDerivedCard: false,
+          hasLocalPages: false,
+          isFlat: false,
         ),
-    () => '绿=零章漫画被排除 / 故障=忽略章节数的版本会放它进来',
+    () => '绿=没有本地页的漫画被排除 / 故障=忽略该判据的版本会放它进来',
   );
 
   probe(
     'a_flat_comic_still_has_one_choice',
-    // 无章节漫画（页躺在漫画根下）**不是**零章漫画：它有一个 eid='0' 的伪章节，
-    // 否则"本地下载的纯图片文件夹"里最普通的一种（整本一个目录）反而建不了。
-    // 🔴 故障路径刻意喂 `chapterCount: 0` —— 判据必须翻脸，否则这一条区分不出
-    // "有空目录的漫画"与"页在根下的漫画"。
+    // 无章节漫画（页躺在漫画根下）**不是**"没有本地页"：它有一个 eid='0' 的伪
+    // 章节，否则"本地导入一个纯图片文件夹"这种最普通的形态反而建不了工程。
+    // 🔴 故障路径刻意同时关掉 `isFlat` —— 判据必须翻脸，否则这一条区分不出
+    // "有空章节目录的漫画"与"页在根下的漫画"。
     () =>
         studioProjectComicEligible(
-          isLocalDownload: true,
-          isBtProject: false,
-          chapterCount: 1,
+          isDerivedCard: false,
+          hasLocalPages: false,
+          isFlat: true,
         ),
     () =>
         studioProjectComicEligible(
-          isLocalDownload: true,
-          isBtProject: false,
-          chapterCount: 0,
+          isDerivedCard: false,
+          hasLocalPages: false,
+          isFlat: false,
         ),
-    () => '绿=扁平漫画（1 个伪章节）可选 / 故障=章节数为 0 时判据为 false',
+    () => '绿=扁平漫画（页在根下）可选 / 故障=关掉 isFlat 后判据为 false',
+  );
+
+  // ── 2b · 本地库展示：产物卡与素材卡同表混排 ──────────────────────────
+  //
+  // 同一个根因的两张脸：`bt_`（工程）与 `ft_`（成品）两张**产物卡**也登记在
+  // `local.db`，而且 `comic_type` 同样是 `0(local)` —— 所以按类型分不开，只能
+  // 按 id 前缀分。主页"本地"分区漏了这一刀，于是出现 `MDGH-ch1` 这种工程名。
+
+  probe(
+    'local_library_hides_project_cards_only',
+    // 三行实测 id（`local.db` 2026-10-09）。**有意**只隐藏 `bt_`：
+    // - `bt_` 归主页"翻译工作室"分区，点开是画布，重复列在本地库没有意义；
+    // - `ft_` 是**成品**，它是一本可读的漫画，且除了本地库没有别的入口 ——
+    //   藏掉它就再也打不开了。怎么"展示"它是产品决定，但不能"消失"。
+    () =>
+        !isShownInLocalLibrary('bt_d2844d22') &&
+        isShownInLocalLibrary('ft_0166fe70') &&
+        isShownInLocalLibrary('gm28k//my-dragon-girlfriend-has-returned') &&
+        isShownInLocalLibrary(null),
+    // 故障路径 = 什么都不隐藏的那一版（它在 `bt_` 上就让判据不成立）。
+    () => !_showsEverythingInLocalLibrary('bt_d2844d22'),
+    () => '绿=本地库只隐藏 bt_ 工程卡，ft_ 成品仍可见 / 故障=不隐藏的版本不成立',
+  );
+
+  probe(
+    'home_and_library_share_one_hidden_prefix_list',
+    // 🔴 主页「本地」与本地库页**各写一遍** `isBtComic` 就必然漂移 —— 实测正是
+    // 主页漏排。两处都必须只引用 `hiddenFromLocalLibraryPrefixes`。
+    () =>
+        _usesSharedHiddenPrefixList(
+          // 🔴 只能扫**这一段**：`home_page.dart` 的「翻译工作室」分区本来就该用
+          // `isBtComic`（那一栏要的正是工程卡），整文件扫会误判。
+          _classBodyOf(code(_homePagePath), 'class _LocalState'),
+        ) &&
+        _usesSharedHiddenPrefixList(
+          _methodBodyOf(code(_localComicsPath), 'List<LocalComic> _collectComics()'),
+        ),
+    // 故障路径 = 内联 `BtProjectManager.isBtComic` 的那一版。
+    () => _usesSharedHiddenPrefixList(
+      'all = all.where((c) => !BtProjectManager.isBtComic(c.id)).toList();',
+    ),
+    () => '绿=两处（主页本地分区 / 本地库页列表）都引用共享排除清单 / '
+        '故障=内联 isBtComic 的版本不满足判据',
+  );
+
+  probe(
+    'card_kind_reads_the_prefix_from_its_owner',
+    // `bt_` / `ft_` 两个前缀的**唯一定义**分别在 `BtProjectManager.idPrefix` 与
+    // `FinishedExport.idPrefix`。这里引用而不是抄一份字符串：抄了之后哪天前缀
+    // 改了，"本地库隐藏"就静默失效（主页又开始显示工程卡）。
+    () =>
+        codeHas(_cardKindPath, 'BtProjectManager.idPrefix') &&
+        codeHas(_cardKindPath, 'FinishedExport.idPrefix'),
+    () =>
+        _readsOwnerPrefix(
+          "if (id.startsWith('bt_')) return ComicCardKind.project;",
+        ),
+    () => '绿=前缀取自各管理器 / 故障=硬编码字符串的版本不满足判据',
+  );
+
+  probe(
+    'prefix_exclusion_sql_is_parameter_bound',
+    // 🔴 写完这一条的前一刻，`local.dart` 里两个新方法真的就是这个坏形态：
+    // SQL 里有 `?` 占位符却**没传参数** ⇒ 运行时直接抛。它是"编译得过"的，
+    // 所以只能靠这条断言挡。
+    // 顺带钉住 `LIKE 'bt_%'` 那个坑：`_` 是单字符通配符，`'bt_%'` 会连
+    // `btX…` 一起命中，必须走 `substr(id, 1, n) <> ?`。
+    () => _prefixExclusionIsBound(code(_localDartPath)),
+    // 故障形态（2026-10-09 真实发生过）：条件函数是对的（有 `substr` 占位符），
+    // 但调用处**忘了传参数** ⇒ 运行时抛。它编译得过，只能靠这条挡。
+    () => _prefixExclusionIsBound(
+      "String _prefixExclusionWhere(List<String> p) => 'substr(id, 1, ?) <> ?';\n"
+      "final res = _db.select('SELECT * FROM comics WHERE \$where');",
+    ),
+    () => '绿=每条带占位符的 SQL 都绑定了参数 / 故障=有占位符却不传参的版本被抓出',
   );
 
   // ── 3 · 章节扫描：与建工程同一条走法 ─────────────────────────────────
@@ -494,26 +598,71 @@ String _rawName({required String comicTitle, required String chapterName}) {
 String _unboundedName(String comicTitle) =>
     comicTitle.isEmpty ? 'studio-project' : comicTitle;
 
-/// 忽略 `isBtProject` 的资格判据。
-bool _eligibleIgnoringBt({
-  required bool isLocalDownload,
+/// 按 `comicType` 分类的那一版判据的**源码文本**（红路径的喂料）。
+///
+/// 它必须与真实现是同一种写法（一个 `bool studioProjectComicEligible(...)`
+/// 的表达式体），否则 [_eligibilityBodyHasNoComicType] 切片切不到东西，
+/// 判据会因为"找不到函数"而不是"函数用了 comicType"翻脸 —— 那是另一种装饰品。
+const _eligibilityByComicTypeSource = '''
+bool studioProjectComicEligible({
+  required ComicType comicType,
   required bool isBtProject,
   required int chapterCount,
-}) => isLocalDownload && chapterCount > 0;
+}) => comicType == ComicType.local && !isBtProject && chapterCount > 0;
+''';
 
-/// 忽略 `isLocalDownload` 的资格判据。
-bool _eligibleIgnoringLocal({
-  required bool isLocalDownload,
-  required bool isBtProject,
-  required int chapterCount,
-}) => !isBtProject && chapterCount > 0;
+/// 判据**函数体**里有没有出现 `comicType`。
+///
+/// 🔴 只切函数体（签名收尾 `})` 到语句结束 `;`）：同文件注释里必然要写
+/// "不能写成 `comicType == ComicType.local`"，整文件扫会恒真。
+bool _eligibilityBodyHasNoComicType(String source) {
+  final signature = source.indexOf('bool studioProjectComicEligible(');
+  if (signature < 0) return false;
+  final bodyStart = source.indexOf('})', signature);
+  if (bodyStart < 0) return false;
+  final rest = source.substring(bodyStart);
+  final close = rest.indexOf(';');
+  if (close < 0) return false;
+  final body = rest.substring(0, close);
+  return !body.contains('comicType') && !body.contains('ComicType');
+}
 
-/// 忽略 `chapterCount` 的资格判据。
-bool _eligibleIgnoringChapterCount({
-  required bool isLocalDownload,
+/// 🔴 用 `comicType == ComicType.local` 当"是素材"的那一版 —— **这就是第一版
+/// 上线时的真 bug**：产物卡（`bt_`/`ft_`）恰恰也登记成 `local`，被放行；从
+/// comix.to 下载到本地的漫画 `comicType` 是源类型，反倒被排除。界面上的症状是
+/// "素材列表里只有一本成品，真正的素材一本都不在"（2026-10-09 实测）。
+///
+/// 留在这里当对照物：判据必须能把它和正确实现区分开。
+bool _eligibleByComicType({
+  required bool isLocalType,
   required bool isBtProject,
   required int chapterCount,
-}) => isLocalDownload && !isBtProject;
+}) => isLocalType && !isBtProject && chapterCount > 0;
+
+/// 忽略 `isDerivedCard` 的资格判据。
+bool _eligibleIgnoringDerivedCard({
+  required bool isDerivedCard,
+  required bool hasLocalPages,
+  required bool isFlat,
+}) => hasLocalPages || isFlat;
+
+/// 忽略 `hasLocalPages` 的资格判据 —— 只看"不是产物卡"。
+///
+/// 🔴 不能写成 `!isDerivedCard && isFlat`：那样对 `(false, false, false)` 返回
+/// false，红路径就**不翻脸**（实测：这一条第一版就是这么写的，报"仍绿(装饰品)"）。
+/// "忽略某一条"的意思是**把它从合取式里拿掉**，不是换成别的项。
+bool _eligibleIgnoringLocalPages({
+  required bool isDerivedCard,
+  required bool hasLocalPages,
+  required bool isFlat,
+}) => !isDerivedCard;
+
+/// 忽略 `isFlat` 的资格判据。
+bool _eligibleIgnoringFlat({
+  required bool isDerivedCard,
+  required bool hasLocalPages,
+  required bool isFlat,
+}) => !isDerivedCard && hasLocalPages;
 
 /// 不看磁盘、一律认为可选的那一版。
 StudioChapterOption _alwaysSelectable() => const StudioChapterOption(
@@ -528,6 +677,74 @@ String? _problemWithoutLength(String name) {
   if (trimmed == '.' || trimmed == '..') return 'separator';
   if (trimmed.contains('/') || trimmed.contains(r'\')) return 'separator';
   return null;
+}
+
+/// 什么都不隐藏的那一版"本地库可见性"（红路径的对照物）。
+bool _showsEverythingInLocalLibrary(String? id) => true;
+
+/// 一个页面是不是**引用共享排除清单**，而不是就地再写一遍 `isBtComic`。
+///
+/// 🔴 反向条件不能省：只查"有没有引用清单"的话，一份**同时**引用清单又内联
+/// `isBtComic` 的代码也会通过，而漂移照样会发生。
+///
+/// "共享"的两种形态都算：主页直接传 `hiddenFromLocalLibraryPrefixes` 给查询，
+/// 本地库页调 `isShownInLocalLibrary`（它内部由同一份清单推出来）。
+/// 🔴 反向条件不能省：只查"有没有引用"的话，一份**同时**引用又内联 `isBtComic`
+/// 的代码也会通过，而漂移照样会发生。
+bool _usesSharedHiddenPrefixList(String source) =>
+    (source.contains('hiddenFromLocalLibraryPrefixes') ||
+        source.contains('isShownInLocalLibrary')) &&
+    !source.contains('BtProjectManager.isBtComic');
+
+/// 切出一个**顶层类**的正文（[decl] 形如 `class _LocalState`）。
+///
+/// 类的收尾大括号在列 0，所以找 `\n}`。方法收尾是缩进过的 `\n  }`，不会撞上。
+String _classBodyOf(String source, String decl) {
+  final start = source.indexOf(decl);
+  if (start < 0) return '';
+  final end = source.indexOf('\n}', start);
+  return end < 0 ? source.substring(start) : source.substring(start, end);
+}
+
+/// 切出一个**方法**的正文（[signature] 形如 `List<X> _foo()`）。
+///
+/// 方法收尾是缩进两格的 `\n  }`；顶层类的 `\n}` 不会被误认（前面多了两个空格）。
+String _methodBodyOf(String source, String signature) {
+  final start = source.indexOf(signature);
+  if (start < 0) return '';
+  final end = source.indexOf('\n  }', start);
+  return end < 0 ? source.substring(start) : source.substring(start, end);
+}
+
+/// 卡片种类判据是不是**读各管理器自己的前缀常量**。
+bool _readsOwnerPrefix(String source) =>
+    source.contains('BtProjectManager.idPrefix') &&
+    source.contains('FinishedExport.idPrefix');
+
+/// `local.dart` 里每一条带 `?` 占位符的排除 SQL **是不是都绑了参数**。
+///
+/// 做法：找每一处 `WHERE $where`，看它后面一段窗口里有没有
+/// `_prefixExclusionArgs(`。同时要求占位符真的用了 `substr(...) <> ?`
+/// 而不是 `LIKE 'bt_%'`。
+bool _prefixExclusionIsBound(String source) {
+  if (!source.contains('substr(id, 1, ?) <> ?')) return false;
+  // 🔴 `LIKE` 里的 `_` 是单字符通配符：`'bt_%'` 会连 `btX…` 一起命中。
+  // 只扫 `_prefixExclusionWhere` 的**函数体**：注释里必然要写"别用
+  // `NOT LIKE 'bt_%'`"，整文件扫会恒假（判据就成了永远不通过的装饰品）。
+  final whereBody = _methodBodyOf(source, 'String _prefixExclusionWhere(');
+  if (whereBody.isEmpty || whereBody.contains('LIKE')) return false;
+  const needle = 'WHERE \$where';
+  var found = 0;
+  var idx = source.indexOf(needle);
+  while (idx >= 0) {
+    found++;
+    final end = idx + 400 < source.length ? idx + 400 : source.length;
+    if (!source.substring(idx, end).contains('_prefixExclusionArgs(')) {
+      return false;
+    }
+    idx = source.indexOf(needle, idx + needle.length);
+  }
+  return found >= 2;
 }
 
 /// 阅读器开关那一侧**是不是**调了共享命名规则，而不是内联一份公式。
