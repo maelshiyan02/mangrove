@@ -1436,7 +1436,7 @@ class LocalManager with ChangeNotifier {
       }
     }
     if (shouldRemovedDirs.isNotEmpty) {
-      _deleteDirectories(shouldRemovedDirs);
+      deleteDirectories(shouldRemovedDirs);
     }
     notifyListeners();
   }
@@ -1488,7 +1488,7 @@ class LocalManager with ChangeNotifier {
     notifyListeners();
 
     if (removeFileOnDisk) {
-      _deleteDirectories(shouldRemovedDirs);
+      deleteDirectories(shouldRemovedDirs);
     }
   }
 
@@ -1501,7 +1501,11 @@ class LocalManager with ChangeNotifier {
   /// isolate there is unnecessary and, because the worker's receive port is
   /// never closed, leaks an isolate on every delete (and could hang on
   /// platforms without the SAF channel).
-  static void _deleteDirectories(List<Directory> directories) {
+  ///
+  /// 公开给 `comic_deletion.dart` 复用：那条路径自己解析目录（三类卡片的
+  /// `directory` 语义不同，见该文件头部），但**落盘这一步必须只有一份实现** ——
+  /// Android 的 SAF 分支不是可以各写一遍的东西。
+  static void deleteDirectories(List<Directory> directories) {
     if (directories.isEmpty) return;
     if (App.isAndroid) {
       Isolate.run(() async {

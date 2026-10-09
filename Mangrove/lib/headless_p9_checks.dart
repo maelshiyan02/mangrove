@@ -27,6 +27,7 @@ library;
 import 'dart:io';
 
 import 'package:mangrove/foundation/comic_card_kind.dart';
+import 'package:mangrove/foundation/comic_deletion.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/translation_project/studio_project_entry.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
@@ -45,6 +46,8 @@ const _homePagePath = 'lib/pages/home_page.dart';
 const _localComicsPath = 'lib/pages/local_comics_page.dart';
 const _localDartPath = 'lib/foundation/local.dart';
 const _cardKindPath = 'lib/foundation/comic_card_kind.dart';
+const _deletionPath = 'lib/foundation/comic_deletion.dart';
+const _deleteDialogPath = 'lib/pages/comic_delete_dialog.dart';
 
 class _Probe {
   const _Probe(this.name, this.green, this.red, this.detail);
@@ -578,6 +581,83 @@ void runP9Checks(CheckSink check, {required Directory packageRoot}) {
     () => '绿=核对 projectFor 并且上报 listed / 故障=不核对的那版不满足判据',
   );
 
+  // ── 删除：记录在哪、文件在哪、删到哪一步为止（S9.6）─────────────────
+  //
+  // 这一批三件事全是"写错不报错、只是把用户的东西删了"那一类，所以判据放在
+  // `comic_deletion.dart`（纯逻辑可喂故障），弹窗只负责摆出来。
+
+  probe(
+    'deletion.record_home_follows_the_card_kind',
+    // 工程卡的"记录"**就是**磁盘上那个 `imgtrans_*.json`（`BtProjectManager`
+    // 每次扫描按它重建 `local.db` 那一行）⇒ 只删记录 = 下次扫描原地复活。
+    // 素材/成品的记录是 `local.db` 的一行，删了就没了。
+    () =>
+        comicRecordHomeOf(ComicCardKind.project) ==
+            ComicRecordHome.projectJson &&
+        comicRecordHomeOf(ComicCardKind.downloaded) ==
+            ComicRecordHome.database &&
+        comicRecordHomeOf(ComicCardKind.product) == ComicRecordHome.database &&
+        comicRecordReturnsAfterDelete(ComicCardKind.project) &&
+        !comicRecordReturnsAfterDelete(ComicCardKind.downloaded) &&
+        !comicRecordReturnsAfterDelete(ComicCardKind.product),
+    // 故障路径 = 三类一律当"记录在数据库"的那一版。它的症状是弹窗里**没有**
+    // "工程下次扫描会回来"那句警告 —— 用户反复删同一本工程，每次都以为成功了。
+    () => _recordHomeIgnoringKind(ComicCardKind.project) ==
+            ComicRecordHome.projectJson &&
+        _recordHomeIgnoringKind(ComicCardKind.downloaded) ==
+            ComicRecordHome.database &&
+        _recordHomeIgnoringKind(ComicCardKind.product) ==
+            ComicRecordHome.database &&
+        _returnsAfterDeleteIgnoringKind(ComicCardKind.project) &&
+        !_returnsAfterDeleteIgnoringKind(ComicCardKind.downloaded) &&
+        !_returnsAfterDeleteIgnoringKind(ComicCardKind.product),
+    () => '绿=工程卡记录来自磁盘 json、素材/成品来自数据库 / '
+        '故障=一律当数据库的那版在工程卡上不成立',
+  );
+
+  probe(
+    'deletion.refuses_to_step_outside_the_library',
+    // "宁可不删，也不删过头"：`comicOnDiskRoot` 的输入全来自数据库/工程 json，
+    // 任何一个字段为空都会让"join(库, 空)"算成**库本身**。所以落盘前一律过守卫。
+    () => _deletionGuardHolds(comicRootIsSafeToDelete),
+    // 故障路径 = 没有任何守卫的那一版（只判"非空"）。
+    () => _deletionGuardHolds(_unguardedRootIsSafeToDelete),
+    () => '绿=漫画库自身/其上层/三个分类根/相对路径一律拒绝，真漫画放行 / '
+        '故障=无守卫的版本会同意删掉漫画库本身',
+  );
+
+  probe(
+    'deletion.never_asks_local_manager_to_delete_files',
+    // 🔴 `LocalManager.batchDeleteComics(removeFileOnDisk: true)` 一律
+    // `join(path, c.directory)`，而工程/成品卡存的是**绝对**路径 —— `path.join`
+    // 不覆盖前段，拼出一个不存在的路径 ⇒ 目录静静留在磁盘上，记录却没了
+    // （用户看到"删掉了"但文件夹还在）。所以那条路的这个开关必须恒为 false，
+    // 目录由本模块自己按种类解析。
+    () => _deletionPassesDoNotDeleteFiles(
+      _classBodyOf(code(_deletionPath), 'ComicDeletionReport deleteLocalComics('),
+    ),
+    // 故障路径 = 把 scope 直接透传下去的那一版（正是修复前的行为）。
+    () => _deletionPassesDoNotDeleteFiles(
+      _classBodyOf(
+        _scopeForwardingDeletionSource,
+        'ComicDeletionReport deleteLocalComics(',
+      ),
+    ),
+    () => '绿=删除模块自己解析路径、不让 LocalManager 动盘 / '
+        '故障=透传 removeFileOnDisk 的版本在工程/成品上静默失效',
+  );
+
+  probe(
+    'deletion.dialog_names_what_is_deleted',
+    // 用户点的是"删除这一本"，弹窗必须写出**标题 + 路径** —— 旧弹窗只有一个
+    // `Delete` 标题加两个勾选框，"删的是哪一本"只存在于他刚才点的那格列表里。
+    () => _deleteDialogNamesTheTarget(code(_deleteDialogPath)),
+    // 故障路径 = 修复前那个弹窗的原文（标题固定、不列标题、不列路径）。
+    () => _deleteDialogNamesTheTarget(_oldDeleteDialogSource),
+    () => '绿=弹窗逐本列出标题与磁盘路径 / '
+        '故障=旧弹窗（写死的 Delete 标题 + 两个勾选框）不满足判据',
+  );
+
   // ── 跑 ──────────────────────────────────────────────────────────────
 
   for (final item in probes) {
@@ -680,13 +760,6 @@ bool _eligibleIgnoringLocalPages({
   required bool isFlat,
 }) => !isDerivedCard;
 
-/// 忽略 `isFlat` 的资格判据。
-bool _eligibleIgnoringFlat({
-  required bool isDerivedCard,
-  required bool hasLocalPages,
-  required bool isFlat,
-}) => !isDerivedCard && hasLocalPages;
-
 /// 不看磁盘、一律认为可选的那一版。
 StudioChapterOption _alwaysSelectable() => const StudioChapterOption(
   ref: StudioChapterRef(eid: 'x', label: 'x', chapterName: 'x'),
@@ -732,14 +805,34 @@ bool _usesSharedHiddenPrefixList(String source) =>
         source.contains('isShownInHomeLocal')) &&
     !source.contains('BtProjectManager.isBtComic');
 
-/// 切出一个**顶层类**的正文（[decl] 形如 `class _LocalState`）。
+/// 切出一个**顶层声明的正文**（[decl] 形如 `class _LocalState` 或一个顶层函数
+/// 的签名）。收尾锚点是**列 0 的收尾大括号**：`\n}\n`，不是裸的 `\n}`。
 ///
-/// 类的收尾大括号在列 0，所以找 `\n}`。方法收尾是缩进过的 `\n  }`，不会撞上。
+/// 🔴 这条纪律是修出来的，不是想出来的。带具名参数、签名跨行的顶层函数在参数
+/// 表收尾处就有 `\n}) {` —— 那**也是**一个 `\n}`。拿它当收尾会把函数体整段切掉：
+/// `deleteLocalComics` 实测切出 144 个字符（只有签名），于是
+/// `deletion.never_asks_local_manager_to_delete_files` 的绿路径恒假 —— 一条
+/// 报"绿路径=FALSE"的断言，而原因是**切片器**，不是被测代码。
+///
+/// 方法收尾是缩进两格的 `\n  }`，顶层类/函数的收尾在列 0 —— 两者不会撞上。
 String _classBodyOf(String source, String decl) {
   final start = source.indexOf(decl);
   if (start < 0) return '';
-  final end = source.indexOf('\n}', start);
+  final end = _topLevelCloseAfter(source, start);
   return end < 0 ? source.substring(start) : source.substring(start, end);
+}
+
+/// [from] 之后第一个"列 0 的收尾大括号"的位置（`}` 后面必须是换行或文件末）。
+///
+/// 找不到返回 `-1`。**不要**退化成裸 `indexOf('\n}')` —— 见 [_classBodyOf]。
+int _topLevelCloseAfter(String source, int from) {
+  var at = source.indexOf('\n}', from);
+  while (at >= 0) {
+    final next = at + 2;
+    if (next >= source.length || source[next] == '\n') return at;
+    at = source.indexOf('\n}', next);
+  }
+  return -1;
 }
 
 /// 切出一个**方法**的正文（[signature] 形如 `List<X> _foo()`）。
@@ -884,3 +977,89 @@ bool _usesTheManagedProjectsRoot(String source) =>
 /// 这段源码有没有核对"工程真的被登记了"。
 bool _reportsUnlistedProject(String source) =>
     source.contains('projectFor(') && source.contains('listed:');
+
+// ── 删除（S9.6）红路径的对照物 ────────────────────────────────────────
+
+/// 三类卡片一律当"记录在数据库"的那一版（丢掉了工程卡的 json 身份）。
+ComicRecordHome _recordHomeIgnoringKind(ComicCardKind kind) =>
+    ComicRecordHome.database;
+
+/// "删了不会回来"的那一版 —— 工程卡的下一次扫描会把它原地恢复。
+bool _returnsAfterDeleteIgnoringKind(ComicCardKind kind) => false;
+
+/// 没有任何守卫的那一版落盘判据：只判"非空"。
+///
+/// 这正是写这个守卫之前的形态 —— `join(库, '')` 算成库本身，于是一次字段为空的
+/// 删除会请求删掉**整个漫画库**。
+bool _unguardedRootIsSafeToDelete(String root, {String? libraryRoot}) =>
+    root.trim().isNotEmpty;
+
+/// 「宁可不删，也不删过头」那一组判据，喂一个 [guard] 实现。
+///
+/// 🔴 绿/红走的是**同一个函数**，只换传入的 guard：条款写在函数体里，红路径就
+/// 不可能只覆盖其中一半（P9.3 栽过的坑 —— 红路径只写判据的片段，极性会反过来）。
+bool _deletionGuardHolds(
+  bool Function(String root, {String? libraryRoot}) guard,
+) {
+  const lib = r'D:\lib\downloads';
+  bool safe(String root) => guard(root, libraryRoot: lib);
+  return !safe(lib) && // 漫画库自身：`join(lib, '')` 会算成它
+      !safe(r'D:\lib') && // 它上面一层
+      !safe(r'D:\lib\projects') && // 三个分类根是**容器**，不是某一本
+      !safe(r'D:\lib\translated') &&
+      !safe('relative/thing') && // 相对路径靠 CWD，拒绝
+      !safe('') &&
+      safe(r'D:\lib\downloads\Some Comic') && // 真素材
+      safe(r'D:\lib\translated\Some Product') && // 真成品
+      safe(r'D:\lib\projects\Some Project'); // 真工程
+}
+
+/// 删除模块是不是**不**让 `LocalManager` 去动盘（`removeFileOnDisk` 恒 false）。
+///
+/// 🔴 切的是整个**顶层函数体**，用 [_classBodyOf]（收尾是列 0 的 `\n}\n`）。
+/// `_methodBodyOf` 在这里不适用两遍：它的收尾锚点是缩进两格的 `\n  }`，而这个
+/// 函数体里第一个两格缩进的 `}` 是 `if (scope == …)` 的收尾 —— 切出来的片段在
+/// `batchDeleteComics` **之前**就断了，判据恒假。
+bool _deletionPassesDoNotDeleteFiles(String source) =>
+    source.contains('batchDeleteComics(comics, false,');
+
+/// 把 `removeFileOnDisk` 直接透传下去的那一版（修复前的形态）。
+const _scopeForwardingDeletionSource = '''
+ComicDeletionReport deleteLocalComics(
+  List<LocalComic> comics, {
+  required ComicDeletionScope scope,
+  bool removeFavoriteAndHistory = true,
+}) {
+  final manager = LocalManager();
+  manager.batchDeleteComics(
+    comics,
+    scope == ComicDeletionScope.recordsAndFiles,
+    removeFavoriteAndHistory,
+  );
+  return const ComicDeletionReport(
+    recordsRemoved: 0, dirsRemoved: 0, dirsRefused: [], dirsMissing: []);
+}
+''';
+
+/// 修复前那个删除弹窗的原文（标题写死、不列标题、不列路径）。
+const _oldDeleteDialogSource = '''
+ContentDialog(
+  title: "Delete".tl,
+  content: Column(children: [
+    CheckboxListTile(
+      title: Text("Remove local favorite and history".tl), value: true),
+    CheckboxListTile(title: Text("Also remove files on disk".tl), value: true),
+  ]),
+  actions: [FilledButton(child: Text("Confirm".tl))],
+)
+''';
+
+/// 弹窗有没有写清"删的是哪一本"：标题带名字、逐本列标题、逐本列磁盘路径。
+///
+/// 三条缺一不可 —— 只查"有没有 `comic.title`"时，一个把书名当装饰画在角落、
+/// 却不写路径的弹窗照样通过；而用户要确认的正是"这本的东西在哪、我会删到哪
+/// 一层"。
+bool _deleteDialogNamesTheTarget(String source) =>
+    source.contains('Delete "@title"?') &&
+    source.contains('comic.title') &&
+    source.contains('comicOnDiskRoot(comic)');

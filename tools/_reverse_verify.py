@@ -691,6 +691,63 @@ FAULTS = {
   }""")],
         'projectEntry.projects_root_is_the_managed_rule',
     ),
+
+    # ---- S9.6 · 本地库删除（deletion.*）---------------------------------
+    #
+    # 这四条打的是**真实产线源码**，用来证明同一批判据在真实树上也看得见
+    # （合成对照物测不出"锚点漂了/文件挪了"这类静默恒绿）。
+    'deletion_trusts_comic_type_not_the_record_home': (
+        ['lib/foundation/comic_deletion.dart'],
+        # 三类卡片一律当"记录在数据库"⇒ 工程卡在弹窗里没有那句"下次扫描会回来"
+        # 的警告，用户反复删同一本工程，每次都以为成功了。
+        [("""ComicRecordHome comicRecordHomeOf(ComicCardKind kind) =>
+    kind == ComicCardKind.project
+    ? ComicRecordHome.projectJson
+    : ComicRecordHome.database;""",
+          """ComicRecordHome comicRecordHomeOf(ComicCardKind kind) =>
+    // injected fault: every card's record is assumed to live in the database
+    ComicRecordHome.database;""")],
+        'projectEntry.deletion.record_home_follows_the_card_kind',
+    ),
+    'deletion_guard_dropped': (
+        ['lib/foundation/comic_deletion.dart'],
+        # 拿掉"漫画库自身/其上层/三个分类根/相对路径"这一整道守卫。残留的
+        # `isWithin` 挡得住 `D:\\`，挡不住 `join(库, '')` 算出来的**库本身**。
+        [("""  final norm = p.normalize(root);
+  if (reservedComicLibraryPaths(libraryRoot: libraryRoot).contains(norm)) {
+    return false;
+  }""",
+          """  final norm = p.normalize(root);
+  // injected fault: the reserved-path guard is dropped""")],
+        'projectEntry.deletion.refuses_to_step_outside_the_library',
+    ),
+    'deletion_lets_local_manager_delete_files': (
+        ['lib/foundation/comic_deletion.dart'],
+        # 回到修复前的形态：把 `removeFileOnDisk` 交给 `LocalManager`。它对
+        # 工程/成品卡存的**绝对** `directory` 会 `path.join` 出一个不存在的
+        # 路径 ⇒ 目录静静地留在磁盘上，记录却没了。
+        [('  manager.batchDeleteComics(comics, false, removeFavoriteAndHistory);',
+          """  manager.batchDeleteComics(
+    comics,
+    // injected fault: the broken join in LocalManager is used again
+    scope == ComicDeletionScope.recordsAndFiles,
+    removeFavoriteAndHistory,
+  );""")],
+        'projectEntry.deletion.never_asks_local_manager_to_delete_files',
+    ),
+    'deletion_dialog_hides_the_target': (
+        ['lib/pages/comic_delete_dialog.dart'],
+        # 回到修复前那个弹窗：标题写死成 `Delete`，"删的是哪一本"只存在于
+        # 用户刚才点的那一格列表里。
+        [("""      title: single
+          ? 'Delete "@title"?'.tlParams({'title': comics.first.title})
+          : 'Delete @c comics?'.tlParams({'c': comics.length}),""",
+          """      // injected fault: the dialog no longer names the comic
+      title: single
+          ? 'Delete'.tl
+          : 'Delete @c comics?'.tlParams({'c': comics.length}),""")],
+        'projectEntry.deletion.dialog_names_what_is_deleted',
+    ),
 }
 
 # File-level faults.

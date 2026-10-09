@@ -10,6 +10,7 @@ import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/missing_pages.dart';
 import 'package:mangrove/network/repair_download.dart';
+import 'package:mangrove/pages/comic_delete_dialog.dart';
 import 'package:mangrove/pages/comic_details_page/comic_page.dart';
 import 'package:mangrove/pages/missing_pages_dialog.dart';
 import 'package:mangrove/pages/translation_studio/studio_page.dart';
@@ -968,69 +969,15 @@ class _LocalComicsPageState extends State<LocalComicsPage>
     }
   }
 
-  Future<bool> deleteComics(List<LocalComic> comics) async {
-    bool isDeleted = false;
-    await showDialog(
-      context: App.rootContext,
-      builder: (context) {
-        final hasBt = comics.any((c) => BtProjectManager.isBtComic(c.id));
-        bool removeComicFile = !hasBt;
-        bool removeFavoriteAndHistory = true;
-        return StatefulBuilder(
-          builder: (context, state) {
-            return ContentDialog(
-              title: "Delete".tl,
-              content: Column(
-                children: [
-                  CheckboxListTile(
-                    title: Text("Remove local favorite and history".tl),
-                    value: removeFavoriteAndHistory,
-                    onChanged: (v) {
-                      state(() {
-                        removeFavoriteAndHistory = !removeFavoriteAndHistory;
-                      });
-                    },
-                  ),
-                  CheckboxListTile(
-                    title: Text("Also remove files on disk".tl),
-                    value: removeComicFile,
-                    onChanged: (v) {
-                      state(() {
-                        removeComicFile = !removeComicFile;
-                      });
-                    },
-                  ),
-                ],
-              ),
-              actions: [
-                if (comics.length == 1 && comics.first.hasChapters)
-                  TextButton(
-                    child: Text("Delete Chapters".tl),
-                    onPressed: () {
-                      context.pop();
-                      showDeleteChaptersPopWindow(context, comics.first);
-                    },
-                  ),
-                FilledButton(
-                  onPressed: () {
-                    context.pop();
-                    LocalManager().batchDeleteComics(
-                      comics,
-                      removeComicFile,
-                      removeFavoriteAndHistory,
-                    );
-                    isDeleted = true;
-                  },
-                  child: Text("Confirm".tl),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-    return isDeleted;
-  }
+  /// 删除选中的卡片（磁贴菜单与多选菜单共用的唯一入口）。
+  ///
+  /// 判据（"记录"在哪、"文件"在哪、"只删记录会不会自己回来"）全在
+  /// `comic_deletion.dart`，弹窗在 `comic_delete_dialog.dart`。这里只做接线
+  /// —— 三处各写一遍删除逻辑，就是 2026-10-09 那个「`ft_` 卡片说删了、目录还在」
+  /// 的成因（旧实现一律 `join(library, c.directory)`，而工程/成品卡存的是绝对
+  /// 路径）。
+  Future<bool> deleteComics(List<LocalComic> comics) =>
+      showComicDeleteDialog(context, comics);
 
   List<MenuEntry> exportActions(List<LocalComic> comics) {
     return [
@@ -1099,62 +1046,4 @@ Future<void> openComicFolder(LocalComic comic) async {
       App.rootContext.showMessage(message: "Failed to open folder: $e");
     }
   }
-}
-
-void showDeleteChaptersPopWindow(BuildContext context, LocalComic comic) {
-  var chapters = <String>[];
-
-  showPopUpWidget(
-    context,
-    PopUpWidgetScaffold(
-      title: "Delete Chapters".tl,
-      body: StatefulBuilder(
-        builder: (context, setState) {
-          return Column(
-            children: [
-              Expanded(
-                child: ListView.builder(
-                  itemCount: comic.downloadedChapters.length,
-                  itemBuilder: (context, index) {
-                    var id = comic.downloadedChapters[index];
-                    var chapter = comic.chapters![id] ?? "Unknown Chapter";
-                    return CheckboxListTile(
-                      title: Text(chapter),
-                      value: chapters.contains(id),
-                      onChanged: (v) {
-                        setState(() {
-                          if (v == true) {
-                            chapters.add(id);
-                          } else {
-                            chapters.remove(id);
-                          }
-                        });
-                      },
-                    );
-                  },
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    FilledButton(
-                      onPressed: () {
-                        Future.delayed(const Duration(milliseconds: 200), () {
-                          LocalManager().deleteComicChapters(comic, chapters);
-                        });
-                        App.rootContext.pop();
-                      },
-                      child: Text("Submit".tl),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    ),
-  );
 }
