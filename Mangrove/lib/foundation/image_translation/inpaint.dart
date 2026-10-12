@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:mangrove/foundation/image_translation/luma.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
 
 /// Working window + per-pixel 0/1 stroke mask for one text region.
@@ -172,54 +173,15 @@ abstract final class TextInpainter {
   }
 
   /// Otsu's method: luminance threshold maximising between-class variance.
-  static int _otsu(Uint8List lum) {
-    var hist = Int32List(256);
-    for (var l in lum) {
-      hist[l]++;
-    }
-    var total = lum.length;
-    var sum = 0.0;
-    for (var t = 0; t < 256; t++) {
-      sum += t * hist[t];
-    }
-    var sumB = 0.0;
-    var wB = 0;
-    var maxVar = -1.0;
-    var threshold = 127;
-    for (var t = 0; t < 256; t++) {
-      wB += hist[t];
-      if (wB == 0) continue;
-      var wF = total - wB;
-      if (wF == 0) break;
-      sumB += t * hist[t];
-      var mB = sumB / wB;
-      var mF = (sum - sumB) / wF;
-      var between = wB * wF * (mB - mF) * (mB - mF);
-      if (between > maxVar) {
-        maxVar = between;
-        threshold = t;
-      }
-    }
-    return threshold;
-  }
+  ///
+  /// P33：实现搬到 `luma.otsuThreshold`（取色要用同一份 —— 抹字抹掉的像素
+  /// 与取色取到的像素必须是同一批，否则两处会各自漂移且不报错）。
+  static int _otsu(Uint8List lum) => otsuThreshold(lum);
 
   /// Mean luminance of the pixels at or below [threshold] and above it. Empty
   /// classes fall back to the threshold value.
-  static (double, double) _classMeans(Uint8List lum, int threshold) {
-    var loSum = 0, loN = 0, hiSum = 0, hiN = 0;
-    for (var l in lum) {
-      if (l <= threshold) {
-        loSum += l;
-        loN++;
-      } else {
-        hiSum += l;
-        hiN++;
-      }
-    }
-    var lo = loN == 0 ? threshold.toDouble() : loSum / loN;
-    var hi = hiN == 0 ? threshold.toDouble() : hiSum / hiN;
-    return (lo, hi);
-  }
+  static (double, double) _classMeans(Uint8List lum, int threshold) =>
+      classMeans(lum, threshold);
 
   /// Removes mask components that are not text strokes, in place, and returns
   /// the surviving on-pixel count. Two rejects: a speck too small to be a glyph

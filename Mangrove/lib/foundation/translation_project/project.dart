@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import '../image_translation/translation_types.dart';
+import 'block_group.dart';
+import 'seam_review.dart';
 import 'text_block.dart';
 
 /// One page of a translation project: its key plus its text blocks.
@@ -240,6 +242,44 @@ class TranslationProject {
     } else {
       raw['current_img'] = value;
     }
+  }
+
+  /// B-1 缝检视记录，键为 `"<上页>|<下页>"`（阅读序）。
+  ///
+  /// 这是一个**快照**：改它不会写回，要改请用 [setSeamReview] / [clearSeamReview]。
+  Map<String, String> get seamReviews => readSeamReviews(raw);
+
+  /// 记录缝 [id] 的检视状态（`todo` / `clean` / `split` / `n/a`）。
+  ///
+  /// 认不出的 [state] 会被**忽略**（连同 [id] 一起不写），这样调用方传错一个
+  /// 字符串也不会在工程里留下一条读侧会丢弃的坏记录。
+  void setSeamReview(String id, String state) {
+    if (SeamState.fromWire(state) == null) return;
+    final reviews = readSeamReviews(raw)..[id] = state;
+    writeSeamReviews(raw, reviews);
+  }
+
+  /// 删除缝 [id] 的记录（回到"未记录"= [SeamState.todo]）。
+  void clearSeamReview(String id) {
+    final reviews = readSeamReviews(raw);
+    if (reviews.remove(id) != null) writeSeamReviews(raw, reviews);
+  }
+
+  /// B-3 组定义，键为组 id。
+  ///
+  /// 这是一个**快照**：改它不会写回，要改请用 [setGroup] / [clearGroup]。
+  Map<String, BlockGroup> get groups => readGroups(raw);
+
+  /// 新增或替换一个组。
+  void setGroup(BlockGroup group) {
+    final groups = readGroups(raw)..[group.id] = group;
+    writeGroups(raw, groups);
+  }
+
+  /// 删除组 [id]（不存在则不动）。
+  void clearGroup(String id) {
+    final groups = readGroups(raw);
+    if (groups.remove(id) != null) writeGroups(raw, groups);
   }
 
   /// Registers a new page and, when given, its position in `page_order`.

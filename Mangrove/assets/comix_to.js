@@ -1,5 +1,5 @@
 /**
- * comix.to 漫画源 v0.6.4
+ * comix.to 漫画源 v0.6.5
  *
  * 架构：
  * - 元数据：HTTP GET 详情页 initial-data（comix.to 只有详情页有 SSR）
@@ -54,6 +54,36 @@ function _comixBust(url) {
     _comixImageRetry[url] = n;
     var sep = url.indexOf("?") >= 0 ? "&" : "?";
     return url + sep + "_bt=" + Date.now().toString(36) + n.toString(36);
+}
+
+// P45（2026-10-12）：出口 IP 被 comix 自家 WAF 拦截时，任何页面都被重定向到
+// `/@waf/challenge`（HTTP 200、标题 "Security check" 的 9.4KB 滑块页）。
+// Dart 桥在导航后 ~1s 内识别并抛 COMIX_IP_BLOCKED（不再空等 20~100s、
+// 不再重启 worker 重试），这里统一翻成可操作的中英双语提示。
+// 当天实测封禁名单（随时间漂移）：美国/印度/法国/澳大利亚/香港Y01；
+// 可用：香港Y02/Y03/Y05/Y09/Y11、日本Y01/Y03、新加坡Y02、英国/德国/加拿大。
+var _comixBlockedHint = "comix.to 已拦截当前网络出口（WAF 安全校验页）："
+    + "请把代理节点切换到香港其他节点（如 Y05/Y02）/日本/新加坡/英国/德国后重试，"
+    + "当前节点已被封；若当前是直连，请开启代理后再试。"
+    + " / comix.to blocked your current exit IP (WAF security check page): "
+    + "switch the proxy to another HK (e.g. Y05/Y02) / JP / SG / UK / DE node and retry.";
+
+function _comixIsBlocked(e) {
+    return String(e && e.message !== undefined ? e.message : e).indexOf("COMIX_IP_BLOCKED") >= 0;
+}
+
+// 搜索/发现/分类桥接：被封时翻成双语提示，其余异常原样抛。
+async function _comixBrowse(query, page) {
+    try {
+        return await sendMessage({
+            method: "comix_browse",
+            query: query,
+            page: page,
+        });
+    } catch (e) {
+        if (_comixIsBlocked(e)) throw new Error(_comixBlockedHint);
+        throw e;
+    }
 }
 
 // 图片加载配置：viaWebview=true 走 Dart 侧离屏 WebView（真实浏览器 TLS，
@@ -132,7 +162,7 @@ function _comixMapList(res) {
 class ComixTo extends ComicSource {
     name = "comix.to";
     key = "comix_to";
-    version = "0.6.4";
+    version = "0.6.5";
     minAppVersion = "1.4.0";
     url = "https://comix.to";
 
@@ -142,11 +172,7 @@ class ComixTo extends ComicSource {
         load: async function(keyword, searchOption, page) {
             page = page || 1;
             console.log("comix_to: search keyword=" + keyword + " page=" + page);
-            var res = await sendMessage({
-                method: "comix_browse",
-                query: { q: keyword },
-                page: page,
-            });
+            var res = await _comixBrowse({ q: keyword }, page);
             var out = _comixMapList(res);
             console.log("comix_to: search got " + out.comics.length + " comics, maxPage=" + out.maxPage);
             return out;
@@ -165,11 +191,7 @@ class ComixTo extends ComicSource {
         type: "multiPageComicList",
         load: async function(page) {
             page = page || 1;
-            var res = await sendMessage({
-                method: "comix_browse",
-                query: {},
-                page: page,
-            });
+            var res = await _comixBrowse({}, page);
             return _comixMapList(res);
         },
     }];
@@ -204,11 +226,7 @@ class ComixTo extends ComicSource {
             } else {
                 query.statuses = param;
             }
-            var res = await sendMessage({
-                method: "comix_browse",
-                query: query,
-                page: page,
-            });
+            var res = await _comixBrowse(query, page);
             return _comixMapList(res);
         },
     };
@@ -240,6 +258,10 @@ class ComixTo extends ComicSource {
             };
 
             var html = null;
+            // P41：出口 IP 被 WAF 拦截时给用户的可操作提示
+            // （Dart 侧以 COMIX_IP_BLOCKED 错误码标记；P45 起提示文案统一为模块级
+            // _comixBlockedHint，并覆盖 comix 自家 /@waf/challenge 滑块页）。
+            var ipBlocked = false;
             // slug 为空时不要拼尾随 '-'（会 404）
             var urls = slug
                 ? ["https://comix.to/title/" + hid + "-" + slug]
@@ -274,10 +296,23 @@ class ComixTo extends ComicSource {
                         }
                     } catch (e2) {
                         console.warn("comix_to: webview fetch err: " + e2);
+                        if (String(e2).indexOf("COMIX_IP_BLOCKED") >= 0) {
+                            ipBlocked = true;
+                        }
                     }
                 }
             }
-            if (!html) throw new Error("all URLs failed for hid=" + hid);
+            if (!html) {
+                if (ipBlocked) throw new Error(_comixBlockedHint);
+                throw new Error("all URLs failed for hid=" + hid);
+            }
+            // dio 通道偶发返回 200 但 body 是封禁/挑战页：同样按 IP 被封引导。
+            // P45：新增 comix 自家 WAF 滑块页标记（@waf/challenge、<title>Security
+            // check）；⚠️ 不能只认 challenge-platform —— CF jsd 探针全站注入，
+            // 正常 SSR 页也有该串，托管挑战只走 challenge-platform/h/。
+            if (/@waf\/challenge|<title>security check|challenge-platform\/h\/|attention required|blocked_why_headline|cf-error-details/i.test(html)) {
+                throw new Error(_comixBlockedHint);
+            }
 
             // comix.to 实际格式：<script type="application/json" id="initial-data">
             var startTag = 'id="initial-data">';
@@ -418,10 +453,19 @@ class ComixTo extends ComicSource {
             // epId 是 versioned map 里的章节 key（comix.to 章节页完整 URL）。
             // Dart 侧 ComixClient 用常驻 headless webview 打开该章节页，
             // 截获 SPA 自己发出的 /api/v1/chapters/{id} JSON 响应。
-            var images = await sendMessage({
-                method: "comix_fetch_pages",
-                chapterUrl: epId,
-            });
+            // P45：出口 IP 被封时 Dart 侧在导航后 ~1s 即抛 COMIX_IP_BLOCKED
+            //（旧行为是 fiber/探针空轮询 45s、再重启 worker 翻倍成 90s，
+            // 表现为下载"长时间卡死在获取图片列表"），这里立刻给双语提示。
+            var images;
+            try {
+                images = await sendMessage({
+                    method: "comix_fetch_pages",
+                    chapterUrl: epId,
+                });
+            } catch (e) {
+                if (_comixIsBlocked(e)) throw new Error(_comixBlockedHint);
+                throw e;
+            }
             if (!Array.isArray(images) || images.length === 0) {
                 throw new Error("comix_to: no images returned for " + epId);
             }

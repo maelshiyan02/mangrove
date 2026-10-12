@@ -38,6 +38,7 @@ import 'dart:io';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/comic_card_kind.dart';
 import 'package:mangrove/foundation/local.dart';
+import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
 import 'package:path/path.dart' as p;
 
 /// 一次删除的范围 —— 就是弹窗里那个勾选框的两种状态。
@@ -180,9 +181,19 @@ ComicDeletionReport deleteLocalComics(
   final dirs = <Directory>[];
   final refused = <String>[];
   final missing = <String>[];
+  // 工程卡被删时**顺带**要清的阅读器绑定（`studioReaderBindings`）。绑定表是
+  // "磁盘上有这么个工程"的缓存，工程没了、缓存也必须没 —— 否则它下一次会在
+  // `创建翻译工程` 里以"这一章已有工程"的身份把用户挡回去（P14 那个 bug）。
+  // 🔴 在删目录**之前**取：`projectFor` 读的是内存里的扫描结果，而下面那次
+  // `scan()` 会把它清掉。
+  final deletedProjectJsons = <String>[];
 
   if (scope == ComicDeletionScope.recordsAndFiles) {
     for (final comic in comics) {
+      if (comicCardKindOf(comic.id) == ComicCardKind.project) {
+        final json = BtProjectManager().projectFor(comic.id)?.jsonFile.path;
+        if (json != null) deletedProjectJsons.add(json);
+      }
       final root = comicOnDiskRoot(comic);
       if (root == null) continue;
       if (!comicRootIsSafeToDelete(root)) {
@@ -200,6 +211,12 @@ ComicDeletionReport deleteLocalComics(
   final manager = LocalManager();
   final before = comics.length;
   manager.batchDeleteComics(comics, false, removeFavoriteAndHistory);
+
+  // 清绑定：**只**在"记录 + 文件一起删"时做。只删记录时工程目录还在，绑定依然
+  // 指着一个存在的 json，清了反而会让工作室失去这条来源身份（术语表 scope）。
+  for (final json in deletedProjectJsons) {
+    StudioReaderStore.removeForJsonPath(json);
+  }
 
   if (dirs.isNotEmpty) {
     LocalManager.deleteDirectories(dirs);

@@ -182,6 +182,27 @@ class StudioReaderBindings {
   StudioReaderBinding? operator [](String key) =>
       StudioReaderBinding.fromJson(_raw[key]);
 
+  /// 一条**有效**绑定：键要命中，且它指向的 json 必须**真的在磁盘上**。
+  ///
+  /// ## 🔴 为什么必须有这一层（P14）
+  ///
+  /// 绑定表是「磁盘上有这么个工程」的**缓存**，磁盘才是真相。工程被删除之后
+  /// （应用内删 / 资源管理器里删 / 同步覆盖），表里那条会变成**幽灵**：
+  /// `创建翻译工程` 向导据此把这一章判成"已有工程"、把用户挡在创建门外；
+  /// 点【创建】弹出的是"已打开既有工程"，工程文件夹显示为空、跳转按钮永远不亮
+  /// —— 而磁盘上明明已经删干净了。
+  ///
+  /// [jsonExists] 由 app 侧注入（纯逻辑层不碰磁盘，`A01 §3`）—— 于是"json 没了
+  /// 就不算已有工程"这条规则能在 headless 里被注入故障打红。
+  StudioReaderBinding? liveBindingFor(
+    String key, {
+    required bool Function(String jsonPath) jsonExists,
+  }) {
+    final binding = this[key];
+    if (binding == null) return null;
+    return jsonExists(binding.jsonPath) ? binding : null;
+  }
+
   /// 反查：哪条绑定指向 [jsonPath]。
   ///
   /// 这是工作室那一侧的入口 —— 它手里只有工程（`bt_<hash>`），需要经这里拿回
@@ -203,6 +224,32 @@ class StudioReaderBindings {
       }
     }
     return null;
+  }
+
+  /// 删掉**所有**指向 [jsonPath] 的条目，返回被删的键。
+  ///
+  /// 用于"工程被删除"：绑定表是缓存，工程没了，缓存里那一行也必须跟着没 ——
+  /// 否则它下一次会以"这一章已有工程"的身份把用户挡在创建门外（见
+  /// [liveBindingFor] 的幽灵绑定）。由 `deleteLocalComics` 在删工程卡时调用。
+  ///
+  /// 匹配走 [normaliseReaderPath] + 小写折叠，与 [forJsonPath] **同一套**规则：
+  /// 写绑定那一刻记下的路径，与删除那一刻从 `File.path` 拼出来的，可能差一个
+  /// 斜杠方向或一个盘符大小写 —— 而"差一点就算不上"的后果是这条清理静默漏掉。
+  List<String> removeForJsonPath(String jsonPath) {
+    final wanted = normaliseReaderPath(jsonPath).toLowerCase();
+    if (wanted.isEmpty) return const [];
+    final doomed = <String>[];
+    for (final entry in _raw.entries) {
+      final binding = StudioReaderBinding.fromJson(entry.value);
+      if (binding == null) continue;
+      if (normaliseReaderPath(binding.jsonPath).toLowerCase() == wanted) {
+        doomed.add(entry.key.toString());
+      }
+    }
+    for (final key in doomed) {
+      _raw.remove(key);
+    }
+    return doomed;
   }
 
   void put(String key, StudioReaderBinding binding) =>

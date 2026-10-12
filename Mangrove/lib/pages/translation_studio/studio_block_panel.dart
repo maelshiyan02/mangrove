@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
 import 'package:mangrove/foundation/bundled_fonts.dart';
+import 'package:mangrove/foundation/system_fonts.dart';
 import 'package:mangrove/foundation/translation_project/text_block.dart';
 import 'package:mangrove/foundation/widget_utils.dart';
 import 'package:mangrove/utils/translations.dart';
@@ -39,6 +40,11 @@ class StudioBlockPanel extends StatefulWidget {
     this.onDelete,
     this.onRecognise,
     this.onTranslate,
+    this.onRepair,
+    this.onRestoreOriginal,
+    this.isCrossPage = false,
+    this.onDissolveSpan,
+    this.onSampleColor,
     this.busy = false,
   });
 
@@ -64,6 +70,33 @@ class StudioBlockPanel extends StatefulWidget {
 
   /// 【翻译】—— re-run translation for this block's source text (S-N1).
   final Future<void> Function()? onTranslate;
+
+  /// 【修图】—— 只抹掉这个块覆盖区域的原字并在该框填译文。
+  ///
+  /// 🔴 不可逆：`inpainted/` 一写出，原图上的字已被算法抹掉。整页修图的
+  /// 同一份能力，但范围收窄到当前选中的**一个块** —— 用户可以先核对块
+  /// 再对这一个块跑修图，不用整页一起做。
+  final Future<void> Function()? onRepair;
+
+  /// 【复原原图】—— 把这个块已经被抹掉的像素放回原图。
+  ///
+  /// 🔴 这是 BT 没有的能力：用**外扩 ≥30%** 的掩膜（[buildRestorationMask]）
+  /// 把 inpaint 算法改写过的周围像素一起恢复，不留糊边。调用方会确保
+  /// 原图存在（重下载即可），底图和掩膜也都已落盘。
+  final Future<void> Function()? onRestoreOriginal;
+
+  /// B-5：本块带 `_span` 且跨 ≥2 页时为真 —— 显示跨页标记与【解跨页】按钮。
+  final bool isCrossPage;
+
+  /// B-5【解跨页】：块缩回顶页、尾页复原。null（非跨页块）时按钮不显示。
+  final Future<void> Function()? onDissolveSpan;
+
+  /// P33 ⑦b【从原图取色】：在该块的框内采样原图文字颜色并写进 `frgb`。
+  ///
+  /// 🔴 它是**异步且可能失败**（原图缺失、纯色区域取不出色）⇒ 面板只负责把
+  /// 回调接上并禁用重复点击，成败由调用方用 toast 说出口，不静默。
+  /// null 时按钮不显示（单页之外的上下文可能没有可用的原图）。
+  final Future<void> Function()? onSampleColor;
 
   /// True while either action is in flight; disables both buttons so a
   /// double-click cannot launch two OCR passes on the same block.
@@ -216,7 +249,24 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
               icon: const Icon(Icons.check, size: 16),
               label: Text('Apply'.tl),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
+            if (widget.onRepair != null)
+              _ActionButton(
+                icon: Icons.auto_fix_high,
+                tooltip: 'Repair this block'.tl,
+                busy: widget.busy,
+                onPressed: widget.onRepair!,
+              ),
+            if (widget.onRepair != null && widget.onRestoreOriginal != null)
+              const SizedBox(width: 4),
+            if (widget.onRestoreOriginal != null)
+              _ActionButton(
+                icon: Icons.restore,
+                tooltip: 'Restore original for this block'.tl,
+                busy: widget.busy,
+                onPressed: widget.onRestoreOriginal!,
+              ),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
                 'one undo step'.tl,
@@ -226,6 +276,40 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
             ),
           ],
         ),
+        // B-5：跨页块标记 + 解跨页。修图/复原已在 owner 侧自动按 `_span`
+        // 分流（逐页做），这里额外给出"它跨页"的可见事实与拆回单页的出口。
+        if (widget.isCrossPage) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color: scheme.tertiaryContainer.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.select_all,
+                    size: 16, color: scheme.onTertiaryContainer),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Cross-page block'.tl,
+                    style: ts.s12.copyWith(
+                      color: scheme.onTertiaryContainer,
+                    ),
+                  ),
+                ),
+                if (widget.onDissolveSpan != null)
+                  TextButton.icon(
+                    onPressed:
+                        widget.busy ? null : () => widget.onDissolveSpan!(),
+                    icon: const Icon(Icons.call_split, size: 16),
+                    label: Text('Split back to one page'.tl),
+                  ),
+              ],
+            ),
+          ),
+        ],
         const Divider(height: 28),
         if (format == null)
           Padding(
@@ -254,7 +338,9 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
                 icon: const Icon(Icons.format_align_right, size: 18),
               ),
             ],
-            selected: {format?.alignment ?? FtTextAlignment.left},
+            // P32：无 FontFormat 时面板高亮 **center** —— 与 FontFormat 的
+            // 默认对齐及双端居中渲染一致（旧值 fallback left 与实际默认相反）。
+            selected: {format?.alignment ?? FtTextAlignment.center},
             showSelectedIcon: false,
             onSelectionChanged: (selection) => widget.onEdit(
               'Alignment',
@@ -323,9 +409,19 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
         _ColorField(
           label: 'Fill colour',
           rgb: format?.foregroundColor ?? const [0, 0, 0],
+          // P33 ⑦b：这个色是"从原图取的"还是"用户定的"。两种来源在界面上
+          // 长得一模一样的话，用户无法判断重新识别会不会把自己的调色冲掉。
+          auto: widget.block.colorIsAuto,
+          onSampleFromArt: widget.onSampleColor,
+          busy: widget.busy,
+          // 🔴 手动改色的**同时**把自动标记摘掉：否则下一次识别会把它覆盖回
+          // 取样值 —— 表现为"我调好的字色自己变回去了"。
           onCommitted: (rgb) => widget.onEdit(
             'Fill colour',
-            (b) => b.ensureFontFormat().foregroundColor = rgb,
+            (b) {
+              b.ensureFontFormat().foregroundColor = rgb;
+              b.colorIsAuto = false;
+            },
             syncRichText: true,
           ),
         ),
@@ -553,6 +649,13 @@ class _SliderFieldState extends State<_SliderField> {
 /// entry is deliberately **not** pre-selected: the effective value is [value],
 /// and pretending otherwise would mean saving the mapped family over the
 /// project's own name on the first unrelated edit.
+
+/// P33：[family] 是机器里装着的字体（而不是打包字体）。
+///
+/// 判据直接查系统字体表，不靠 `resolveFamily(...).fallback` —— 那个字段把
+/// 「系统字体」与「打包字体」都记成 `fallback: false`，区分不了。
+bool _isSystemFamily(String? family) => systemFonts.has(family);
+
 class _FamilyField extends StatelessWidget {
   const _FamilyField({
     required this.value,
@@ -572,9 +675,13 @@ class _FamilyField extends StatelessWidget {
   Widget build(BuildContext context) {
     final choices = fontFamilyChoices(current);
     final mapped = resolveFamily(current);
+    // P33：三档来源要有三行不同的说明，否则"系统里装的"与"被打回兜底字体的"
+    // 在界面上长得一模一样，而这两件事对用户意味着完全不同的风险。
     final subtitle = mapped.fallback && current.trim().isNotEmpty
         ? 'stored as "@a", renders as @b'.tlParams({'a': current, 'b': mapped.family})
-        : 'bundled with the app'.tl;
+        : _isSystemFamily(current)
+            ? 'installed on this machine'.tl
+            : 'bundled with the app'.tl;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
@@ -602,14 +709,28 @@ class _FamilyField extends StatelessWidget {
                     for (final choice in choices)
                       DropdownMenuItem(
                         value: choice.family,
-                        child: Text(
-                          choice.label,
-                          overflow: TextOverflow.ellipsis,
-                          style: ts.s14.copyWith(
-                            color: choice.bundled
-                                ? null
-                                : Theme.of(context).colorScheme.error,
-                          ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                choice.label,
+                                overflow: TextOverflow.ellipsis,
+                                style: ts.s14,
+                              ),
+                            ),
+                            // P33：打包字体与系统字体在下拉里要能一眼分开 ——
+                            // 前者任何机器都有，后者换台机器可能就缺字。
+                            const SizedBox(width: 6),
+                            Text(
+                              choice.bundled ? '· app' : '· system',
+                              style: ts.s10.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                   ],
@@ -673,11 +794,22 @@ class _ColorField extends StatefulWidget {
     required this.label,
     required this.rgb,
     required this.onCommitted,
+    this.auto = false,
+    this.onSampleFromArt,
+    this.busy = false,
   });
 
   final String label;
   final List<int> rgb;
   final ValueChanged<List<int>> onCommitted;
+
+  /// P33 ⑦b：True = 这个色是上次从原图取出来的，重新识别可以覆盖它。
+  final bool auto;
+
+  /// P33 ⑦b【从原图取色】。null 时不显示该按钮。
+  final Future<void> Function()? onSampleFromArt;
+
+  final bool busy;
 
   @override
   State<_ColorField> createState() => _ColorFieldState();
@@ -703,6 +835,7 @@ class _ColorFieldState extends State<_ColorField> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -720,6 +853,33 @@ class _ColorFieldState extends State<_ColorField> {
             ),
           ],
         ),
+        // P33 ⑦b：来源要写出来。"自动"意味着下次识别会更新它，"手动"意味着
+        // 我们保证不动它 —— 这两件事对用户是**完全不同的承诺**，不能靠色块
+        // 自己去猜。
+        if (widget.auto || widget.onSampleFromArt != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.auto
+                        ? 'auto — sampled from the original art'.tl
+                        : 'manual — kept across re-recognition'.tl,
+                    style: ts.s10.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+                ),
+                if (widget.onSampleFromArt != null)
+                  SizedBox(
+                    height: 26,
+                    child: TextButton(
+                      onPressed: widget.busy ? null : widget.onSampleFromArt,
+                      child: Text('Re-sample'.tl, style: ts.s10),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         for (var i = 0; i < 3; i++)
           _SliderField(
             label: _channelNames[i],

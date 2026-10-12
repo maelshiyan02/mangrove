@@ -30,7 +30,14 @@ HttpClientAdapter createIOAdapter({bool enableProxy = true}) =>
 /// on those paths alone.
 HttpClient createIOHttpClient({String? proxy}) {
   final client = HttpClient();
-  client.findProxy = (uri) => proxy == null ? 'DIRECT' : 'PROXY $proxy';
+  // 强制直连白名单（默认空）：P41 起 comix 不再钉死 DIRECT——家宽 IP 同样
+  // 会被 Cloudflare 封，而香港/日本等代理节点可用，方向交给用户的代理设置。
+  // 详见 proxy.dart::kDirectProxyHostSuffixes。
+  client.findProxy = (uri) {
+    if (proxy == null) return 'DIRECT';
+    if (isDirectProxyHost(uri.host)) return 'DIRECT';
+    return 'PROXY $proxy';
+  };
   // ignoreBadCertificate 设置开启时放行所有证书错误。
   // 另外：只要走代理就放行——dart:io 只信 Flutter 内置根证书列表，
   // 不认系统证书库。代理软件（Clash 等）的根证书装在系统库里，

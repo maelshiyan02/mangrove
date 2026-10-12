@@ -25,11 +25,16 @@
 library;
 
 import 'dart:io';
+import 'dart:math' as math;
 
+import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/comic_card_kind.dart';
 import 'package:mangrove/foundation/comic_deletion.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
+import 'package:mangrove/foundation/image_translation/font_fit.dart';
+import 'package:mangrove/foundation/translation_project/chapter_translation_state.dart';
 import 'package:mangrove/foundation/translation_project/studio_project_entry.dart';
+import 'package:mangrove/foundation/translation_project/studio_reader.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 
 const _entryPath =
@@ -658,6 +663,174 @@ void runP9Checks(CheckSink check, {required Directory packageRoot}) {
         '故障=旧弹窗（写死的 Delete 标题 + 两个勾选框）不满足判据',
   );
 
+  // ── 绑定表：工程删掉之后，那条绑定就不能再当"已有工程"（P14）─────────
+  //
+  // 🔴 这两个断言钉的是"删了工程却建不回来"：绑定表是磁盘的**缓存**，工程被删除
+  // （应用内删 / 资源管理器里删 / 同步覆盖）之后表里那条会变成**幽灵** —— 创建
+  // 向导据此把这一章判成"已有工程"、把用户挡在创建门外；点【创建】弹出的是
+  // "已打开既有工程"，工程文件夹显示为空、跳转按钮永远不亮，而磁盘上明明已经
+  // 删干净了（2026-10-09 实测）。
+
+  probe(
+    'binding.json_gone_is_not_a_project',
+    // 行为判据：**同一条**绑定，json 在 ⇒ 查得出来；json 没了 ⇒ 查不出来。
+    () => _ghostBindingRejected(_liveBindingLookup),
+    // 故障路径 = 只看键、不核磁盘的那一版（修复前的 `operator []`）。
+    () => _ghostBindingRejected(_keyOnlyBindingLookup),
+    () => '绿=json 没了就不算已有工程 / '
+        '故障=只看键的那版仍把幽灵绑定当工程',
+  );
+
+  probe(
+    'deletion.purges_the_reader_binding_of_the_deleted_project',
+    // 行为判据：按 json 清理时**只有**指向它的那条消失，其余原样保留。
+    () => _purgeRemovesExactly(_purgeByJsonPath),
+    // 故障路径 = 什么都不删的那一版（幽灵绑定会永远留在表里）。
+    () => _purgeRemovesExactly(_purgeDoesNothing),
+    () => '绿=只清掉指向被删工程的那条绑定 / '
+        '故障=不清理的那版把幽灵绑定留在表里',
+  );
+
+  // ── 工程 id 与封面路径：两条会静默错位的路径规则（P14 追补）───────────
+  //
+  // 🔴 这两条钉的是同一类 bug 的两个面：**同一个工程，两个地方算出两个答案**。
+  // * id：`scan()` 手里的路径来自 `Directory.list()`（Windows 上是 `\`），创建
+  //   向导手里的路径来自 `ProjectBootstrap`（`/`）—— 不归一化就算出两个 id，
+  //   于是刚建好的工程"不在工作室工程根目录下"、点【打开翻译工程】跳进去空白，
+  //   而本地库/主页从 DB 拿到的是另一个变体所以看上去一切正常（2026-10-09 实测）；
+  // * 封面：工程 json 的 `directory` 指 `<工程根>/source/`，而封面 `cover.<ext>`
+  //   落在**工程根** —— 只查 `directory` 的那版会 miss，然后回落到"章节第一页"，
+  //   卡片上看起来完全正常（就是用了错的那张图）。
+
+  probe(
+    'the_project_id_is_separator_insensitive',
+    // 行为判据：**同一个 json** 用 `/` 与 `\` 两种写法必须算出同一个 id。
+    () => _idIsSeparatorInsensitive(BtProjectManager.comicIdForJsonFile),
+    // 故障路径 = 不归一化分隔符的那一版（修复前的实现）。
+    () => _idIsSeparatorInsensitive(_rawComicId),
+    () => '绿=id 对分隔符不敏感 / 故障=不归一化的版本在 `\\\\` 上算出另一个 id',
+  );
+
+  probe(
+    'cover.in_the_project_folder_is_found',
+    // 行为判据：封面在 `source/` 里 ⇒ 命中；只在**工程根**（json 同级）里 ⇒ 也
+    // 命中；两处都没有 ⇒ null（必须要求 null，否则一个"恒返回某个路径"的实现
+    // 也能通过）。
+    () => _coverFoundInBothPlaces(BtProjectManager.resolveCoverFile),
+    // 故障路径 = 只查 `directory` 的那一版（修复前的查找范围）。
+    () => _coverFoundInBothPlaces(_directoryOnlyCover),
+    () => '绿=封面查 source/ 与工程根两处 / '
+        '故障=只查 source 的版本找不到工程根的封面',
+  );
+
+  // ── 扫描器：对账表 sidecar 不是工程（P16）──────────────────────────────
+  //
+  // 🔴 钉的是"保存一次就多一张空卡片"：产物对账表 `imgtrans_<名>.artifacts.json`
+  // 与工程 json **同级**、同样 `imgtrans_` 开头 `.json` 结尾，旧的"前缀 + 后缀"
+  // 判据把它当成第二个工程登记 ⇒ 本地库/主页多一张**零页**幽灵卡片，删真实工程
+  // 也带不走它（它挂的是同一本工程所在的目录）——2026-10-09 实测：按一次保存
+  // 就多一个，而磁盘上明明只有两个工程。
+
+  probe(
+    'scan.artifacts_sidecar_is_not_a_project',
+    // 行为判据：真工程算；对账表 sidecar 不算；备份/无关文件也不算。
+    () => _sidecarIsNotAProject(BtProjectManager.isProjectJsonFileName),
+    // 故障路径 = 修复前的前缀+后缀判据（sidecar 会漏进来）。
+    () => _sidecarIsNotAProject(_legacyProjectNameRule),
+    () => '绿=对账表 sidecar 不算工程 / '
+        '故障=只查前缀与后缀的旧判据把 sidecar 也当工程',
+  );
+
+  // ── 字号上限：用户设置的字号不能被"检测到的源字号"压住（P15）──────────
+  //
+  // 🔴 钉的是"把字号滑块拖到 120，屏幕上的字纹丝不动"：`_fitFontSize` 里原本是
+  // `min(42, lineHeight*0.9, maxFontSize)` 三个 `min` 连乘，而检测块的
+  // `font_size` 恰好等于 `_detected_font_size`（`text_block.dart` 写入时同源），
+  // 于是用户的请求永远被源字号（或那个写死的 42）压住。P0-1 声称"把 `font_size`
+  // 交给渲染器"，实际效果被这两层 `min` 完全抵消（2026-10-09 实测）。
+
+  probe(
+    'font.the_user_size_wins_over_the_measured_lettering',
+    // 行为判据：用户把字号从检测值(49)拖到 120 ⇒ 上限就是 120；拖小到 10 ⇒ 10。
+    () =>
+        fitFontSizeCap(requested: 120, measured: 49) == 120 &&
+        fitFontSizeCap(requested: 10, measured: 49) == 10,
+    // 故障路径 = 修复前的三个 `min` 连乘：120 被压回 49*0.9 = 44.1。
+    () => _capByEverything(requested: 120, measured: 49) == 120,
+    () => '绿=用户设定的字号就是上限 / 故障=旧 min 连乘把 120 压回 44.1',
+  );
+
+  probe(
+    'font.untouched_block_keeps_the_measured_cap',
+    // 行为判据：没动过滑块的块（`font_size` == 检测值）沿用 0.9 的源字号补偿，
+    // 行为**不变**；两个值都没有时回落到 42。
+    () =>
+        (fitFontSizeCap(requested: 49, measured: 49) - 44.1).abs() < 0.01 &&
+        (fitFontSizeCap(requested: null, measured: 49) - 44.1).abs() < 0.01 &&
+        fitFontSizeCap(requested: null, measured: 0) == 42.0,
+    // 故障路径 = 丢掉 0.9 补偿的那一版（译文会和原文一样大）。
+    () => _noSourceScaleCompensation(requested: 49, measured: 49) == 44.1,
+    () => '绿=未动过的块保留源字号补偿 / 故障=不做补偿的那版返回 49',
+  );
+
+  // ── 章节「已翻译」判据：并集，不是"换成工程"（P17）────────────────────
+  //
+  // 🔴 钉的是 S9.5-b 留下的半迁移：产出搬进了工作室（成品落工程 `result/`），
+  // 但详情页**读**那一侧有四处仍只读旧 `TranslationStore`，而工作室管线一行都
+  // 不写它 ⇒ 用户用工作室翻完一整章之后，章节列表**看不到**已翻译标记、
+  // 长按菜单里**没有**「重译/删除」、「已翻译」页签**筛不出**这一章。
+  // 症状与"翻译没生效"几乎一样，但译文其实就在 `result/` 里躺着。
+  //
+  // 🔴 为什么判据是**并集**而不是替换：旧库里躺着 S9.5-b 之前翻的、别处同步来
+  // 的章。改成只认工程 ⇒ 那些章的标记/菜单/页签**全部消失** —— 从"能看见"
+  // 变成"看不见"，是更糟的回归。所以两侧任一有成品就算已翻译。
+
+  probe(
+    'chapter_state.the_union_survives_both_sides',
+    // 行为判据（四个场景一次比完，绿红两版喂**同一组**输入）：
+    // ① 只有工作室侧有 90 页 ⇒ 已翻译（S9.5-b 之前**判不出来**的那一支）；
+    // ② 两侧都有 ⇒ both；
+    // ③ 只有旧库有 12 页 ⇒ 仍然已翻译（"只认工程"会**弄丢**的那一支）；
+    // ④ 两侧都为 0 ⇒ 未翻译且不显示徽标；负数夹到 0。
+    () => _chapterStateActual(_chapterTranslationSourceUnion) == _chapterStateTruth,
+    // 故障路径 A = **只读旧库**（S9.5-b 之前那一版）：工作室侧整个被丢掉。
+    () => _chapterStateActual(_chapterTranslationSourceLegacyOnly) == _chapterStateTruth,
+    () => '绿=并集四场景全对 / '
+        '故障=只读旧库(工作室侧丢) / 另两个故障副本由下一条断言钉住',
+  );
+
+  probe(
+    'chapter_state.the_other_two_faults_are_caught_too',
+    // 🔴 `probe` 只有**一条**红路径，而这一轮踩到的坑正是"红路径写成另一个也成立
+    // 的输入 ⇒ 断言变装饰品"。所以另两个故障副本（只认工程 / 有绑定就算）
+    // 单独用一条断言钉：要求它们**都**与产品版结论不同。
+    //
+    // 这一条的红路径 = "判据不再区分两侧"（产品版与故障版给出同一个结论）
+    // —— 那正是"把两侧并成同一个数"这类改写会造成的退化，此时本条与上一条
+    // 一起失效。
+    () =>
+        _chapterStateActual(_chapterTranslationSourceStudioOnly) !=
+            _chapterStateTruth &&
+        _chapterStateActual(_chapterTranslationSourceBindingIsEnough) !=
+            _chapterStateTruth,
+    () => _chapterStateActual(_chapterTranslationSourceStudioOnly) ==
+            _chapterStateTruth,
+    () => '绿=只认工程/有绑定就算 两个故障版都判出不同结论 / '
+        '故障=判据不再区分两侧时本条与上一条一起失效',
+  );
+
+  probe(
+    'chapter_state.the_badge_counts_both_sides',
+    // 行为判据：徽标页数 = 两侧**之和**（90+3=93）。工作室的 `result/` 与旧缓存
+    // 的页是**不同的页集合**（工程页键 vs `cacheKey`），相加不重复计数；取 max
+    // 会让"工作室翻了 90 页、旧缓存 3 页"显示成 90 —— 用户以为只翻了 90，
+    // 实际 93 页有成品。徽标与页签归属必须**同源**。
+    () => _badgeActual(_badgeUnion) == _badgeTruth,
+    // 故障路径 = 取 max 的那一版：3 页旧缓存被吞掉，显示成 90。
+    () => _badgeActual(_badgeMax) == _badgeTruth,
+    () => '绿=徽标页数取两侧之和(90+3=93) / 故障=取 max 时 3 页被吞',
+  );
+
   // ── 跑 ──────────────────────────────────────────────────────────────
 
   for (final item in probes) {
@@ -1063,3 +1236,295 @@ bool _deleteDialogNamesTheTarget(String source) =>
     source.contains('Delete "@title"?') &&
     source.contains('comic.title') &&
     source.contains('comicOnDiskRoot(comic)');
+
+// ── 绑定表（P14）：幽灵绑定的判据与对照物 ───────────────────────────────
+
+/// 探测用的绑定键。
+const _ghostKey = 'cid@comic@1';
+
+/// 判据：**同一条**绑定里，json 在 ⇒ 查得到，json 没了 ⇒ 查不到。
+///
+/// 🔴 两个方向都要查：只查"没了查不到"时，一个恒返回 null 的实现也会通过 ——
+/// 那正是这条断言最该挡住的东西（一个什么都没做对的实现）。
+bool _ghostBindingRejected(
+  StudioReaderBinding? Function(StudioReaderBindings table, bool jsonExists)
+  lookup,
+) {
+  final table = StudioReaderBindings({
+    _ghostKey: const StudioReaderBinding(
+      jsonPath: 'D:/lib/projects/P/imgtrans_P.json',
+      comicDirectory: 'D:/lib/downloads/C',
+      projectDirectory: 'D:/lib/projects/P/source',
+    ).toJson(),
+  });
+  return lookup(table, true) != null && lookup(table, false) == null;
+}
+
+/// 绿路径：经 `liveBindingFor` 把"json 在不在"喂进去（真实现）。
+StudioReaderBinding? _liveBindingLookup(
+  StudioReaderBindings table,
+  bool jsonExists,
+) => table.liveBindingFor(_ghostKey, jsonExists: (_) => jsonExists);
+
+/// 故障路径：只看键的那一版（修复前 `bindingFor` 的行为）。
+StudioReaderBinding? _keyOnlyBindingLookup(
+  StudioReaderBindings table,
+  bool jsonExists,
+) => table[_ghostKey];
+
+/// 判据：按 json 清理时，**只有**指向它的那条被删，其余原样保留。
+///
+/// 🔴 必须要求"另一条还在"：只查"少了一条"时，一个把整张表清空的实现也会通过。
+bool _purgeRemovesExactly(List<String> Function(StudioReaderBindings) purge) {
+  StudioReaderBinding binding(String name) => StudioReaderBinding(
+    jsonPath: 'D:/lib/projects/$name/imgtrans_$name.json',
+    comicDirectory: 'D:/lib/downloads/C',
+    projectDirectory: 'D:/lib/projects/$name/source',
+  );
+  final table = StudioReaderBindings({
+    'cid@c@1': binding('A').toJson(),
+    'cid@c@2': binding('B').toJson(),
+  });
+  final removed = purge(table);
+  return removed.length == 1 &&
+      removed.single == 'cid@c@1' &&
+      table['cid@c@1'] == null &&
+      table['cid@c@2'] != null;
+}
+
+/// 绿路径：真实现（按 json 路径清理）。
+List<String> _purgeByJsonPath(StudioReaderBindings table) =>
+    table.removeForJsonPath('D:/lib/projects/A/imgtrans_A.json');
+
+/// 故障路径：什么都不删的那一版。
+List<String> _purgeDoesNothing(StudioReaderBindings table) => const [];
+
+/// 判据：`/` 与 `\` 两种分隔符必须算出**同一个** id。
+bool _idIsSeparatorInsensitive(String Function(String) idFor) =>
+    idFor('D:/lib/projects/P/imgtrans_P.json') ==
+    idFor(r'D:\lib\projects\P\imgtrans_P.json');
+
+/// 故障路径：不归一化分隔符的那一版（修复前的 `comicIdForJsonFile`）。
+///
+/// 用 `jsonPath.hashCode` 冒充是不够的 —— 红路径必须检验**同一个命题**，所以
+/// 这里照抄修复前的实现（同一套 FNV，只少了那一步 `replaceAll`）。
+String _rawComicId(String jsonPath) {
+  var hash = 0x811c9dc5;
+  for (final unit in jsonPath.toLowerCase().codeUnits) {
+    hash ^= unit;
+    hash = (hash * 0x01000193) & 0xffffffff;
+  }
+  return 'bt_${hash.toRadixString(16).padLeft(8, '0')}';
+}
+
+/// 判据：封面在 `directory`（= 工程 `source/`）里 **或** 在工程根（json 同级）
+/// 里都算找到；两处都没有必须返回 null。
+///
+/// 用**真临时目录**而不是假路径：这条规则的错法就是"少查了一处"，而少查的那处
+/// 在假路径上永远不存在 —— 假路径喂出来的判据恒真，等于没验。
+bool _coverFoundInBothPlaces(
+  String? Function({
+    required String directory,
+    required String jsonPath,
+    required String key,
+  })
+  resolve,
+) {
+  final tmp = Directory.systemTemp.createTempSync('mangrove_p9_cover');
+  try {
+    final root = '${tmp.path.replaceAll('\\', '/')}/proj';
+    final source = '$root/source';
+    Directory(source).createSync(recursive: true);
+    final jsonPath = '$root/imgtrans_P.json';
+    File(jsonPath).writeAsStringSync('{}');
+    // (a) 只有工程根有封面（`ProjectBootstrap` 当前写的位置）。
+    File('$root/cover.jpg').writeAsBytesSync(const [1, 2, 3]);
+    final inRoot = resolve(
+      directory: source,
+      jsonPath: jsonPath,
+      key: 'cover.jpg',
+    );
+    // (b) 只有 `source/` 有封面（`setCover` 写的位置）。
+    File('$root/cover.jpg').deleteSync();
+    File('$source/cover.jpg').writeAsBytesSync(const [4, 5, 6]);
+    final inSource = resolve(
+      directory: source,
+      jsonPath: jsonPath,
+      key: 'cover.jpg',
+    );
+    // (c) 两处都没有 ⇒ 不能报"找到了"。
+    File('$source/cover.jpg').deleteSync();
+    final missing = resolve(
+      directory: source,
+      jsonPath: jsonPath,
+      key: 'cover.jpg',
+    );
+    return inRoot != null && inSource != null && missing == null;
+  } finally {
+    try {
+      tmp.deleteSync(recursive: true);
+    } catch (_) {
+      // 临时目录清不掉不该让判据翻脸。
+    }
+  }
+}
+
+/// 故障路径：只查 `directory` 的那一版（修复前 `coverPathFor` 的查找范围）。
+String? _directoryOnlyCover({
+  required String directory,
+  required String jsonPath,
+  required String key,
+}) {
+  final path = '${directory.replaceAll('\\', '/')}/$key';
+  return File(path).existsSync() ? path : null;
+}
+
+// ── 扫描器名字判据（P16）红路径的对照物 ───────────────────────────────
+
+/// 判据：真工程 json 算工程；对账表 sidecar（`imgtrans_<名>.artifacts.json`）不算；
+/// 备份与无关文件本来就不满足。
+///
+/// 🔴 "真工程算"这一支不能省：若只断言 sidecar 被排除，一个"恒返回 false"的实现
+/// 也会通过 —— 而那会让**所有**工程从列表里消失（比多一张空卡片严重得多）。
+bool _sidecarIsNotAProject(bool Function(String) isProject) {
+  final project = isProject('imgtrans_MDGH-ch1.json');
+  final sidecar = isProject('imgtrans_MDGH-ch1.artifacts.json');
+  final backup = isProject('imgtrans_MDGH-ch1.json.backup');
+  final unrelated = isProject('other.json');
+  return project && !sidecar && !backup && !unrelated;
+}
+
+/// 故障路径：修复前的名字判据（`startsWith('imgtrans_') && endsWith('.json')`）。
+bool _legacyProjectNameRule(String name) =>
+    name.startsWith('imgtrans_') && name.endsWith('.json');
+
+// ── 字号上限（P15）红路径的对照物 ─────────────────────────────────────
+
+/// 故障路径：修复前的 `min(42, measured*0.9, requested)` 三连压。
+///
+/// 数值上"绿路径"喂 [fitFontSizeCap]，红路径喂它 —— 同一个判据
+/// （"请求 120 就得到 120"）必须一个通过、一个翻脸。
+double _capByEverything({
+  required double requested,
+  required double measured,
+}) {
+  var cap = 42.0;
+  if (measured > 0) cap = math.min(cap, math.max(10.0, measured * 0.9));
+  if (requested > 0) cap = math.min(cap, requested);
+  return cap;
+}
+
+/// 故障路径：不做 0.9 的源字号补偿，直接拿 `measured` 当上限。
+double _noSourceScaleCompensation({
+  required double? requested,
+  required double measured,
+}) {
+  if (requested != null && requested > 0) return requested;
+  return measured > 0 ? measured : 42.0;
+}
+
+// ── 章节「已翻译」判据（P17）绿路径与故障路径 ───────────────────────────
+// 🔴 为什么要写成"判据函数 + 探针"两层，而不是把输入直接写进断言：
+// 2026-10-09 第一版把红路径写成"换一个**也成立**的输入"（例如断言"只有旧库
+// 12 页时已翻译"，却拿它当"只读旧库"那个故障的反例）—— 结果四条里有两条的
+// 故障路径**仍然是绿的**，等于装饰品。门禁如实报了
+// `故障路径=仍绿(装饰品)`（`A02`：失效的断言比不完整的断言危险得多）。
+//
+// 正确形状：**同一个判据签名**下放多份实现（产品版 + 三个故障版），喂**同一组**
+// 输入；断言只比"结论字符串"，于是绿红两版可以直接对照，不必在探针里判断
+// "我现在跑的是不是产品版"（那需要函数同一性比较，脆弱且会掩盖真正的失败）。
+
+typedef _ChapterSource = ChapterTranslationSource Function(int, int);
+
+/// 产品版：并集判据（`chapter_translation_state.dart` 的本体）。
+ChapterTranslationSource _chapterTranslationSourceUnion(
+  int studio,
+  int legacy,
+) => chapterTranslationSource(
+  studioProductPages: studio,
+  legacyStoredPages: legacy,
+);
+
+/// 故障路径 A：**只读旧 `TranslationStore`** —— S9.5-b 之前详情页那一版。
+/// 工作室侧的页数被整个丢掉。
+ChapterTranslationSource _chapterTranslationSourceLegacyOnly(
+  int studio,
+  int legacy,
+) => chapterTranslationSource(
+  studioProductPages: 0,
+  legacyStoredPages: legacy,
+);
+
+/// 故障路径 B：**只认工程** —— "迁移"最直觉的那个改法。
+/// 旧库里 S9.5-b 之前翻的、WebDAV 同步来的章会被判成未翻译（标记消失）。
+ChapterTranslationSource _chapterTranslationSourceStudioOnly(
+  int studio,
+  int legacy,
+) => chapterTranslationSource(
+  studioProductPages: studio,
+  legacyStoredPages: 0,
+);
+
+/// 故障路径 C：**有绑定就算已翻译**（不数产物）。
+/// 空工程（建完就走了）会混进「已翻译」页签，点进去看到的是原图。
+ChapterTranslationSource _chapterTranslationSourceBindingIsEnough(
+  int studio,
+  int legacy,
+) => chapterTranslationSource(
+  studioProductPages: studio > 0 ? studio : 1,
+  legacyStoredPages: legacy,
+);
+
+/// 产品版结论（绿路径应逐字等于这个字符串）。
+const String _chapterStateTruth =
+    'studioOnly(90,0)=studioOnly; (90,3)=both; (0,12)=legacyOnly; badge(0,12)=12; '
+    '(0,0)=none; badge(0,0)=null; tab(-1,-1)=false';
+
+/// 绿路径：产品版在四个场景上的结论。
+String _chapterStateActual(_ChapterSource source) {
+  final tabNeg = isTranslatedTab(studioProductPages: -1, legacyStoredPages: -1);
+  return 'studioOnly(90,0)=${source(90, 0).name}; '
+      '(90,3)=${source(90, 3).name}; '
+      '(0,12)=${source(0, 12).name}; '
+      'badge(0,12)='
+      '${translatedPageCountForBadge(studioProductPages: 0, legacyStoredPages: 12)}; '
+      '(0,0)=${source(0, 0).name}; '
+      'badge(0,0)='
+      '${translatedPageCountForBadge(studioProductPages: 0, legacyStoredPages: 0)}; '
+      'tab(-1,-1)=$tabNeg';
+}
+
+typedef _BadgeCount = int? Function(int, int);
+
+/// 产品版：徽标页数 = 两侧之和。
+int? _badgeUnion(int studio, int legacy) =>
+    translatedPageCountForBadge(
+      studioProductPages: studio,
+      legacyStoredPages: legacy,
+    );
+
+/// 故障路径：取 **max**。工作室翻了 90 页、旧缓存 3 页 ⇒ 显示 90，
+/// 用户以为只翻了 90，实际 93 页有成品。
+int? _badgeMax(int studio, int legacy) {
+  if (_chapterTranslationSourceUnion(studio, legacy) ==
+      ChapterTranslationSource.none) {
+    return null;
+  }
+  return studio > legacy ? studio : legacy;
+}
+
+/// 产品版徽标结论（绿路径应逐字等于）。
+const String _badgeTruth = 'badge(90,3)=93; badge(0,0)=null; tab(90,0)=true';
+
+/// 绿路径：徽标取两侧之和，且徽标与页签归属**同源**
+/// （徽标说有译文，页签就必须把它归到「已翻译」—— 分叉的症状与本文件要修的
+/// 那个 bug 是同一个：半迁移）。
+String _badgeActual(_BadgeCount badge) {
+  final tabStudioOnly = isTranslatedTab(
+    studioProductPages: 90,
+    legacyStoredPages: 0,
+  );
+  return 'badge(90,3)=${badge(90, 3)}; '
+      'badge(0,0)=${badge(0, 0)}; '
+      'tab(90,0)=$tabStudioOnly';
+}

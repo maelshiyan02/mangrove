@@ -30,6 +30,12 @@ S = 'studio_page.dart'          # lib/pages/translation_studio/
 PW = 'project_writer.dart'      # lib/foundation/translation_project/
 RR = 'result_renderer.dart'     # lib/foundation/translation_project/
 
+# P33 (2026-10-11) · ⑦a 系统字体探测 / 双端参数统一 / ⑦b 原图取色
+SF = 'system_fonts.dart'        # lib/foundation/
+FF = 'font_fit.dart'            # lib/foundation/image_translation/
+TC = 'text_color.dart'          # lib/foundation/image_translation/
+TB = 'text_block.dart'          # lib/foundation/translation_project/
+
 # P2 (P9.7)
 G = 'block_resize_geometry.dart'  # lib/components/
 C = 'text_block_canvas.dart'      # lib/components/
@@ -106,10 +112,14 @@ FAULTS = {
     ),
     'font_fallback_removed': (
         [f'lib/foundation/{F}'],
+        # P33：措辞随系统字体分支改过（"不是打包的"→"既没打包也没装"）。
+        # 锚点必须跟着走 —— 锚点烂掉的故障**不会被跳过**，而是报成
+        # "anchor not unique"，与真打歪混在一起（见 `_anchor_report`）。
         [("""  return ResolvedFamily(
     family: primaryBundledFamily,
     fallback: true,
-    reason: '"$name" is not bundled; fell back to "$primaryBundledFamily"',
+    reason: '"$name" is neither bundled nor installed; '
+        'fell back to "$primaryBundledFamily"',
   );""",
           """  return ResolvedFamily(
     family: name,
@@ -155,9 +165,19 @@ FAULTS = {
     ),
     'font_selector_drops_unbundled': (
         [f'lib/foundation/{F}'],
+        # P33：`fontFamilyChoices` 的返回类型从 record 换成 `FontFamilyChoice`
+        # （多了"系统字体"这一档），锚点跟着改。
         [("""  final name = (current ?? '').trim();
-  if (name.isNotEmpty && !seen.contains(name)) {
-    result.add((family: name, bundled: false, label: '$name (not bundled)'));
+  if (name.isNotEmpty && !seen.contains(name.toLowerCase())) {
+    final installed = systemFonts.has(name);
+    result.add(
+      FontFamilyChoice(
+        family: name,
+        bundled: false,
+        label: installed ? '$name (installed)' : '$name (not bundled)',
+        scripts: '',
+      ),
+    );
   }""",
           """  // injected fault: the unbundled entry is dropped""")],
         'font.selector_lists_unbundled',
@@ -543,24 +563,18 @@ FAULTS = {
         # `_marqueeMode = false` 写成 `(false)`，语义完全不变，但赋值次数从 4
         # 掉到 2。源码扫描类断言能测到的就只有这个 —— 它测不到行为，行为由
         # `headless.dart` 里那批几何断言测。
-        [("""  bool _marqueeMode = false;
-
-  /// Creates a block from a marquee the user dragged on the canvas.
-  ///
-  /// Auto-exits marquee mode: the overwhelmingly common case is "place this
-  /// block, then type", and leaving the mode on would make the next drag on the
-  /// page draw another box instead of doing what the user expects.
-  void _onMarquee(Rect rect) {
+        # P33（顺手修的历史遗留锚点）：P29/P30 在 `_marqueeMode` 与
+        # `_onMarquee` 之间插进了 `_spanMode` / `_groupPickMode` 两个字段和它们
+        # 的注释块，于是这段多行锚点**一个字都匹配不上**。症状正是
+        # `_anchor_report` 警告过的："anchor not unique" 与真打歪无法区分 ⇒
+        # 这条断言从那以后**从来没被反向验证过**，而清单里一直写着它验过。
+        # 改成两段短锚点（各自仍唯一），不再依赖中间那块注释。
+        [("  bool _marqueeMode = false;",
+          "  bool _marqueeMode = (false); // injected fault"),
+         ("""  void _onMarquee(Rect rect) {
     if (!_marqueeMode) return;
     setState(() => _marqueeMode = false);""",
-          """  bool _marqueeMode = (false); // injected fault: never reset on page change
-
-  /// Creates a block from a marquee the user dragged on the canvas.
-  ///
-  /// Auto-exits marquee mode: the overwhelmingly common case is "place this
-  /// block, then type", and leaving the mode on would make the next drag on the
-  /// page draw another box instead of doing what the user expects.
-  void _onMarquee(Rect rect) {
+          """  void _onMarquee(Rect rect) {
     if (!_marqueeMode) return;
     setState(() => _marqueeMode = (false));""")],
         'studio.marquee_reset_on_page_change',
@@ -748,6 +762,155 @@ FAULTS = {
           : 'Delete @c comics?'.tlParams({'c': comics.length}),""")],
         'projectEntry.deletion.dialog_names_what_is_deleted',
     ),
+
+    # ---- P33 · ⑦a 系统字体探测 + 双端参数统一 ------------------------------
+    'font_system_family_ignored': (
+        [f'lib/foundation/{F}'],
+        # 把系统字体分支关掉。`font.system_family_beats_legacy_alias` 会一起
+        # 红（连带）—— 那条断言说的正是"系统字体压过别名"，分支没了自然回到
+        # 别名。这不是缺陷，是这两条断言本来就守同一个开关。
+        [('if (installed != null && systemFonts.hasCjk(name)) {',
+          'if (installed != null && false && systemFonts.hasCjk(name)) {')],
+        'font.system_family_used_when_installed',
+    ),
+    'font_cjk_gate_removed': (
+        [f'lib/foundation/{SF}'],
+        # 拿掉"必须能显示中文"这道门槛 ⇒ 装着 Arial 就敢用 Arial ⇒ 译文变
+        # 豆腐块。这是 A05 §3 那条底线的落点。
+        [("""    for (final f in list) {
+      if (f.covers(FontScript.cjk) ||
+          f.covers(FontScript.kana) ||
+          f.covers(FontScript.hangul)) {
+        return true;
+      }
+    }""",
+          """    // injected fault: any installed face counts, CJK coverage ignored
+    return true;
+    for (final f in list) {
+      if (f.covers(FontScript.cjk) ||
+          f.covers(FontScript.kana) ||
+          f.covers(FontScript.hangul)) {
+        return true;
+      }
+    }""")],
+        'font.non_cjk_system_family_not_used',
+    ),
+    'font_selector_lists_all_installed': (
+        [f'lib/foundation/{F}'],
+        # 面板改成列**全部**系统字体（而不是只要能出中文的）⇒ 上百个西文字体
+        # 把真正可用的十几个中文字体淹没。
+        [('for (final info in systemFonts.choices) {',
+          'for (final info in systemFonts.fonts) {')],
+        'font.selector_lists_installed_cjk_only',
+    ),
+    'font_sfnt_parse_returns_null': (
+        [f'lib/foundation/{SF}'],
+        [("""SystemFontInfo? parseFontBytes(Uint8List bytes, String path) {
+  final r = _Reader(bytes);""",
+          """SystemFontInfo? parseFontBytes(Uint8List bytes, String path) {
+  // injected fault: the parser gives up on every file
+  return null;
+  final r = _Reader(bytes);""")],
+        'font.sfnt_parses_bundled_face',
+    ),
+    'font_coverage_always_full': (
+        [f'lib/foundation/{SF}'],
+        # 覆盖率一律报 1.0 ⇒ "Noto Sans SC 有谚文"这种假结论也能通过。
+        [('out[script] = points.isEmpty ? 0.0 : hit / points.length;',
+          'out[script] = 1.0; // injected fault')],
+        'font.sfnt_coverage_distinguishes_scripts',
+    ),
+    'font_sfnt_accepts_garbage': (
+        [f'lib/foundation/{SF}'],
+        # 🔴 原故障（拿掉魔数判断）打不动这条断言：去掉魔数判断后，下游的
+        # `_readTableDirectory` 用 `has()` 守卫仍然会对垃圾返回 null，所以
+        # "返回 null 且不抛"的属性与魔数判断**无关** —— 那条故障是装饰品。
+        # 改成在 table-directory 守卫处**返回一条假字体记录**：这正是
+        # `font.sfnt_rejects_garbage` 要防的"坏文件污染系统字体表"场景。
+        [("""  final tables = _readTableDirectory(r, dirOffset);
+  if (tables == null) return null;""",
+          """  final tables = _readTableDirectory(r, dirOffset);
+  // injected fault: garbage is no longer rejected — a bogus font record is
+  // returned instead of null, so a single corrupt file in %WINDIR%\\Fonts would
+  // silently poison the system-font list.
+  if (tables == null) {
+    return SystemFontInfo(
+      family: 'GARBAGE',
+      subfamily: 'Regular',
+      weight: 400,
+      italic: false,
+      codepoints: 0,
+      coverage: const {},
+      path: path,
+    );
+  }""")],
+        'font.sfnt_rejects_garbage',
+    ),
+    'font_letter_spacing_forgets_font_size': (
+        [f'lib/foundation/image_translation/{FF}'],
+        # 回到 P33 修掉的那个 bug：FT 的倍率直接当逻辑像素用 ⇒ 0.15px 的字距
+        # 在出图上完全看不出来（画布侧一直是乘了字号的，于是"两端表现不同"）。
+        [('return (multiplier - 1.0) * fontSize;',
+          'return (multiplier - 1.0); // injected fault')],
+        'font.letter_spacing_scales_with_size',
+    ),
+    'font_line_spacing_default_drifts': (
+        [f'lib/foundation/image_translation/{FF}'],
+        # 回到画布侧那个 1.15 —— 同一个"没设过行距"的块在两端行高不同。
+        [('const double defaultLineSpacingValue = 1.2;',
+          'const double defaultLineSpacingValue = 1.15; // injected fault')],
+        'font.line_spacing_default_is_shared',
+    ),
+    'font_weight_table_wrong_step': (
+        [f'lib/foundation/image_translation/{FF}'],
+        [('  <= 350 => 300,', '  <= 350 => 400, // injected fault')],
+        'font.weight_table_is_shared',
+    ),
+
+    # ---- P33 · ⑦b 原图文字取色 --------------------------------------------
+    'color_text_and_bg_swapped': (
+        [f'lib/foundation/image_translation/{TC}'],
+        # 文字色取成背景色（等价于"按亮度判文字"那类实现在一种排版上取反）。
+        # `color.constant_black_fault_is_caught` 与 `color.coloured_text_keeps_hue`
+        # 会连带红 —— 它们判的都是"取到的色是不是真的字色"。
+        [('    textRgb: textRgb,', '    textRgb: bgRgb, // injected fault')],
+        'color.black_text_on_white',
+    ),
+    'color_erosion_skipped': (
+        [f'lib/foundation/image_translation/{TC}'],
+        # 跳过 BT 口径里最关键的一步：抗锯齿边被算进均值，黑字取成深灰。
+        [('if (erodedCount >= _minErodedSamples) {',
+          'if (false) { // injected fault')],
+        'color.erosion_removes_antialiased_edge',
+    ),
+    'color_flat_region_invents_a_colour': (
+        [f'lib/foundation/image_translation/{TC}'],
+        # 只动「平涂区 → null」那一个 return（line 159）：把本应承认"没有字可采"
+        # 的 null 改成返回一个固定灰色。双峰夹具（白底黑字/黑底白字/彩字）都
+        # 不会走这条分支（loN/hiN 都 > 0），所以只破 color.flat_region_returns_null，
+        # 不再连带打挂其它 color 断言 —— 这才是该故障的精确靶面。
+        [("  if (loN == 0 || hiN == 0) return null; // 纯色区域：没有文字可谈",
+          """  if (loN == 0 || hiN == 0) {
+    // injected fault: never admit defeat on a flat region, always grey
+    return const TextColorEstimate(
+      textRgb: [128, 128, 128],
+      backgroundRgb: [128, 128, 128],
+      textSamples: 1,
+      backgroundSamples: 1,
+      eroded: false,
+      contrast: 0,
+    );
+  }""")],
+        'color.flat_region_returns_null',
+    ),
+    'color_auto_flag_keeps_the_key': (
+        [f'lib/foundation/translation_project/{TB}'],
+        # 手动改色时只把值改成 false 而不删键 ⇒ 每个旧块落盘都多一个键，
+        # FT 零字节 diff 破了，而且"自动/手动"两态变成三态。
+        [("      raw.remove('_color_auto');",
+          "      raw['_color_auto'] = false; // injected fault")],
+        'color.auto_flag_round_trip',
+    ),
 }
 
 # File-level faults.
@@ -815,6 +978,23 @@ EXPECTED_CASCADE = {
     # 而那正是 `font.assets_exist_in_pubspec` 的定义。两条断言本来就同源。
     'font_renamed_in_pubspec': {'font.registry_matches_pubspec'},
     'font_family_commented_out': {'font.assets_exist_in_pubspec'},
+    # 把"系统字体永不用"短路掉后，自然也没有"系统字体压过别名表"这回事 ——
+    # 两条断言锁的是同一条 `resolveFamily` 分支，并非测量失手。
+    'font_system_family_ignored': {'font.system_family_beats_legacy_alias'},
+    # 解析直接返回 null 时，后续所有依赖"解析成功"的断言（覆盖率区分文种等）
+    # 都无对象可验，必然一并翻红。
+    'font_sfnt_parse_returns_null': {'font.sfnt_coverage_distinguishes_scripts'},
+    # ---- color.* --------------------------------------------------------
+    #
+    # 🔴 交换文字色/背景色（textRgb ↔ bgRgb）后，凡是"读到的 textRgb 就是真字色"
+    # 的断言都会翻红 —— 因为它们锁的是同一条 `estimateTextColor` 的 textRgb 出口：
+    # 黑底白字（镜像）、恒黑对拍、彩字保相都建立在"textRgb 是字色"之上。这不是
+    # 测量失手，是该故障必然波及的真实后果。
+    'color_text_and_bg_swapped': {
+        'color.white_text_on_black',
+        'color.constant_black_fault_is_caught',
+        'color.coloured_text_keeps_hue',
+    },
 }
 
 

@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 // `Uint8List` 由下面的 `flutter/services.dart` 一并带进来（analyze 会报
 // `unnecessary_import`），所以这里**不**显式 import `dart:typed_data`。
 
@@ -16,40 +17,62 @@ import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/context.dart';
+import 'package:mangrove/foundation/image_translation/inpaint.dart';
 // 🔴 `IntRect` comes from **this** file, not `dart:ui`. The repo declares its
 // own `IntRect` (left/top/right/bottom, no `fromLTWH`) in
 // translation_types.dart so the translation model stays Flutter-free and
 // testable headlessly; importing `dart:ui`'s same-named class instead compiles
 // to a type error that reads like a missing identifier.
 import 'package:mangrove/foundation/image_translation/balloon_clustering.dart';
+import 'package:mangrove/foundation/image_translation/page_renderer.dart';
 import 'package:mangrove/foundation/image_translation/translation_config.dart';
 import 'package:mangrove/foundation/image_translation/translation_dispatcher.dart';
+import 'package:mangrove/foundation/image_translation/translation_models.dart';
+import 'package:mangrove/foundation/image_translation/text_color.dart';
 import 'package:mangrove/foundation/image_translation/translation_pipeline.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import 'package:mangrove/foundation/image_translation/translation_worker.dart';
 import 'package:mangrove/foundation/leave_guard.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/translation_project/artifact_reconciliation.dart';
+import 'package:mangrove/foundation/translation_project/block_artifacts.dart';
+import 'package:mangrove/foundation/translation_project/block_group.dart';
+import 'package:mangrove/foundation/translation_project/cross_page_block.dart';
 import 'package:mangrove/foundation/translation_project/edit_command.dart';
 import 'package:mangrove/foundation/translation_project/finished_export.dart';
 import 'package:mangrove/foundation/translation_project/glossary_backend.dart';
 import 'package:mangrove/foundation/translation_project/glossary_store_app.dart';
+import 'package:mangrove/foundation/translation_project/gray_png.dart';
+import 'package:mangrove/foundation/translation_project/mask_producer.dart';
+import 'package:mangrove/foundation/translation_project/page_size_probe.dart';
 import 'package:mangrove/foundation/translation_project/project.dart';
+import 'package:mangrove/foundation/translation_project/project_io.dart';
 import 'package:mangrove/foundation/translation_project/project_writer.dart';
 import 'package:mangrove/foundation/translation_project/result_renderer.dart';
 import 'package:mangrove/foundation/translation_project/rich_text_sync.dart';
 import 'package:mangrove/foundation/translation_project/run_plan.dart';
+import 'package:mangrove/foundation/translation_project/seam_detect.dart';
+import 'package:mangrove/foundation/translation_project/seam_review.dart';
+import 'package:mangrove/foundation/translation_project/seam_window.dart';
+import 'package:mangrove/foundation/translation_project/span_artifacts.dart';
+import 'package:mangrove/foundation/translation_project/group_translate.dart';
 import 'package:mangrove/foundation/translation_project/studio_block_ops.dart';
 import 'package:mangrove/foundation/translation_project/studio_pipeline.dart';
 import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
+import 'package:mangrove/foundation/translation_project/strip_hidden_pages.dart';
 import 'package:mangrove/foundation/translation_project/text_block.dart';
+import 'package:mangrove/foundation/translation_project/thumb_rail.dart';
 import 'package:mangrove/foundation/widget_utils.dart';
 import 'package:mangrove/pages/comic_details_page/glossary_editor.dart';
+import 'package:mangrove/pages/settings/settings_page.dart';
+import 'package:mangrove/pages/translation_studio/studio_translation_settings_page.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/translations.dart';
 
 import 'run_dialog.dart';
 import 'studio_block_panel.dart';
+import 'studio_group_panel.dart';
 import 'studio_preview.dart';
 import 'studio_project_menu.dart';
 
@@ -127,6 +150,115 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   /// 2. **不自动覆盖原文**。空结果必须报错而不是把已有原文清空 —— 那是本项目
   ///    最忌讳的静默数据损失。
   /// 3. **不落盘任何配置**。语向取当前运行选项（会话内），与 S-N2 的弹窗一致。
+  /// P33 ⑦b【从原图取色】：在当前选中块的框内采样原图文字色，写进 `frgb`
+  /// 并把块标记为"自动"。
+  ///
+  /// 🔴 三种失败都要**说出口**，不能静默返回（静默的失败会让用户以为"点了没
+  /// 反应"或"取色功能坏了"，而真相是原图丢了 / 这块是纯色）。
+  Future<void> _resampleSelectedBlockColor() async {
+    final project = _project;
+    final pageKey = _selectedPageKey;
+    if (project == null || pageKey == null || _selectedBlock < 0) return;
+    final block = _currentBlock;
+    if (block == null) return;
+    final original = File(project.originalPath(pageKey));
+    if (!original.existsSync()) {
+      context.showMessage(message: 'The original page is missing.'.tl);
+      return;
+    }
+    setState(() => _blockOpBusy = true);
+    try {
+      final decoded = await decodePageFile(original);
+      if (decoded == null) {
+        context.showMessage(
+          message: 'Page @a failed: @b'.tlParams({
+            'a': '${_pageIndex + 1}',
+            'b': 'decode failed',
+          }),
+        );
+        return;
+      }
+      final crop = StudioBlockOps.cropWindow(
+        block.xyxy,
+        decoded.originalSize.width.round(),
+        decoded.originalSize.height.round(),
+      );
+      if (crop == null) {
+        context.showMessage(message: 'This block has no usable box.'.tl);
+        return;
+      }
+      final rgb = await _sampleTextColor(
+        decoded,
+        IntRect(crop.left, crop.top, crop.right, crop.bottom),
+      );
+      if (rgb == null) {
+        // 🔴 取不出色要如实说明：最常见的真相是这块里压根没有可辨的笔画
+        // （纯色气泡、框选到了空白处），而不是"算法坏了"。
+        context.showMessage(
+          message: 'Could not sample a colour from this box.'.tl,
+        );
+        return;
+      }
+      _editBlock(
+        pageKey,
+        _selectedBlock,
+        'Sample colour',
+        (b) {
+          b.ensureFontFormat().foregroundColor = rgb;
+          b.colorIsAuto = true;
+        },
+        syncRichText: true,
+      );
+    } finally {
+      if (mounted) setState(() => _blockOpBusy = false);
+    }
+  }
+
+  /// P33 ⑦b：从**原图**上取 [sourceRect]（源像素坐标）内文字的颜色。
+  ///
+  /// 返回 null = 取不出可信的颜色（纯色区域、笔画太细…），调用方应当保持原样。
+  ///
+  /// 🔴 两个坐标陷阱：
+  /// 1. 块的 `xyxy` 是**源像素**坐标，而 [DecodedPage.image] 可能被降采样
+  ///    （`maxDimension=2400`）⇒ 窗口必须按 `image.width / originalSize.width`
+  ///    缩放，否则在大页上取的是完全不同的地方；
+  /// 2. `ui.Image.toByteData` 读的是**整页**（2400×3400×4 ≈ 32 MB），所以只在
+  ///    用户显式触发/重新识别时才调，不放在每帧的路径上。
+  Future<List<int>?> _sampleTextColor(
+    DecodedPage decoded,
+    IntRect sourceRect,
+  ) async {
+    final w = decoded.image.width;
+    final h = decoded.image.height;
+    final natural = decoded.originalSize;
+    if (w <= 0 || h <= 0 || natural.width <= 0 || natural.height <= 0) {
+      return null;
+    }
+    final scale = w / natural.width;
+    int clampX(double v) => (v * scale).round().clamp(0, w - 1);
+    int clampY(double v) => (v * scale).round().clamp(0, h - 1);
+    final window = IntRect(
+      clampX(sourceRect.left.toDouble()),
+      clampY(sourceRect.top.toDouble()),
+      clampX(sourceRect.right.toDouble()),
+      clampY(sourceRect.bottom.toDouble()),
+    );
+    if (window.width < 3 || window.height < 3) return null;
+    try {
+      final data = await decoded.image.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      );
+      if (data == null) return null;
+      final rgba = RgbaImage(w, h, data.buffer.asUint8List());
+      final estimate = estimateTextColor(rgba, window);
+      return estimate?.textRgb;
+    } catch (e) {
+      // 读像素失败不该让识别整体失败：颜色是可选项，文字才是这次的目的。
+      Log.info('Studio Block', 'colour sample failed: $e');
+      return null;
+    }
+  }
+
   Future<void> _recogniseSelectedBlock() async {
     final project = _project;
     final pageKey = _selectedPageKey;
@@ -197,11 +329,26 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                 blocks.first.rect.bottom,
               ],
             );
+      // P33 ⑦b：颜色**只在"上次是自动取的"时**才跟着更新。用户手动调过颜色
+      // 的块（`_color_auto` 键已被删掉）绝不能被一次重新识别悄悄覆盖 —— 那是
+      // "我调好的字色又变回去了"这类最难查的投诉。
+      List<int>? autoColor;
+      if (block.colorIsAuto) {
+        autoColor = await _sampleTextColor(
+          decoded,
+          IntRect(crop.left, crop.top, crop.right, crop.bottom),
+        );
+      }
       _editBlock(
         pageKey,
         _selectedBlock,
         'Recognise',
-        (b) => b.sourceText = text,
+        (b) {
+          b.sourceText = text;
+          if (autoColor != null && b.colorIsAuto) {
+            b.fontFormat?.foregroundColor = autoColor;
+          }
+        },
         // 🔴 识别框与字形色都变了，而 FT 的 rich_text 里存着排版结果 ——
         // 不同步就会出图时用旧的字号画新的文字。
         syncRichText: true,
@@ -291,10 +438,10 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
 
   /// Continuous-strip mode (all pages in one scroll) vs single-page + zoom.
   ///
-  /// Defaults to the strip: reviewing a translation is a *sequence* job, and
-  /// clicking "next" 97 times is what made the old canvas unusable for the
-  /// proofread it exists to support.
-  bool _stripMode = true;
+  /// 🔴 默认**单页 + 缩放**：打开翻译工程时用户要的是"这一页对得不对"的精细对照，
+  /// 长画布把 97 页压成一条、字号被缩到认不出字，正好背道而驰。单页模式一屏一
+  /// 页、可缩放，校对/排版都顺手（P6 用户要求）。需要纵览再切长画布即可。
+  bool _stripMode = false;
 
   /// Marquee ("draw a new box") mode.
   ///
@@ -306,6 +453,52 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   /// so consecutive blocks can be placed without re-arming.
   bool _marqueeMode = false;
 
+  /// B-2 跨页框选模式（仅长画布可用）。
+  ///
+  /// 🔴 与 [_marqueeMode] 一样是**一次性模式**（画完自动关），且两者**互斥**：
+  /// 跨页框选盖住整条条带、吃掉页内手势，"在某一页里拖框移动块"与"跨缝拖框
+  /// 建块"在手势上无法共存，只能靠显式模式二选一。仅在 [_stripMode] 下可用 ——
+  /// 单页模式里根本没有相邻页，跨缝无从谈起。
+  bool _spanMode = false;
+
+  /// B-3 建组点选模式（仅长画布）。
+  ///
+  /// 🔴 与 [_marqueeMode] / [_spanMode] 互斥，但**不**用全屏手势覆盖层：建组
+  /// 要跨多页滚着点，覆盖层会吃掉滚轮。它只让页内块变成"只读 + 点选即加入
+  /// 名单"，见 `studio_scroll_canvas.dart`。
+  bool _groupPickMode = false;
+
+  /// 建组点选名单：`(块真身页, 真身下标)`，可再点取消。完成时排序、补 `_uid`、
+  /// 写 `_groups`。
+  final List<({String page, int index})> _groupDraft = [];
+
+  /// A-2 右栏 Tab：0 块 / 1 组 / 2 运行；折叠态另由 [_panelCollapsed] 控制。
+  int _panelTab = 0;
+  bool _panelCollapsed = false;
+
+  /// 组 Tab 里手动选择的组（下拉），null = 跟随当前选中块所属组。
+  String? _chosenGroupId;
+
+  /// A-1 左侧缩略图栏（默认关）。
+  ///
+  /// 🔴 它是为"人眼逐条检查**页间截断**"服务的**临时视图**，不是翻页手段：
+  /// 常开会让左栏一直占着 240px 宽，而绝大多数编辑动作并不需要它。默认值来自
+  /// [thumbRailDefaultOn]（界面与断言共用同一个常量）。
+  bool _thumbRail = thumbRailDefaultOn;
+
+  /// 页尺寸缓存（页 key → 尺寸），缩略图栏据此隐藏横版页（A-1.4）。
+  ///
+  /// 🔴 key 是页 key 而不是下标 —— 下标会随页序变化。与 B-1 的缝视图共用
+  /// 同一份尺寸（都只要"这页多宽多高"，重复读头没有意义）。读不出尺寸时为
+  /// `null`，调用方据此**保留显示**那一页。
+  final Map<String, PageSize?> _pageSizeCache = {};
+
+  /// P30：在**连续长画布**中被隐藏的页键（持久化在工程 `_strip_hidden`）。
+  ///
+  /// 纯视图层：不删任何块/跨页/组数据，单页模式照常显示。长画布据此不构建
+  /// 这些页（其块/跨页片段自然也不画）。
+  Set<String> _hiddenPages = <String>{};
+
   /// Creates a block from a marquee the user dragged on the canvas.
   ///
   /// Auto-exits marquee mode: the overwhelmingly common case is "place this
@@ -315,6 +508,85 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     if (!_marqueeMode) return;
     setState(() => _marqueeMode = false);
     _createBlockAt(rect);
+  }
+
+  /// B-2：跨缝拖框松手 —— [parts] 已由长画布**按缝切好**（每页一个子矩形）。
+  ///
+  /// 单段 = 框只落在一页内 → 走普通建块（与 [_onMarquee] 同一条路径）。
+  /// 多段 = 跨缝 → 校验（同宽 / 不越页 / 同页不重叠）后，在**顶页**落一个普通块，
+  /// 再给它补写 `_span`（per-page 子矩形 = 真相，D8）与惰性 `_uid`（D9）。
+  void _onSpanMarquee(List<SpanPart> parts) {
+    if (!_spanMode) return;
+    setState(() => _spanMode = false);
+    if (parts.isEmpty) return;
+    if (parts.length == 1) {
+      _createBlockOn(parts.first.page, parts.first.rect);
+      return;
+    }
+    final span = BlockSpan(parts);
+    final reason = validateSpan(span, pageRect: _pageRectOf);
+    if (reason != null) {
+      // 🔴 D12：两页**同宽**是虚拟坐标的前提，异宽只能拒绝并说明理由 ——
+      // 悄悄建一个几何自相矛盾的块，比不建更糟。
+      showToast(
+        context: context,
+        message: reason == spanReasonWidthMismatch
+            ? 'The two pages must have the same width.'.tl
+            : 'The box could not be turned into a cross-page block.'.tl,
+      );
+      return;
+    }
+    // 顶段所在的页（虚拟坐标里最上）承载这个块：块本身落在该页，`_span` 记全部段。
+    final head = parts.first;
+    _createBlockOn(
+      head.page,
+      head.rect,
+      label: 'Create cross-page block',
+      decorate: (block) {
+        writeSpan(block, span);
+        ensureBlockUid(block);
+      },
+    );
+  }
+
+  /// 在 [pageKey] 这一页上落一个块（[rect] 为**页内像素**矩形），并入 undo 栈。
+  ///
+  /// [decorate] 在建块之后、入栈之前调用，供跨页块补写 `_span` / `_uid` 这类
+  /// 可选键 —— 这样"块长什么样"与"块被谁创建"只有一条路径，不会与
+  /// [_createBlockAt] 漂移。
+  void _createBlockOn(
+    String pageKey,
+    IntRect rect, {
+    String label = 'Create block',
+    void Function(TextBlock block)? decorate,
+  }) {
+    final project = _project;
+    if (project == null) return;
+    final page = project.pages[pageKey];
+    if (page == null) return;
+    final block = TextBlock.createDefault(rect: rect);
+    decorate?.call(block);
+    final command = captureBlockListEdit(
+      page.rawBlocks,
+      () => page.addBlock(block),
+      pageKey: pageKey,
+      label: label,
+    );
+    if (command.isEmpty) return;
+    _history.push(command);
+    // 按 identity 选中：`blocks` 会跳过非对象条目，末位下标未必是刚加的那个。
+    final selected = page.blocks.indexWhere((b) => identical(b.raw, block.raw));
+    setState(() {
+      _selectedPageKey = pageKey;
+      _selectedBlock = selected < 0 ? page.blocks.length - 1 : selected;
+      _revision++;
+    });
+  }
+
+  /// 某页的页内矩形（`0,0,w,h`），供 [validateSpan] 判定越界/同宽。
+  IntRect _pageRectOf(String pageKey) {
+    final size = _pageSizeInPixels(pageKey);
+    return IntRect(0, 0, size.width.round(), size.height.round());
   }
 
   /// Drives the strip so the page rail and the "go to page" dialog can scroll
@@ -456,29 +728,46 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   /// 口径：
   /// * `blocks` —— 选中页的块总数；
   /// * `unrecognized` —— 其中**原文为空**的块（识别阶段的输入）；
-  /// * `untranslated` —— 其中**有原文、还没译文**的块（翻译阶段的输入）。
+  /// * `untranslated` —— 其中**有原文、还没译文**的块（翻译阶段的输入）；
+  /// * `translatedPages` —— **至少有一个译文块**的**页数**（第四段「修图」的
+  ///   输入量；口径是页不是块，见 `StudioRunCounts` 的说明）。
   StudioRunCounts _countBlocks(List<String> pages) {
     final project = _project;
-    if (project == null) return (blocks: 0, unrecognized: 0, untranslated: 0);
+    if (project == null) {
+      return (
+        blocks: 0,
+        unrecognized: 0,
+        untranslated: 0,
+        translatedPages: 0,
+      );
+    }
     var blocks = 0;
     var unrecognized = 0;
     var untranslated = 0;
+    var translatedPages = 0;
     for (final key in pages) {
       final page = project.pages[key];
       if (page == null) continue;
+      var pageHasTranslation = false;
       for (final block in page.blocks) {
         blocks++;
         if (block.sourceText.trim().isEmpty) {
           unrecognized++;
         } else if (!block.hasTranslation) {
           untranslated++;
+        } else {
+          // 🔴 用 `pageHasTranslation` 而不是直接数块：一页里 8 个块只画 1 张
+          // `inpainted/`，报 8 会让用户以为要跑 8 次。
+          pageHasTranslation = true;
         }
       }
+      if (pageHasTranslation) translatedPages++;
     }
     return (
       blocks: blocks,
       unrecognized: unrecognized,
       untranslated: untranslated,
+      translatedPages: translatedPages,
     );
   }
 
@@ -609,7 +898,16 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     // 失败时它就是第一页失败页 —— 两种续跑都是幂等的，因为断点之前已落地的
     // 块由去重保护，断点页本身重跑一次正是"失败页重试"想要的行为。
     String? resumeFrom;
-    for (final pageKey in pages) {
+    // 🔴 **只勾修图**时短路整个文本段循环（2026-10-09）。
+    //
+    // 不短路的话，每一页都会被"没有块可识别"记一次跳过，最后报成"整章有 N 页
+    // 失败" —— 而实际上什么都没做错，用户只是选了第四段。那种红字比不显示更糟。
+    // 短路之后这段 run 的语义就是干净的："不改一个字，只出图"。
+    final repairOnly = stages.repair &&
+        !stages.detect &&
+        !stages.recognize &&
+        !stages.translate;
+    for (final pageKey in repairOnly ? const <String>[] : pages) {
       if (cancel.isCanceled) {
         resumeFrom ??= pageKey;
         break;
@@ -687,6 +985,10 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           _pipeline.blocks = blocks;
           _pipeline.skipped = skipped;
           _pipeline.failures = failures;
+          // 🔴 逐页落地也是**模型变更**：下一帧 `_blocksFor` 的 memo 必须放行，
+          // 否则这一页刚检出的块要等到整章跑完才出现在画布上（P28 引入投影 memo
+          // 后必须在这里补上，`_revision` 的契约本就是"每次模型变更都 ++"）。
+          _revision++;
         });
       }
     }
@@ -750,6 +1052,46 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     Log.info('Studio Pipeline', jsonEncode(runSummary));
     // 页集/分辨率可能变了（inpainted/ 被写入），条带缓存必须重算。
     _invalidateStripCache();
+    // 🔴 第四段「修图」：位图层的产出**只**由这一句触发（2026-10-09，2026-10-09 续）。
+    //
+    // 以前出图挂在 `_save()` 末尾，于是**任何一次写盘**都会连带重渲产物 ——
+    // 用户反馈的"莫名其妙再生成一次产物"就是那一句。现在：
+    //   · Ctrl+S ⇒ 只写 JSON（见 [_save]）；
+    //   · 这里 ⇒ 用户在弹窗里勾了「修图」。
+    // 只有**一条**出图入口，日志里 `stages.repair` 与产物对账表能对上。
+    if (stages.repair) {
+      // 🔴 `filter` 用**本页集里已有译文的页**，而不是整个 `pages`：
+      // 一页都没有译文的页画出来是一张去字的白页，比原图更糟（用户会以为
+      // "翻译把字弄没了"）。`planStudioRun` 的 `nothing-to-repair` 码
+      // 已经在勾选阶段挡住"一页译文都没有"，这里再夹一次是为了兜住
+      // "只勾了修图 + 检测也勾了"这种组合（检测会造新块，但它们还没译文）。
+      final repairable = pages
+          .where((k) => project.pages[k]?.hasTranslation ?? false)
+          .toSet();
+      if (repairable.isEmpty) {
+        if (mounted) {
+          setState(() => _pipeline.lastMessage =
+              'No translated box to repair in this range'.tl);
+        }
+        Log.info(
+          'Studio Pipeline',
+          'repair requested but no page has a translated box: '
+          'range=${pages.length}',
+        );
+      } else {
+        final (bases, report) = await _regenerateResults(
+          dirtyPages: repairable,
+          run: runSummary,
+        );
+        runSummary['repair'] = {
+          'pages': repairable.length,
+          'skippedNoTranslation': pages.length - repairable.length,
+          'bases': bases,
+          'written': report,
+        };
+        Log.info('Studio Pipeline', 'repair done: $runSummary');
+      }
+    }
     if (!stopped && failures == 0) {
       // 全成功才自动存：自动管线跑完不存等于用户还要按一次 Ctrl+S，而这一批
       // 块有可能是几十页的量。失败/取消时**不**自动存，让用户先看状态栏。
@@ -1161,6 +1503,10 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       _pageIndex = 0;
       _selectedBlock = -1;
       _selectedPageKey = null;
+      // 换了工程 ⇒ 页尺寸缓存整体作废（key 是页 key，跨工程会串）。
+      _pageSizeCache.clear();
+      // P30：长画布隐藏页随工程读回（_strip_hidden，持久化）。
+      _hiddenPages = readHiddenPages(project.raw);
       // 页集可能整个换掉了：断点指向的 key 未必还在（P9.7）。
       _pipelineResumeFrom = null;
       // 语向 / 三段 / 方向按 P2 选项②**从设置里读回**（`studioRunDefaults`）。
@@ -1211,14 +1557,20 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         b.replaceAll('\\', '/').toLowerCase();
   }
 
-  Future<void> _loadBase(String pageKey) async {
+  /// 重载当前位图（修图 / 复原后让画布看到新产物）。
+  ///
+  /// [resetSelection]：翻页时必须 true（新页没有"已选块"）；单块修图 / 复原
+  /// 后传 false —— 用户刚在这个块上操作完，重画底图不该顺手取消他的选择。
+  Future<void> _loadBase(String pageKey, {bool resetSelection = true}) async {
     final project = _project;
     if (project == null) return;
     final token = ++_baseToken;
     setState(() {
       _loadingBase = true;
-      _selectedBlock = -1;
-      _selectedPageKey = null;
+      if (resetSelection) {
+        _selectedBlock = -1;
+        _selectedPageKey = null;
+      }
     });
     // FT's own reading canvas shows the text-free `inpainted/` page by default
     // and falls back to the original. `mask/` is the last resort: it is what
@@ -1310,15 +1662,145 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     _stripCache = null;
   }
 
+  /// 页 → 该页要画的块列表（含跨页块在**本页**上的投影片段）。
+  ///
+  /// 🔴 **memo，且与撤销栈联动**（P28）。长画布的 [`StudioScrollCanvas`] 在滚动/
+  /// 父级 setState 时会为每个**已构建**的页调用本方法；没有 memo 时每帧都要重新
+  /// 投影一遍块（以及为跨页片段扫全工程），而 `_revision` 正是"模型变了"的唯一
+  /// 信号 —— 编辑、undo/redo、批量运行都 ++ 它。于是索引只在模型真正变化时重建
+  /// 一次，滚动期间整段是零成本。
+  ///
+  /// 🔴 跨页块的**真身只落在顶页**（见 `_onSpanMarquee`，`_span.parts` 是真相）。
+  /// 若本方法只返回"存这一页的块"，下页就**什么都不画** —— 用户看到的现象是
+  /// "文字块只能存在上页 / 在下页像被下页遮住"。所以这里还要把别的页上、`_span`
+  /// 含本页的块，按 per-page 子矩形投影过来。
   List<CanvasTextBlock> _blocksFor(String pageKey) {
-    final page = _project?.pages[pageKey];
-    if (page == null) return const [];
+    final cache = _blockProjectionCache;
+    if (cache == null || cache.revision != _revision) {
+      _blockProjectionCache = _BlockProjectionCache(_revision);
+    }
+    final byPage = _blockProjectionCache!.byPage;
+    final hit = byPage[pageKey];
+    if (hit != null) return hit;
+    final result = _projectBlocks(pageKey);
+    byPage[pageKey] = result;
+    return result;
+  }
+
+  /// [CanvasTextBlock] 列表的投影缓存，整体随 [_revision] 失效。
+  _BlockProjectionCache? _blockProjectionCache;
+
+  /// 跨页片段索引：页 key → 画在该页上、真身在别的页的片段。
+  ///
+  /// 与 [_blockProjectionCache] 同寿命 —— 二者都由 [_revision] 决定何时重建，
+  /// 分开放只是为了让"扫全工程找 `_span`"与"逐页投影"各自只做一次。
+  ({int revision, Map<String, List<_SpanFragment>> byPage})? _spanFragmentCache;
+
+  /// 建立（或复用）跨页片段索引。只扫**有 `_span` 的块**，单页块直接跳过。
+  Map<String, List<_SpanFragment>> _spanFragments() {
+    final cached = _spanFragmentCache;
+    if (cached != null && cached.revision == _revision) return cached.byPage;
+    final byPage = <String, List<_SpanFragment>>{};
+    final project = _project;
+    if (project != null) {
+      for (final ownerKey in project.pageOrder) {
+        final page = project.pages[ownerKey];
+        if (page == null) continue;
+        for (var i = 0; i < page.blocks.length; i++) {
+          final span = readSpan(page.blocks[i]);
+          if (span == null) continue;
+          for (final part in span.parts) {
+            // 真身所在页由它自己的块列表覆盖（用 `xyxy`），这里只投别页。
+            if (part.page == ownerKey) continue;
+            byPage.putIfAbsent(part.page, () => <_SpanFragment>[]).add(
+                  _SpanFragment(ownerKey: ownerKey, ownerIndex: i, rect: part.rect),
+                );
+          }
+        }
+      }
+    }
+    _spanFragmentCache = (revision: _revision, byPage: byPage);
+    return byPage;
+  }
+
+  /// 真的去投影一页：本页自己的块 + `_span` 落在本页的片段。
+  List<CanvasTextBlock> _projectBlocks(String pageKey) {
     final result = <CanvasTextBlock>[];
-    for (var i = 0; i < page.blocks.length; i++) {
-      result.add(_toCanvasBlock(page.blocks[i], i));
+    final page = _project?.pages[pageKey];
+    if (page != null) {
+      for (var i = 0; i < page.blocks.length; i++) {
+        result.add(_toCanvasBlock(page.blocks[i], i, contextPageKey: pageKey));
+      }
+    }
+    for (final fragment in _spanFragments()[pageKey] ?? const <_SpanFragment>[]) {
+      final ownerPage = _project?.pages[fragment.ownerKey];
+      if (ownerPage == null) continue;
+      if (fragment.ownerIndex < 0 ||
+          fragment.ownerIndex >= ownerPage.blocks.length) {
+        continue;
+      }
+      final rect = fragment.rect;
+      result.add(
+        _toCanvasBlock(
+          ownerPage.blocks[fragment.ownerIndex],
+          fragment.ownerIndex,
+          rectOverride: Rect.fromLTRB(
+            rect.left.toDouble(),
+            rect.top.toDouble(),
+            rect.right.toDouble(),
+            rect.bottom.toDouble(),
+          ),
+          ownerPageKey: fragment.ownerKey,
+        ),
+      );
     }
     return result;
   }
+
+  // ── B-3/B-4：组投影（随 [_revision] 失效，与块投影同纪律） ──────────────
+
+  _GroupProjection? _groupProjectionCache;
+
+  /// 读 `_groups` 并建立 `"<page>#<uid>" → 组标记` 反查表。
+  ///
+  /// 🔴 只在模型变化（[_revision]）时重建一次：长画布每帧为每页投影块，逐块
+  /// 反查必须是 O(1) 表查，不能每次扫全组。同一块属于多组时，序号标记取**最后
+  /// 一组**（组装饰仍按各自 groupId 聚合，两套颜色都会画）。
+  _GroupProjection get _groupProjection {
+    final cached = _groupProjectionCache;
+    if (cached != null && cached.revision == _revision) return cached;
+    final projection = _GroupProjection(_revision);
+    final project = _project;
+    if (project != null) {
+      final groups = readGroups(project.raw);
+      projection.groups.addAll(groups);
+      for (final group in groups.values) {
+        for (var i = 0; i < group.members.length; i++) {
+          final member = group.members[i];
+          projection.tags[member.key] = _GroupTag(
+            member.key,
+            group.id,
+            i + 1,
+            group.mode == GroupMode.link,
+          );
+        }
+      }
+    }
+    _groupProjectionCache = projection;
+    return projection;
+  }
+
+  /// 块（真身页/真身下标）的组标记；没有组返回 null。
+  _GroupTag? _tagOf(String? ownerPageKey, TextBlock block) {
+    final page = ownerPageKey ?? _selectedPageKey;
+    final uid = blockUid(block);
+    if (page == null || uid == null) return null;
+    return _groupProjection.tags['$page#$uid'];
+  }
+
+  /// 建组名单里是否已点选某真身（再点 = 取消）。
+  bool _isPicked(String pageKey, int index) =>
+      _groupDraft.any((d) => d.page == pageKey && d.index == index);
 
   void _selectPage(int index) {
     if (index < 0 || index >= _pageKeys.length) return;
@@ -1333,6 +1815,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       // 两条翻页入口（本方法与长画布的 `onPageChanged`）必须一起清，只改
       // 一条会留下"单页模式正常、长画布漏"的假象。
       _marqueeMode = false;
+      _spanMode = false;
     });
     if (_stripMode) {
       // In strip mode the canvas owns scroll position, so the jump buttons and
@@ -1351,20 +1834,32 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
 
   List<CanvasTextBlock> get _canvasBlocks {
     final page = _currentPage;
+    final key = _pageKeys.isEmpty ? null : _pageKeys[_pageIndex];
     if (page == null) return const [];
     final result = <CanvasTextBlock>[];
     for (var i = 0; i < page.blocks.length; i++) {
-      result.add(_toCanvasBlock(page.blocks[i], i));
+      result.add(_toCanvasBlock(page.blocks[i], i, contextPageKey: key));
     }
     return result;
   }
 
-  static CanvasTextBlock _toCanvasBlock(TextBlock block, int index) {
+  CanvasTextBlock _toCanvasBlock(
+    TextBlock block,
+    int index, {
+    Rect? rectOverride,
+    String? ownerPageKey,
+    String? contextPageKey,
+  }) {
     final format = block.fontFormat;
     final box = block.xyxy;
+    // 🔴 组反查用的页键与「投影片段」标记是**两件事**（P30 教训）：
+    // 自有块 ownerPageKey 必须是 null（否则 hitTestMovableCanvasBlocks 会把它
+    // 当片段跳过 ⇒ 整块拖不动），但组/picked 反查仍要知道它属于哪一页。
+    final lookupPage = contextPageKey ?? ownerPageKey ?? _selectedPageKey;
+    final tag = _tagOf(lookupPage, block);
     return CanvasTextBlock(
       index: index,
-      rect: Rect.fromLTRB(box[0], box[1], box[2], box[3]),
+      rect: rectOverride ?? Rect.fromLTRB(box[0], box[1], box[2], box[3]),
       translation: block.translation,
       sourceText: block.sourceText,
       fontFamily: format?.fontFamily ?? FontFormat.defaultFontFamily,
@@ -1399,6 +1894,12 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           : _colorOf(format.gradientEndColor),
       gradientAngle: format?.gradientAngle ?? 0,
       angle: block.angle,
+      ownerPageKey: ownerPageKey,
+      // B-3/B-4：组装饰（nest 大框 / link 连线 / 序号）与建组点选高亮。
+      groupId: tag?.groupId,
+      groupOrdinal: tag?.ordinal ?? -1,
+      groupIsLink: tag?.isLink ?? false,
+      picked: _isPicked(lookupPage ?? '', index),
     );
   }
 
@@ -1440,6 +1941,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     setState(() {
       _selectedPageKey = index < 0 ? null : pageKey;
       _selectedBlock = index;
+      // A-2：点选一个真实块时默认跳块 Tab（面板若折叠则只换 Tab 不展开，
+      // 避免打断正在看图的用户）；空点（-1）不改 Tab。
+      if (index >= 0) _panelTab = 0;
     });
   }
 
@@ -1509,6 +2013,158 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         newRect.bottom,
       ];
     });
+  }
+
+  /// P31：某页当前**可整体缩放**的 nest 组外框（成员并集，页像素）。
+  ///
+  /// 任一条件不满足就返回 null（不画手柄、不可拖）：
+  /// 1. 当前选中块就在 [pageKey]、且块上有 `_uid` 与组标记；
+  /// 2. 组形态为 nest（link 只有连线，没有"外框"语义）；
+  /// 3. 组的**全部**成员都在本页，且都能按 `_uid` 解析到真身块 —— 跨页组
+  ///    不支持整体缩放：两页坐标原点不同，一个缩放因子没有良好定义（用户
+  ///    2026-10-11 选定的整体等比语义先覆盖同页 nest 组）。
+  ///
+  /// 返回的成员下标是**投影列表**下标：本页真身块在投影里总排在跨页片段
+  /// 之前且下标等于 `page.blocks` 下标（见 [_projectBlocks]）。
+  CanvasGroupFrame? _activeGroupFrameFor(String pageKey) {
+    final selPage = _selectedPageKey;
+    final selIndex = _selectedBlock;
+    if (selPage != pageKey || selIndex < 0) return null;
+    final page = _project?.pages[pageKey];
+    if (page == null || selIndex >= page.blocks.length) return null;
+    final uid = blockUid(page.blocks[selIndex]);
+    if (uid == null) return null;
+    final projection = _groupProjection;
+    final tag = projection.tags['$pageKey#$uid'];
+    if (tag == null || tag.isLink) return null;
+    final group = projection.groups[tag.groupId];
+    if (group == null || group.mode != GroupMode.nest) return null;
+
+    final byUid = <String, int>{};
+    for (var i = 0; i < page.blocks.length; i++) {
+      final u = blockUid(page.blocks[i]);
+      if (u != null) byUid[u] = i;
+    }
+    final memberIndices = <int>[];
+    for (final member in group.members) {
+      if (member.page != pageKey) return null; // 跨页组：不出手柄
+      final i = byUid[member.uid];
+      if (i == null) return null; // 孤儿引用：不提供缩放
+      memberIndices.add(i);
+    }
+    IntRect? rectAt(GroupMemberRef ref) {
+      if (ref.page != pageKey) return null;
+      final i = byUid[ref.uid];
+      if (i == null) return null;
+      final x = page.blocks[i].xyxy;
+      return IntRect(
+        x[0].round(),
+        x[1].round(),
+        x[2].round(),
+        x[3].round(),
+      );
+    }
+
+    final bounds = groupBounds(group.members, rectOf: rectAt);
+    if (bounds == null) return null;
+    return CanvasGroupFrame(
+      groupId: group.id,
+      bounds: Rect.fromLTRB(
+        bounds.left.toDouble(),
+        bounds.top.toDouble(),
+        bounds.right.toDouble(),
+        bounds.bottom.toDouble(),
+      ),
+      memberIndices: memberIndices,
+    );
+  }
+
+  /// P31：nest 组外框整体缩放的**提交端**（一次撤销步）。
+  ///
+  /// 画布回报拖拽开始/结束时的并集框（页像素）。落盘前在**当前模型**上重算
+  /// 成员并集（不盲信画布的旧框：防止拖动期间模型已被别的路径改过导致几何
+  /// 基准漂移），再用纯函数 [scaleRectsToBounds] 给每个成员写新 `xyxy`。
+  /// 整块列表一次快照（与删除同路径），所以整组缩放是 **Ctrl+Z 的一步**。
+  void _resizeGroup(
+    String pageKey,
+    String groupId,
+    Rect oldBounds,
+    Rect newBounds,
+  ) {
+    final page = _project?.pages[pageKey];
+    if (page == null) return;
+    final group = _groupProjection.groups[groupId];
+    if (group == null || group.mode != GroupMode.nest) return;
+
+    final blocks = <TextBlock>[];
+    final rects = <IntRect>[];
+    var left = 0, top = 0, right = 0, bottom = 0;
+    var have = false;
+    for (final ref in group.members) {
+      if (ref.page != pageKey) return; // 拖拽期间组成员变了，放弃提交
+      final block = findBlockByUid(page.blocks, ref.uid);
+      if (block == null) return;
+      final x = block.xyxy;
+      final r = IntRect(
+        x[0].round(),
+        x[1].round(),
+        x[2].round(),
+        x[3].round(),
+      );
+      blocks.add(block);
+      rects.add(r);
+      if (!have) {
+        left = r.left;
+        top = r.top;
+        right = r.right;
+        bottom = r.bottom;
+        have = true;
+      } else {
+        if (r.left < left) left = r.left;
+        if (r.top < top) top = r.top;
+        if (r.right > right) right = r.right;
+        if (r.bottom > bottom) bottom = r.bottom;
+      }
+    }
+    if (!have) return;
+    final union = IntRect(left, top, right, bottom);
+    final target = IntRect(
+      newBounds.left.round(),
+      newBounds.top.round(),
+      newBounds.right.round(),
+      newBounds.bottom.round(),
+    );
+    // 亚像素 no-op 与 [_resizeBlock] 同一条门槛：避免给撤销栈塞空步。
+    if ((target.left - union.left).abs() < 1 &&
+        (target.top - union.top).abs() < 1 &&
+        (target.width - union.width).abs() < 1 &&
+        (target.height - union.height).abs() < 1) {
+      return;
+    }
+    final mapped = scaleRectsToBounds(
+      oldBounds: union,
+      newBounds: target,
+      rects: rects,
+    );
+    final command = captureBlockListEdit(
+      page.rawBlocks,
+      () {
+        for (var i = 0; i < blocks.length; i++) {
+          final r = mapped[i];
+          blocks[i].xyxy = [
+            r.left.toDouble(),
+            r.top.toDouble(),
+            r.right.toDouble(),
+            r.bottom.toDouble(),
+          ];
+        }
+      },
+      pageKey: pageKey,
+      label: 'Resize group',
+    );
+    if (command.isEmpty) return;
+    _history.push(command);
+    setState(() => _revision++);
   }
 
   void _deleteSelectedBlock() {
@@ -1644,41 +2300,45 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
 
   void _undo() {
     if (!_history.undo()) return;
-    setState(() => _revision++);
+    // P30：撤销可能回退的是 _strip_hidden 的切换，集合要从 raw 重读。
+    final project = _project;
+    setState(() {
+      if (project != null) _hiddenPages = readHiddenPages(project.raw);
+      _revision++;
+    });
   }
 
   void _redo() {
     if (!_history.redo()) return;
-    setState(() => _revision++);
+    final project = _project;
+    setState(() {
+      if (project != null) _hiddenPages = readHiddenPages(project.raw);
+      _revision++;
+    });
   }
 
-  /// Ctrl+S: the unified save contract (P6 §2.8).
+  /// Ctrl+S: writes the project JSON. **Nothing else** (2026-10-09 用户修订).
   ///
-  /// The JSON is written atomically and synchronously; `mask/` and `inpainted/`
-  /// are this project's inputs and are left as they are; `result/` is
-  /// regenerated in the background because re-lettering 97 pages is expensive
-  /// and must not block the editor.
+  /// 🔴 **保存不再自动出图**。此前这里有一句
+  /// `unawaited(_regenerateResults(dirtyPages: dirtyPages, run: run))`，
+  /// 于是"保存"这个动作会**顺带**重渲一遍 `mask/` `inpainted/` `result/`。
+  /// 用户反馈的原话是"拒绝在运行对整个章节进行自动化之后再莫名其妙的使用
+  /// 一次产物生成" —— 那句话的实质是：**位图层的产出必须由一个明确的、
+  /// 用户看得见的选择来触发**，而不是任何一次写盘顺带捎上。
   ///
-  /// 🔴 The regeneration is **incremental** (P9.1 §2): the set of dirty pages is
-  /// sampled *before* [EditHistory.markSaved], because marking the project
-  /// saved is exactly what makes those pages clean. Sampling afterwards would
-  /// always yield an empty set and silently degrade back to "render nothing",
-  /// leaving `result/` permanently stale — the same silent-divergence class of
-  /// bug this layer keeps hitting. Passing `dirtyPages` as [ProjectWriter
-  /// .writeArtifacts]'s `filter` turns "one page changed" into "one page
-  /// re-lettered" instead of re-rendering the whole chapter.
+  /// 为什么这不只是"少做一件事"：`inpainted/` 一旦写出，原图上的字**已经被
+  /// 算法抹掉**，用户想"框歪了，重画一下"就得重新下载原图。把一个不可逆的
+  /// 操作挂在一个随时会按的快捷键上，是把不可逆性藏了起来。
   ///
-  /// Returns whether the JSON reached disk. [showMessage] fires on both
-  /// outcomes; the `false` case exists for "save then leave" ([_leaveGuard]),
-  /// where leaving on a failed write would drop the edits the user was told
-  /// were safe.
+  /// 出图现在只有一条路：运行弹窗里的**第四段「修图」**（[StudioRunStages.repair]）。
+  /// 用户在跑修图之前，可以先看块、拖块、改完再跑。
+  ///
+  /// 参数 [run] 仍然透传给对账表 —— 它记的是"这一轮跑了什么"，与出不出图无关。
   Future<bool> _save({Map<String, Object?>? run}) async {
     final project = _project;
     if (project == null) return false;
     final messenger = context;
     try {
-      // Snapshot first — `markSaved` below clears the dirty set by design.
-      final dirtyPages = _history.dirtyPages;
       final report = await ProjectWriter.save(
         root: project.workspace,
         project: project,
@@ -1696,7 +2356,6 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         }),
       );
       setState(() {});
-      unawaited(_regenerateResults(dirtyPages: dirtyPages, run: run));
       return true;
     } catch (e, s) {
       Log.error('Translation Studio', 'Save failed', s);
@@ -1704,6 +2363,1417 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       messenger.showMessage(message: 'Save failed: @a'.tlParams({'a': e}));
       return false;
     }
+  }
+
+  /// 把一种产物（`mask` / `inpainted` / `result`）原子写到工程目录，
+  /// 目录不存在时先建。路径规则与 [ProjectWriter] 完全一致
+  /// （`<workspace>/<kind>/<pageStem>.png`）。
+  Future<void> _writeArtifactBytes(
+    String root,
+    ProjectArtifactKind kind,
+    String pageKey,
+    Uint8List bytes,
+  ) async {
+    final dir = Directory(ProjectWriter.artifactDirectory(root, kind));
+    if (!dir.existsSync()) await dir.create(recursive: true);
+    final target = File(
+      _project!.artifactPath(kind.directoryName, pageKey, root: root),
+    );
+    await TranslationProjectIo.writeBytesAtomically(target, bytes);
+  }
+
+  /// 重画这一页的 `result/` 并落盘（在 mask/inpainted 写完**之后**调 ——
+  /// 顺序契约同 [_regenerateResults]）。
+  ///
+  /// [renderProjectResultPage] 返回 null（这页已没有任何可填字的块）时，
+  /// **删掉**旧的 result 而不是保留：保留会让阅读器继续展示一张带着旧字的
+  /// 成品图，把刚刚的复原/抹字完全遮住。
+  Future<void> _rerenderResultPage(
+    TranslationProject project,
+    String root,
+    String pageKey,
+  ) async {
+    final bytes = await renderProjectResultPage(project, pageKey);
+    final target = File(project.artifactPath(
+      ProjectArtifactKind.result.directoryName,
+      pageKey,
+      root: root,
+    ));
+    if (bytes == null) {
+      if (target.existsSync()) {
+        await target.delete();
+        Log.info('Translation Studio', 'result removed (nothing to letter): $target');
+      }
+      return;
+    }
+    await _writeArtifactBytes(
+      root,
+      ProjectArtifactKind.result,
+      pageKey,
+      bytes,
+    );
+  }
+
+  /// 单块修图：只抹掉当前选中块的原字并在该框填译文。
+  ///
+  /// 🔴 这是**整页修图**（[stages.repair]）的收窄版本 —— 同一条 mask →
+  /// inpaint → result 路径，但范围锁定为当前选中的**一个块**。用户可以
+  /// 先在工作室里核对块位置（这是不可逆操作的前提），再只对这一块跑修图。
+  ///
+  /// 像素流程（纯 Dart 核心在 `block_artifacts.dart`，可 headless 断言）：
+  /// 1. 原图全分辨率解码（拒绝降采样 —— 块坐标是源像素，同整页路径的契约）；
+  /// 2. 用原图的**副本**只擦这一块（`buildMaskPage` + `TextInpainter.erase`）；
+  /// 3. 只在**本块字形掩膜像素**上合并进现有 inpainted（其他块的底图不动，
+  ///    也绝不对已抹底图重复 inpaint）；
+  /// 4. 掩膜与现有 `mask/` 取并集；
+  /// 5. 先写 mask + inpainted，再重画整页 result（本块译文出现、他块不丢）。
+  Future<void> _repairSelectedBlock() async {
+    final project = _project;
+    final pageKey = _selectedPageKey;
+    final block = _currentBlock;
+    if (project == null || pageKey == null || block == null) return;
+    if (block.translation.trim().isEmpty) {
+      if (mounted) {
+        context.showMessage(message: 'This block has no translation yet.'.tl);
+      }
+      return;
+    }
+    // B-5：跨页块的抹字/出图**逐页**做（mask/inpainted/result 契约是逐页的）。
+    final span = readSpan(block);
+    if (span != null && span.isCrossPage) {
+      await _repairSpanBlock(project, block, span);
+      return;
+    }
+    final originalFile = File(project.originalPath(pageKey));
+    if (!originalFile.existsSync()) {
+      if (mounted) {
+        context.showMessage(message: 'The original page is missing.'.tl);
+      }
+      return;
+    }
+    setState(() => _blockOpBusy = true);
+    try {
+      final original = await decodeFullResolutionRgba(originalFile);
+      if (original == null) {
+        if (mounted) {
+          context.showMessage(
+            message: 'Block repair needs the full-resolution page.'.tl,
+          );
+        }
+        return;
+      }
+      final rects = block.eraseRects;
+      // 字形级掩膜（255 = 本块要抹的笔画）。
+      final maskPage = buildMaskPage(original, rects);
+      if (maskPage.isEmpty) {
+        if (mounted) {
+          context.showMessage(
+            message: 'No lettering detected inside this block.'.tl,
+          );
+        }
+        return;
+      }
+      // 在原图**副本**上只擦这一块；块外像素与原图逐字节相同。
+      final erased = RgbaImage(
+        original.width,
+        original.height,
+        Uint8List.fromList(original.pixels),
+      );
+      TextInpainter.erase(erased, rects);
+
+      final root = project.workspace;
+      final inpaintedFile = File(project.artifactPath('inpainted', pageKey));
+      final existingInpainted = inpaintedFile.existsSync()
+          ? await decodeFullResolutionRgba(inpaintedFile)
+          : null;
+      final merged = mergeRepairedInpainted(
+        erasedBlock: erased,
+        blockMask: maskPage.pixels,
+        existingInpainted: existingInpainted,
+      );
+      if (merged == null) {
+        if (mounted) {
+          context.showMessage(
+            message: 'Block repair failed: image size mismatch.'.tl,
+          );
+        }
+        return;
+      }
+      // 掩膜并集：保住在先修过的其他块记录。
+      final maskFile = File(project.artifactPath('mask', pageKey));
+      Uint8List? existingMask;
+      if (maskFile.existsSync()) {
+        final decoded = await decodeGreyscaleMask(maskFile);
+        if (decoded != null &&
+            decoded.width == original.width &&
+            decoded.height == original.height) {
+          existingMask = decoded.grey;
+        }
+      }
+      final combinedMask = unionMasks(
+        added: maskPage.pixels,
+        existing: existingMask,
+      );
+
+      // 🔴 两阶段顺序：先底图（mask + inpainted），再 result（result 以
+      // inpainted 为输入位图）。同 ProjectWriter.inLayeredOrder 契约。
+      await _writeArtifactBytes(
+        root,
+        ProjectArtifactKind.mask,
+        pageKey,
+        GrayPng.encode(original.width, original.height, combinedMask),
+      );
+      final originalBytes = await originalFile.readAsBytes();
+      final inpaintedPng = await renderTranslatedPage(
+        originalBytes,
+        RgbaImage(original.width, original.height, merged),
+        const [],
+        mode: InpaintMode.smart,
+      );
+      await _writeArtifactBytes(
+        root,
+        ProjectArtifactKind.inpainted,
+        pageKey,
+        inpaintedPng,
+      );
+      await _rerenderResultPage(project, root, pageKey);
+      await ArtifactReconciliation.write(project);
+
+      Log.info(
+        'Translation Studio',
+        'block repaired: page=$pageKey block=$_selectedBlock '
+        'strokes=${maskPage.strokes} hadExistingInpainted=${existingInpainted != null}',
+      );
+      if (LocalManager().isInitialized) LocalManager().notifyListeners();
+      if (!mounted) return;
+      setState(() {});
+      await _loadBase(pageKey, resetSelection: false);
+      if (mounted) context.showMessage(message: 'Block repaired.'.tl);
+    } catch (e, s) {
+      Log.error('Translation Studio', 'block repair failed', s);
+      if (mounted) {
+        context.showMessage(
+          message: 'Block operation failed: @a'.tlParams({'a': e}),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _blockOpBusy = false);
+    }
+  }
+
+  /// 单块复原原图：把这个块已经被抹掉的像素放回原图。
+  ///
+  /// 🔴 核心算法路径：`buildRestorationMask`（外扩 ≥30% 的掩膜）→ 与现有
+  /// mask **取交**（只盖回"真的被抹过"的像素，防误伤交叠块）→
+  /// `restoreErasedPage(original, inpainted, effectiveMask)`。这是 BT 没有
+  /// 的能力 —— 按字形级掩膜复原只能盖回原来那几笔字，而 inpaint 的实际
+  /// 影响范围比字形大（笔画被抹掉后周围像素被算法改写过），必须外扩。
+  ///
+  /// 同时**清空本块译文**：底图退回原字后若仍在上面画译文，就是两层字叠在
+  /// 一起。清译文走 [_editBlock]（可撤销），但注意撤销只回滚文字、不回滚
+  /// 像素（像素的撤销就是再按一次【修图】）。
+  Future<void> _restoreOriginalSelectedBlock() async {
+    final project = _project;
+    final pageKey = _selectedPageKey;
+    final block = _currentBlock;
+    if (project == null || pageKey == null || block == null) return;
+    // B-5：跨页块复原要逐页盖回原字，再统一清译文。
+    final span = readSpan(block);
+    if (span != null && span.isCrossPage) {
+      await _restoreSpanBlock(project, pageKey, block, span);
+      return;
+    }
+    final originalFile = File(project.originalPath(pageKey));
+    final inpaintedFile = File(project.artifactPath('inpainted', pageKey));
+    final maskFile = File(project.artifactPath('mask', pageKey));
+    if (!originalFile.existsSync()) {
+      if (mounted) {
+        context.showMessage(message: 'The original page is missing.'.tl);
+      }
+      return;
+    }
+    if (!inpaintedFile.existsSync() || !maskFile.existsSync()) {
+      if (mounted) {
+        context.showMessage(
+          message: 'Nothing to restore yet — repair this page first.'.tl,
+        );
+      }
+      return;
+    }
+    setState(() => _blockOpBusy = true);
+    try {
+      final original = await decodeFullResolutionRgba(originalFile);
+      final inpainted = await decodeFullResolutionRgba(inpaintedFile);
+      final decodedMask = await decodeGreyscaleMask(maskFile);
+      if (original == null) {
+        if (mounted) {
+          context.showMessage(
+            message: 'Block restore needs the full-resolution page.'.tl,
+          );
+        }
+        return;
+      }
+      if (inpainted == null ||
+          inpainted.width != original.width ||
+          inpainted.height != original.height) {
+        if (mounted) {
+          context.showMessage(
+            message: 'Block restore failed: image size mismatch.'.tl,
+          );
+        }
+        return;
+      }
+      if (decodedMask == null ||
+          decodedMask.width != original.width ||
+          decodedMask.height != original.height) {
+        if (mounted) {
+          context.showMessage(
+            message: 'Block restore failed: image size mismatch.'.tl,
+          );
+        }
+        return;
+      }
+      final existingMask = decodedMask.grey;
+      // 外扩 30% 检测原字，再与"实际被抹"记录取交。
+      final dilated = buildRestorationMask(original, block.rect);
+      final effective = intersectMasks(dilated, existingMask);
+      if (!maskHasAny(effective)) {
+        if (mounted) {
+          context.showMessage(
+            message: 'No erased pixels found for this block.'.tl,
+          );
+        }
+        return;
+      }
+      final restored = restoreErasedPage(
+        original: original,
+        inpainted: inpainted,
+        mask: effective,
+      );
+      if (restored == null) {
+        if (mounted) {
+          context.showMessage(
+            message: 'No erased pixels found for this block.'.tl,
+          );
+        }
+        return;
+      }
+      final remainingMask = subtractMasks(from: existingMask, removed: effective);
+      final root = project.workspace;
+
+      // 底图先写，result 后画（顺序契约同上）。
+      final originalBytes = await originalFile.readAsBytes();
+      final inpaintedPng = await renderTranslatedPage(
+        originalBytes,
+        RgbaImage(original.width, original.height, restored),
+        const [],
+        mode: InpaintMode.smart,
+      );
+      await _writeArtifactBytes(
+        root,
+        ProjectArtifactKind.inpainted,
+        pageKey,
+        inpaintedPng,
+      );
+      // 全 0 的掩膜不落盘：FT 把"已存在的 mask"当权威，写一张全 0 图会把
+      // "什么都没抹"伪装成"抹过但没笔画"（renderMaskPage 的同一条理由）。
+      if (maskHasAny(remainingMask)) {
+        await _writeArtifactBytes(
+          root,
+          ProjectArtifactKind.mask,
+          pageKey,
+          GrayPng.encode(original.width, original.height, remainingMask),
+        );
+      } else if (maskFile.existsSync()) {
+        await maskFile.delete();
+        Log.info(
+          'Translation Studio',
+          'mask removed (page fully restored): $maskFile',
+        );
+      }
+
+      // 清空译文（可撤销的一步），再重画 result —— 本块不再被填字。
+      final blockIndex = _selectedBlock;
+      _editBlock(
+        pageKey,
+        blockIndex,
+        'Restore original',
+        (b) => b.translation = '',
+        syncRichText: true,
+      );
+      await _rerenderResultPage(project, root, pageKey);
+      await ArtifactReconciliation.write(project);
+
+      Log.info(
+        'Translation Studio',
+        'block restored: page=$pageKey block=$blockIndex',
+      );
+      if (LocalManager().isInitialized) LocalManager().notifyListeners();
+      if (!mounted) return;
+      setState(() {});
+      await _loadBase(pageKey, resetSelection: false);
+      if (mounted) {
+        context.showMessage(message: 'Original restored for this block.'.tl);
+      }
+    } catch (e, s) {
+      Log.error('Translation Studio', 'block restore failed', s);
+      if (mounted) {
+        context.showMessage(
+          message: 'Block operation failed: @a'.tlParams({'a': e}),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _blockOpBusy = false);
+    }
+  }
+
+  // ── B-5：跨页块的多页修图 / 复原 / 解跨页 ──────────────────────────────
+  //
+  // 产物契约（mask → inpainted → result）是**逐页**的，跨页块只是把同一套
+  // 单页像素链路在每一页各跑一遍；摊平计划（哪几页、每页哪些矩形）在
+  // `span_artifacts.dart`（纯逻辑，headless_p14 已反向断言）。
+  // 🔴 与单块路径一样：这些像素操作本环境无渲染表面可验，全部待 GUI 复测。
+
+  /// 跨页块修图：对 `_span` 涉及的**每一页**复刻单块两阶段（mask/inpainted
+  /// 合并），全部页写完后统一重画 result 与对账。
+  Future<void> _repairSpanBlock(
+    TranslationProject project,
+    TextBlock block,
+    BlockSpan span,
+  ) async {
+    setState(() => _blockOpBusy = true);
+    try {
+      final byPage = spanEraseRectsByPage(span);
+      final root = project.workspace;
+      final touched = <String>{};
+      for (final entry in byPage.entries) {
+        final pageKey = entry.key;
+        final originalFile = File(project.originalPath(pageKey));
+        if (!originalFile.existsSync()) {
+          Log.info(
+            'Translation Studio',
+            'span repair skipped (missing original): $pageKey',
+          );
+          continue;
+        }
+        final original = await decodeFullResolutionRgba(originalFile);
+        if (original == null) continue;
+        final maskPage = buildMaskPage(original, entry.value);
+        if (maskPage.isEmpty) continue;
+        final erased = RgbaImage(
+          original.width,
+          original.height,
+          Uint8List.fromList(original.pixels),
+        );
+        TextInpainter.erase(erased, entry.value);
+
+        final inpaintedFile =
+            File(project.artifactPath('inpainted', pageKey));
+        final existingInpainted = inpaintedFile.existsSync()
+            ? await decodeFullResolutionRgba(inpaintedFile)
+            : null;
+        final merged = mergeRepairedInpainted(
+          erasedBlock: erased,
+          blockMask: maskPage.pixels,
+          existingInpainted: existingInpainted,
+        );
+        if (merged == null) {
+          Log.info(
+            'Translation Studio',
+            'span repair size mismatch: $pageKey',
+          );
+          continue;
+        }
+        final maskFile = File(project.artifactPath('mask', pageKey));
+        Uint8List? existingMask;
+        if (maskFile.existsSync()) {
+          final decoded = await decodeGreyscaleMask(maskFile);
+          if (decoded != null &&
+              decoded.width == original.width &&
+              decoded.height == original.height) {
+            existingMask = decoded.grey;
+          }
+        }
+        final combinedMask =
+            unionMasks(added: maskPage.pixels, existing: existingMask);
+        await _writeArtifactBytes(
+          root,
+          ProjectArtifactKind.mask,
+          pageKey,
+          GrayPng.encode(original.width, original.height, combinedMask),
+        );
+        final originalBytes = await originalFile.readAsBytes();
+        final inpaintedPng = await renderTranslatedPage(
+          originalBytes,
+          RgbaImage(original.width, original.height, merged),
+          const [],
+          mode: InpaintMode.smart,
+        );
+        await _writeArtifactBytes(
+          root,
+          ProjectArtifactKind.inpainted,
+          pageKey,
+          inpaintedPng,
+        );
+        touched.add(pageKey);
+      }
+      if (touched.isEmpty) {
+        if (mounted) {
+          context.showMessage(
+            message: 'No lettering detected inside this block.'.tl,
+          );
+        }
+        return;
+      }
+      for (final pageKey in touched) {
+        await _rerenderResultPage(project, root, pageKey);
+      }
+      await ArtifactReconciliation.write(project);
+      Log.info(
+        'Translation Studio',
+        'span block repaired on ${touched.length} page(s): $touched',
+      );
+      if (LocalManager().isInitialized) LocalManager().notifyListeners();
+      final selected = _selectedPageKey;
+      if (!mounted) return;
+      setState(() {});
+      // 长画布的条带自行解码各页；单页模式只重拉当前展示的页。
+      if (!_stripMode && selected != null) {
+        await _loadBase(selected, resetSelection: false);
+      }
+      if (mounted) {
+        context.showMessage(
+          message:
+              'Repaired on @a page(s).'.tlParams({'a': '${touched.length}'}),
+        );
+      }
+    } catch (e, s) {
+      Log.error('Translation Studio', 'span repair failed', s);
+      if (mounted) {
+        context.showMessage(
+          message: 'Block operation failed: @a'.tlParams({'a': e}),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _blockOpBusy = false);
+    }
+  }
+
+  /// 把一组 [SpanPart]（可只给尾页段 = 解跨页；给全部段 = 跨页复原）在各自
+  /// 页上盖回原字。逐段与该页现有 mask 取交、从剩余 mask 里扣掉，**只写真的
+  /// 被抹过的像素**（与单块复原同一条核心路径）。返回真正改动的页。
+  Future<Set<String>> _restoreSpanParts(
+    TranslationProject project,
+    List<SpanPart> parts,
+  ) async {
+    final touched = <String>{};
+    final root = project.workspace;
+    final byPage = spanEraseRectsByPage(BlockSpan(parts));
+    for (final entry in byPage.entries) {
+      final pageKey = entry.key;
+      final originalFile = File(project.originalPath(pageKey));
+      final inpaintedFile = File(project.artifactPath('inpainted', pageKey));
+      final maskFile = File(project.artifactPath('mask', pageKey));
+      if (!originalFile.existsSync() ||
+          !inpaintedFile.existsSync() ||
+          !maskFile.existsSync()) {
+        continue;
+      }
+      final original = await decodeFullResolutionRgba(originalFile);
+      final inpainted = await decodeFullResolutionRgba(inpaintedFile);
+      final decodedMask = await decodeGreyscaleMask(maskFile);
+      if (original == null ||
+          inpainted == null ||
+          decodedMask == null ||
+          inpainted.width != original.width ||
+          inpainted.height != original.height ||
+          decodedMask.width != original.width ||
+          decodedMask.height != original.height) {
+        continue;
+      }
+      var remaining = decodedMask.grey;
+      // restoreErasedPage 返回原始 RGBA 字节（与单块复原同路径），不是
+      // RgbaImage 包装；写 artifact 时再包回去。
+      var restored = inpainted.pixels;
+      var changed = false;
+      for (final rect in entry.value) {
+        final dilated = buildRestorationMask(original, rect);
+        final effective = intersectMasks(dilated, remaining);
+        if (!maskHasAny(effective)) continue;
+        final next = restoreErasedPage(
+          original: original,
+          inpainted: RgbaImage(original.width, original.height, restored),
+          mask: effective,
+        );
+        if (next == null) continue;
+        restored = next;
+        remaining = subtractMasks(from: remaining, removed: effective);
+        changed = true;
+      }
+      if (!changed) continue;
+      final originalBytes = await originalFile.readAsBytes();
+      final inpaintedPng = await renderTranslatedPage(
+        originalBytes,
+        RgbaImage(original.width, original.height, restored),
+        const [],
+        mode: InpaintMode.smart,
+      );
+      await _writeArtifactBytes(
+        root,
+        ProjectArtifactKind.inpainted,
+        pageKey,
+        inpaintedPng,
+      );
+      if (maskHasAny(remaining)) {
+        await _writeArtifactBytes(
+          root,
+          ProjectArtifactKind.mask,
+          pageKey,
+          GrayPng.encode(original.width, original.height, remaining),
+        );
+      } else if (maskFile.existsSync()) {
+        await maskFile.delete();
+        Log.info(
+          'Translation Studio',
+          'mask removed (span page fully restored): $maskFile',
+        );
+      }
+      touched.add(pageKey);
+    }
+    return touched;
+  }
+
+  /// 跨页块复原：逐页盖回原字 + 清空本块译文（可撤销；像素不可逆同单块约定）。
+  Future<void> _restoreSpanBlock(
+    TranslationProject project,
+    String headPageKey,
+    TextBlock block,
+    BlockSpan span,
+  ) async {
+    setState(() => _blockOpBusy = true);
+    try {
+      final touched = await _restoreSpanParts(project, [...span.parts]);
+      if (touched.isEmpty) {
+        if (mounted) {
+          context.showMessage(
+            message: 'No erased pixels found for this block.'.tl,
+          );
+        }
+        return;
+      }
+      _editBlock(
+        headPageKey,
+        _selectedBlock,
+        'Restore original',
+        (b) => b.translation = '',
+        syncRichText: true,
+      );
+      final root = project.workspace;
+      for (final pageKey in touched) {
+        await _rerenderResultPage(project, root, pageKey);
+      }
+      await ArtifactReconciliation.write(project);
+      Log.info(
+        'Translation Studio',
+        'span block restored on ${touched.length} page(s): $touched',
+      );
+      if (LocalManager().isInitialized) LocalManager().notifyListeners();
+      if (!mounted) return;
+      setState(() {});
+      if (!_stripMode) await _loadBase(headPageKey, resetSelection: false);
+      if (mounted) {
+        context.showMessage(
+          message: 'Original restored on @a page(s).'.tlParams(
+            {'a': '${touched.length}'},
+          ),
+        );
+      }
+    } catch (e, s) {
+      Log.error('Translation Studio', 'span restore failed', s);
+      if (mounted) {
+        context.showMessage(
+          message: 'Block operation failed: @a'.tlParams({'a': e}),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _blockOpBusy = false);
+    }
+  }
+
+  /// 解跨页：尾页像素复原 + 真身块缩回顶段子矩形 + 清 `_span`。
+  ///
+  /// 顶页的抹痕/译文原样保留（块在那一页上继续成立）；尾页上本块不复存在，
+  /// 抹痕必须盖回，否则留下无主空白。
+  Future<void> _dissolveSelectedSpanBlock() async {
+    final project = _project;
+    final pageKey = _selectedPageKey;
+    final block = _currentBlock;
+    if (project == null || pageKey == null || block == null) return;
+    final span = readSpan(block);
+    if (span == null || !span.isCrossPage) return;
+    final plan = dissolveSpanPlan(span);
+    if (plan == null) return;
+    setState(() => _blockOpBusy = true);
+    try {
+      // 只复原顶段之外的尾页段（parts 去重保序，同页多段会一起盖）。
+      final tailParts = <SpanPart>[
+        for (var i = 1; i < span.parts.length; i++) span.parts[i],
+      ];
+      final touched = await _restoreSpanParts(project, tailParts);
+      final head = plan.headRect;
+      _editBlock(
+        pageKey,
+        _selectedBlock,
+        'Split back to one page',
+        (b) {
+          b.xyxy = [
+            head.left.toDouble(),
+            head.top.toDouble(),
+            head.right.toDouble(),
+            head.bottom.toDouble(),
+          ];
+          clearSpan(b);
+        },
+        // 块框几何变了，rich_text 的排版结果必须按新框重算。
+        syncRichText: true,
+      );
+      if (touched.isNotEmpty) {
+        final root = project.workspace;
+        for (final touchedPage in touched) {
+          await _rerenderResultPage(project, root, touchedPage);
+        }
+        await ArtifactReconciliation.write(project);
+      }
+      Log.info(
+        'Translation Studio',
+        'span dissolved: head=$pageKey tail restored=$touched',
+      );
+      if (LocalManager().isInitialized) LocalManager().notifyListeners();
+      if (!mounted) return;
+      setState(() {});
+      if (!_stripMode) await _loadBase(pageKey, resetSelection: false);
+      if (mounted) {
+        context.showMessage(
+          message: touched.isEmpty
+              ? 'Split back to one page.'.tl
+              : 'Split back; @a page(s) restored.'.tlParams(
+                  {'a': '${touched.length}'},
+                ),
+        );
+      }
+    } catch (e, s) {
+      Log.error('Translation Studio', 'span dissolve failed', s);
+      if (mounted) {
+        context.showMessage(
+          message: 'Block operation failed: @a'.tlParams({'a': e}),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _blockOpBusy = false);
+    }
+  }
+
+  // ── B-3/B-4：文字块小组 ──────────────────────────────────────────────────
+  //
+  // 数据流纪律（与块编辑同一条）：
+  // * 块级改动（惰性 `_uid`、逐块译文、rich_text）= captureBlockEdit；
+  // * 工程级改动（`_groups`）= captureSeamReviewEdit（通用工程 Map 快照）；
+  // * 一次语义动作碰两边 = CompoundEditCommand 合成**一个撤销步**；
+  // * 任何写回后 `_revision++`，组投影随它重建。
+
+  /// 进/出建组点选模式（与框选/跨页框选互斥；名单随退出清空）。
+  ///
+  /// P32：不再限长画布 —— 单页（含缩放）模式同样可点选建组；跨页点选时用
+  /// 页轨/翻页按钮换页，名单保留（见 [_selectPage] / 模式切换处）。
+  void _toggleGroupPick() {
+    setState(() {
+      _groupPickMode = !_groupPickMode;
+      if (_groupPickMode) {
+        _marqueeMode = false;
+        _spanMode = false;
+        _groupDraft.clear();
+      }
+    });
+  }
+
+  void _cancelGroupPick() {
+    if (!_groupPickMode) return;
+    setState(() {
+      _groupPickMode = false;
+      _groupDraft.clear();
+    });
+  }
+
+  /// 点选回调（真身页/真身下标；投影片段已由画布回指真身）。再点同一块 = 取消。
+  void _onPickBlock(String pageKey, int index) {
+    if (_blockAt(pageKey, index) == null) return;
+    setState(() {
+      final existing = _groupDraft
+          .indexWhere((d) => d.page == pageKey && d.index == index);
+      if (existing >= 0) {
+        _groupDraft.removeAt(existing);
+      } else {
+        _groupDraft.add((page: pageKey, index: index));
+      }
+    });
+  }
+
+  /// 完成建组：补惰性 `_uid` → 按阅读序排成员 → 写 `_groups`，一个撤销步。
+  void _confirmCreateGroup() {
+    final project = _project;
+    if (project == null) return;
+    final picked = <({String page, int index, TextBlock block})>[];
+    for (final d in _groupDraft) {
+      final block = _blockAt(d.page, d.index);
+      if (block != null) {
+        picked.add((page: d.page, index: d.index, block: block));
+      }
+    }
+    if (picked.length < 2) {
+      context.showMessage(message: 'Pick at least two blocks.'.tl);
+      return;
+    }
+    final commands = <ProjectEditCommand>[];
+    final refs = <GroupMemberRef>[];
+    for (final p in picked) {
+      // 惰性 `_uid`：已有不重铸，保持零字节 diff 的前提。
+      if (blockUid(p.block) == null) {
+        final command = captureBlockEdit(
+          p.block.raw,
+          () => ensureBlockUid(p.block),
+          pageKey: p.page,
+          label: 'Assign block id',
+        );
+        if (!command.isEmpty) commands.add(command);
+      }
+      refs.add(GroupMemberRef(p.page, blockUid(p.block)!));
+    }
+    final ordered = sortMembersReadingOrder(
+      refs,
+      pageIndex: (page) => _pageKeys.indexOf(page),
+      rectOf: (ref) {
+        final blocks = project.pages[ref.page]?.blocks ?? const <TextBlock>[];
+        return findBlockByUid(blocks, ref.uid)?.rect;
+      },
+    );
+    // 恰好跨相邻两页时记缝（顺序按阅读序，防止点选顺序污染）。
+    String? seam;
+    final pages = <String>{for (final ref in ordered) ref.page}.toList()
+      ..sort((a, b) => _pageKeys.indexOf(a).compareTo(_pageKeys.indexOf(b)));
+    if (pages.length == 2 &&
+        _pageKeys.indexOf(pages[1]) - _pageKeys.indexOf(pages[0]) == 1) {
+      seam = '${pages[0]}|${pages[1]}';
+    }
+    // P32：按页跨度自动建议形态 —— 同页/相邻两页 nest（大框套小框，含跨缝
+    // 断句气泡），跨 ≥3 页或两页不相邻 link（连线）。组面板仍可手切。
+    final mode = suggestGroupMode(
+      members: ordered,
+      pageIndexOf: (page) => _pageKeys.indexOf(page),
+    );
+    final group = BlockGroup(
+      id: mintGroupId(),
+      members: ordered,
+      seam: seam,
+      mode: mode,
+    );
+    final meta = captureSeamReviewEdit(
+      project.raw,
+      key: groupKey,
+      pageKey: ordered.first.page,
+      mutate: () {
+        final live = readGroups(project.raw);
+        live[group.id] = group;
+        writeGroups(project.raw, live);
+      },
+      label: 'Create group',
+    );
+    commands.add(meta);
+    final compound = CompoundEditCommand(commands, label: 'Create group');
+    if (compound.isEmpty) return;
+    _history.push(compound);
+    final firstRef = ordered.first;
+    final firstIndex = project.pages[firstRef.page]?.blocks
+            .indexWhere((b) => blockUid(b) == firstRef.uid) ??
+        -1;
+    setState(() {
+      _revision++;
+      _groupPickMode = false;
+      _groupDraft.clear();
+      _chosenGroupId = group.id;
+      _panelTab = 1;
+      _panelCollapsed = false;
+      _selectedPageKey = firstRef.page;
+      _selectedBlock = firstIndex;
+    });
+  }
+
+  /// 通用：改 `_groups` 并入一次撤销栈。
+  void _commitGroups(
+    String? pageKeyHint,
+    String label,
+    void Function(Map<String, BlockGroup> groups) mutate,
+  ) {
+    final project = _project;
+    if (project == null) return;
+    final command = captureSeamReviewEdit(
+      project.raw,
+      key: groupKey,
+      pageKey: pageKeyHint ??
+          _selectedPageKey ??
+          (_pageKeys.isNotEmpty ? _pageKeys.first : ''),
+      mutate: () {
+        final live = readGroups(project.raw);
+        mutate(live);
+        writeGroups(project.raw, live);
+      },
+      label: label,
+    );
+    if (command.isEmpty) return;
+    _history.push(command);
+    setState(() => _revision++);
+  }
+
+  void _setGroupMode(String groupId, GroupMode mode) {
+    _commitGroups(null, 'Change group style', (groups) {
+      groups[groupId]?.mode = mode;
+    });
+  }
+
+  void _setGroupSource(String groupId, String text) {
+    _commitGroups(null, 'Edit group source', (groups) {
+      groups[groupId]?.source = text.trim().isEmpty ? null : text;
+    });
+  }
+
+  void _setGroupTranslation(String groupId, String text) {
+    _commitGroups(null, 'Edit group translation', (groups) {
+      groups[groupId]?.translation = text.trim().isEmpty ? null : text;
+    });
+  }
+
+  /// 【组合】按成员顺序拼原文写回 group.source（成员块本身一字不改）。
+  void _combineGroupSource(String groupId) {
+    final project = _project;
+    if (project == null) return;
+    final group = _groupProjection.groups[groupId];
+    if (group == null) return;
+    final sources = <String>[
+      for (final ref in group.members)
+        findBlockByUid(project.pages[ref.page]?.blocks ?? const <TextBlock>[],
+                ref.uid)
+            ?.sourceText ??
+            '',
+    ];
+    final combined = concatMemberSources(sources);
+    if (combined.trim().isEmpty) {
+      context.showMessage(
+        message: 'Group members have no source text.'.tl,
+      );
+      return;
+    }
+    _commitGroups(null, 'Combine group source', (groups) {
+      groups[groupId]?.source = combined;
+    });
+  }
+
+  /// 【翻译一次】：整组只发一次翻译请求，结果存 group.translation。
+  Future<void> _translateGroupOnce(String groupId) async {
+    final project = _project;
+    if (project == null) return;
+    final group = _groupProjection.groups[groupId];
+    if (group == null) return;
+    if ((group.source ?? '').trim().isEmpty) {
+      context.showMessage(message: 'Combine the source text first.'.tl);
+      return;
+    }
+    setState(() => _blockOpBusy = true);
+    try {
+      final lang = _currentSourceLang();
+      final attempt = await translateGroupOnce(
+        source: group.source,
+        translate: (texts) => TranslationDispatcher.translateBatch(
+          texts,
+          _currentTargetLang(),
+          sourceLang: lang,
+          sourceLangs: [lang],
+          glossary: _glossary,
+        ).then((response) => response.texts),
+      );
+      if (attempt.calls == 0 || (attempt.text ?? '').trim().isEmpty) {
+        if (mounted) {
+          context.showMessage(message: 'Translate returned nothing new.'.tl);
+        }
+        return;
+      }
+      _commitGroups(null, 'Translate group once', (groups) {
+        groups[groupId]?.translation = attempt.text!.trim();
+      });
+    } catch (e, s) {
+      Log.error('Translation Studio', 'group translate failed', s);
+      if (mounted) context.showMessage(message: 'Translate failed.'.tl);
+    } finally {
+      if (mounted) setState(() => _blockOpBusy = false);
+    }
+  }
+
+  void _reorderGroupMember(String groupId, int from, int to) {
+    _commitGroups(null, 'Reorder group members', (groups) {
+      final g = groups[groupId];
+      if (g == null) return;
+      if (from < 0 || from >= g.members.length) return;
+      final member = g.members.removeAt(from);
+      g.members.insert(to.clamp(0, g.members.length), member);
+    });
+  }
+
+  /// 移除成员；成员删光的组整组删除；被移除且不再被任何组引用的 `_uid` 回收。
+  void _removeGroupMember(String groupId, int memberIndex) {
+    final project = _project;
+    if (project == null) return;
+    final group = readGroups(project.raw)[groupId];
+    if (group == null ||
+        memberIndex < 0 ||
+        memberIndex >= group.members.length) {
+      return;
+    }
+    final removed = [group.members[memberIndex]];
+    final commands = <ProjectEditCommand>[
+      captureSeamReviewEdit(
+        project.raw,
+        key: groupKey,
+        pageKey: group.members.first.page,
+        mutate: () {
+          final live = readGroups(project.raw);
+          final g = live[groupId];
+          if (g == null) return;
+          g.members.removeAt(memberIndex);
+          // 空成员的组无法再 fromRaw 读出（坏记录），直接删组。
+          if (g.members.isEmpty) live.remove(groupId);
+          writeGroups(project.raw, live);
+        },
+        label: 'Remove group member',
+      ),
+      ..._uidRecycleCommands(project, removed),
+    ];
+    final compound = CompoundEditCommand(commands, label: 'Remove group member');
+    if (compound.isEmpty) return;
+    _history.push(compound);
+    setState(() => _revision++);
+  }
+
+  /// 【应用分配】：逐块译文（+rich_text）与组 assignment 记录，一个撤销步。
+  ///
+  /// 🔴 倒装合法：[values] 可给任意成员任意片段，只要每个成员键都在。
+  void _applyGroupAssignment(String groupId, Map<String, String> values) {
+    final project = _project;
+    if (project == null) return;
+    final group = readGroups(project.raw)[groupId];
+    if (group == null) return;
+    // 先记录"译文会被改动"的块 —— applyGroupAssignment 只设置 translation，
+    // 出图需要的 rich_text 由我们在同一撤销步里补同步。
+    final changed = <TextBlock>[];
+    for (final member in group.members) {
+      final text = values[member.key];
+      if (text == null) continue;
+      final block = findBlockByUid(
+        project.pages[member.page]?.blocks ?? const <TextBlock>[],
+        member.uid,
+      );
+      if (block != null && block.translation != text) changed.add(block);
+    }
+    final commands = <ProjectEditCommand>[
+      ...applyGroupAssignment(
+        group: group,
+        assignment: values,
+        blockOf: (ref) => findBlockByUid(
+          project.pages[ref.page]?.blocks ?? const <TextBlock>[],
+          ref.uid,
+        ),
+        label: 'Apply group assignment',
+      ),
+      for (final block in changed)
+        captureBlockEdit(
+          block.raw,
+          () => syncFtRichText(block),
+          pageKey: group.members
+              .firstWhere(
+                (m) =>
+                    project.pages[m.page]?.blocks.contains(block) ?? false,
+                orElse: () => group.members.first,
+              )
+              .page,
+          label: 'Sync group lettering',
+        ),
+      captureSeamReviewEdit(
+        project.raw,
+        key: groupKey,
+        pageKey: group.members.first.page,
+        mutate: () {
+          final live = readGroups(project.raw);
+          final assignment = live[groupId]?.assignment;
+          if (assignment != null) {
+            assignment
+              ..clear()
+              ..addAll(values);
+          }
+          writeGroups(project.raw, live);
+        },
+        label: 'Save group assignment',
+      ),
+    ];
+    final compound = CompoundEditCommand(commands, label: 'Apply group assignment');
+    if (compound.isEmpty) return;
+    _history.push(compound);
+    setState(() => _revision++);
+  }
+
+  /// 解组：删组定义 + 回收只被它引用的 `_uid`。块本身一个不动。
+  void _dissolveGroup(String groupId) {
+    final project = _project;
+    if (project == null) return;
+    final group = readGroups(project.raw)[groupId];
+    if (group == null) return;
+    final removed = [...group.members];
+    final commands = <ProjectEditCommand>[
+      captureSeamReviewEdit(
+        project.raw,
+        key: groupKey,
+        pageKey: group.members.first.page,
+        mutate: () {
+          final live = readGroups(project.raw);
+          live.remove(groupId);
+          writeGroups(project.raw, live);
+        },
+        label: 'Ungroup',
+      ),
+      ..._uidRecycleCommands(project, removed),
+    ];
+    final compound = CompoundEditCommand(commands, label: 'Ungroup');
+    if (compound.isEmpty) return;
+    _history.push(compound);
+    setState(() {
+      _revision++;
+      if (_chosenGroupId == groupId) _chosenGroupId = null;
+    });
+  }
+
+  /// 对"刚从引用表移除"的成员回收 `_uid`：仍被其他组引用的跳过（纯函数
+  /// [referencedMembersByPage] 保证不跨组误删）。
+  ///
+  /// 🔴 必须在工程 Map 快照命令**捕获之后**调用 —— 那时 live raw 已是删除后
+  /// 状态，"仍引用"集合才准确。
+  List<ProjectEditCommand> _uidRecycleCommands(
+    TranslationProject project,
+    List<GroupMemberRef> removed,
+  ) {
+    final stillReferenced =
+        referencedMembersByPage(readGroups(project.raw).values);
+    final commands = <ProjectEditCommand>[];
+    for (final ref in removed) {
+      if (stillReferenced[ref.page]?.contains(ref.uid) ?? false) continue;
+      final block = findBlockByUid(
+        project.pages[ref.page]?.blocks ?? const <TextBlock>[],
+        ref.uid,
+      );
+      if (block == null) continue;
+      final command = captureBlockEdit(
+        block.raw,
+        () => clearBlockUid(block),
+        pageKey: ref.page,
+        label: 'Ungroup',
+      );
+      if (!command.isEmpty) commands.add(command);
+    }
+    return commands;
+  }
+
+  /// 在画布上定位某个组成员（跨页则滚到它所在页），并切到块 Tab 编辑它。
+  void _selectGroupMember(GroupMemberRef ref) {
+    final pageIndex = _pageKeys.indexOf(ref.page);
+    final index = _project?.pages[ref.page]?.blocks
+        .indexWhere((b) => blockUid(b) == ref.uid);
+    if (index == null || index < 0) return;
+    setState(() {
+      _selectedPageKey = ref.page;
+      _selectedBlock = index;
+      _panelTab = 0;
+      _panelCollapsed = false;
+      if (!_stripMode && pageIndex >= 0) _pageIndex = pageIndex;
+    });
+    if (_stripMode && pageIndex >= 0) {
+      _stripKey.currentState?.scrollToPage(pageIndex);
+    } else if (!_stripMode && pageIndex >= 0) {
+      _loadBase(ref.page);
+    }
+  }
+
+  /// 组 Tab 当前要看的组：手动选择优先，否则跟随选中块所属组。
+  BlockGroup? get _activeGroup {
+    final groups = _groupProjection.groups;
+    final chosen = _chosenGroupId;
+    if (chosen != null && groups[chosen] != null) return groups[chosen];
+    final block = _currentBlock;
+    final pageKey = _selectedPageKey;
+    final uid = block == null ? null : blockUid(block);
+    if (pageKey != null && uid != null) {
+      final key = '$pageKey#$uid';
+      for (final group in groups.values) {
+        if (group.members.any((m) => m.key == key)) return group;
+      }
+    }
+    return null;
+  }
+
+  // ── B-2b：识别跨页块（缝窗口拼接 → 现有检测 → 候选确认 → 落块） ─────────
+  //
+  // 🔴 整条链**只在 GUI 会话可用**：`decodeFullResolutionRgba` 走 dart:ui，
+  // 本工作室的 headless 环境没有渲染表面。过滤/映射/切分/校验全在
+  // `seam_detect.dart`（纯逻辑，headless_p14 已反向断言），这里只做接线、
+  // ONNX 检测与人工确认对话框。
+
+  /// 对"视口中心最近的那道缝"跑跨页检测；候选经人工勾选后才落块。
+  Future<void> _detectAcrossSeam() async {
+    final project = _project;
+    if (project == null || !_stripMode) return;
+    final seam = _stripKey.currentState?.nearestSeamToViewport();
+    if (seam == null || seam.below >= _pageKeys.length) {
+      context.showMessage(
+        message: 'No adjacent pages near the viewport center.'.tl,
+      );
+      return;
+    }
+    final keyA = _pageKeys[seam.above];
+    final keyB = _pageKeys[seam.below];
+    final fileA = File(project.originalPath(keyA));
+    final fileB = File(project.originalPath(keyB));
+    if (!fileA.existsSync() || !fileB.existsSync()) {
+      context.showMessage(message: 'The original page is missing.'.tl);
+      return;
+    }
+    setState(() => _blockOpBusy = true);
+    try {
+      final above = await decodeFullResolutionRgba(fileA);
+      final below = await decodeFullResolutionRgba(fileB);
+      if (above == null || below == null) {
+        if (mounted) {
+          context.showMessage(
+            message: 'Block repair needs the full-resolution page.'.tl,
+          );
+        }
+        return;
+      }
+      final window = buildSeamWindow(
+        pageAHeight: above.height,
+        pageBHeight: below.height,
+      );
+      if (window == null) {
+        if (mounted) {
+          context.showMessage(
+            message:
+                'The seam window is too tall; scroll to a shorter page pair.'.tl,
+          );
+        }
+        return;
+      }
+      final stitched =
+          stitchSeamWindow(above: above, below: below, window: window);
+      if (stitched == null) {
+        // stitchSeamWindow 唯一的拒绝原因就是两页异宽（D12）。
+        if (mounted) {
+          context.showMessage(
+            message: 'The two pages must have the same width.'.tl,
+          );
+        }
+        return;
+      }
+      final ocr = await TranslationWorker.instance.ocrPage(
+        stitched,
+        sourceLang: _currentSourceLang(),
+        paths: TranslationModels.workerPaths(),
+      );
+      final plans = planSeamCandidates(
+        windowRects: [for (final b in ocr) b.rect],
+        pageAHeight: above.height,
+        window: window,
+        bands: [
+          PageBand(keyA, above.width, above.height),
+          PageBand(keyB, below.width, below.height),
+        ],
+        pageRect: _pageRectOf,
+      );
+      if (!mounted) return;
+      if (plans.isEmpty) {
+        context.showMessage(
+          message: 'No cross-page text found near this seam.'.tl,
+        );
+        return;
+      }
+      // IntRect 没有值相等，按字段把候选对齐回 OCR 文本（同位序 + 同框）。
+      String textFor(SeamCandidatePlan plan) {
+        for (final b in ocr) {
+          final r = b.rect;
+          final w = plan.windowRect;
+          if (r.left == w.left &&
+              r.top == w.top &&
+              r.right == w.right &&
+              r.bottom == w.bottom) {
+            return b.text;
+          }
+        }
+        return '';
+      }
+
+      final items = [
+        for (final plan in plans) (plan: plan, text: textFor(plan)),
+      ];
+      final pickedIndexes = await _showSeamCandidatesDialog(
+        items,
+        pageA: seam.above + 1,
+        pageB: seam.below + 1,
+      );
+      if (pickedIndexes == null || pickedIndexes.isEmpty || !mounted) return;
+      _commitSeamCandidates(
+        [for (final i in pickedIndexes) items[i]],
+      );
+    } catch (e, s) {
+      Log.error('Translation Studio', 'seam detection failed', s);
+      if (mounted) {
+        context.showMessage(
+          message: 'Block operation failed: @a'.tlParams({'a': e}),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _blockOpBusy = false);
+    }
+  }
+
+  /// 候选确认对话框。返回勾选的下标集合；取消返回 null。
+  Future<Set<int>?> _showSeamCandidatesDialog(
+    List<({SeamCandidatePlan plan, String text})> items, {
+    required int pageA,
+    required int pageB,
+  }) {
+    final selected = <int>{for (var i = 0; i < items.length; i++) i};
+    return showDialog<Set<int>>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('Candidates crossing the seam'.tl),
+              content: SizedBox(
+                width: 460,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Page @a / @b'.tlParams({'a': '$pageA', 'b': '$pageB'}),
+                      style: ts.s12.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Flexible(
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: items.length,
+                        itemBuilder: (context, i) {
+                          final item = items[i];
+                          final parts = item.plan.span.parts;
+                          return CheckboxListTile(
+                            dense: true,
+                            value: selected.contains(i),
+                            onChanged: (on) => setDialogState(() {
+                              if (on ?? false) {
+                                selected.add(i);
+                              } else {
+                                selected.remove(i);
+                              }
+                            }),
+                            title: Text(
+                              item.text.trim().isEmpty
+                                  ? '(no text recognised)'.tl
+                                  : item.text,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              '@a segment(s)'.tlParams(
+                                {'a': '${parts.length}'},
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: Text('Cancel'.tl),
+                ),
+                FilledButton(
+                  onPressed: selected.isEmpty
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(selected),
+                  child: Text('Create selected blocks'.tl),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// 把确认过的跨页候选落块（每个候选 = 顶页一个带 `_span`/`_uid` 的块）。
+  /// 同顶页的块合并进**一个**列表编辑命令；多顶页再用 [CompoundEditCommand]
+  /// 合成一个撤销步。
+  void _commitSeamCandidates(
+    List<({SeamCandidatePlan plan, String text})> items,
+  ) {
+    final project = _project;
+    if (project == null || items.isEmpty) return;
+    final byPage = <String, List<({SeamCandidatePlan plan, String text})>>{};
+    for (final item in items) {
+      final headPage = item.plan.span.parts.first.page;
+      byPage.putIfAbsent(headPage, () => []).add(item);
+    }
+    final commands = <ProjectEditCommand>[];
+    for (final entry in byPage.entries) {
+      final page = project.pages[entry.key];
+      if (page == null) continue;
+      final command = captureBlockListEdit(
+        page.rawBlocks,
+        () {
+          for (final item in entry.value) {
+            final head = item.plan.span.parts.first;
+            final block = TextBlock.createDefault(rect: head.rect);
+            writeSpan(block, item.plan.span);
+            ensureBlockUid(block);
+            final text = item.text.trim();
+            if (text.isNotEmpty) block.sourceText = text;
+            page.addBlock(block);
+          }
+        },
+        pageKey: entry.key,
+        label: 'Create cross-page block',
+      );
+      if (!command.isEmpty) commands.add(command);
+    }
+    if (commands.isEmpty) return;
+    final compound =
+        CompoundEditCommand(commands, label: 'Create cross-page block');
+    _history.push(compound);
+    setState(() => _revision++);
+    context.showMessage(
+      message: '@a cross-page block(s) created'.tlParams(
+        {'a': '${items.length}'},
+      ),
+    );
   }
 
   /// The [LeaveGuardRegistry] callback: "may this screen go away?"
@@ -1778,16 +3848,21 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   ///
   /// [run] is the last pipeline summary, recorded into the reconciliation table
   /// so a run that produced nothing is still auditable (P10.15 §3.1-C).
-  Future<void> _regenerateResults({
+  ///
+  /// 返回 `(底图/掩膜数, 成品数)` —— 调用方要把它报进日志与对账表，否则"跑了
+  /// 一次修图"这件事在事后无法区分"画了 0 张"与"根本没跑"。
+  Future<(int, int)> _regenerateResults({
     Set<String>? dirtyPages,
     Map<String, Object?>? run,
   }) async {
     final project = _project;
-    if (project == null) return;
+    if (project == null) return (0, 0);
     setState(() => _renderingResults = true);
     // 用 `File?` 而不是 `ArtifactReconciliation?`：`write` 返回的是**落盘后的
     // 文件**（要打日志用它的 path），类型只挂在 `write` 的签名上。
     File? reconciliation;
+    var baseCount = 0;
+    var resultCount = 0;
     try {
       bool Function(String)? filter =
           dirtyPages == null ? null : (key) => dirtyPages.contains(key);
@@ -1835,10 +3910,12 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       // 没有它，"78 页有 inpainted 没有 mask"这件事只能在文件管理器里一页
       // 一页数出来，而且数出来也分不清"本来就没字"和"真的丢了"。有了它，
       // 缺口是可断言的（`reason` 字段），补没补回也一目了然。
+      baseCount = bases.written.length;
+      resultCount = report.written.length;
       reconciliation = await ArtifactReconciliation.write(project, run: run);
       Log.info(
         'Translation Studio',
-        'artifacts regenerated: bases=$bases result=$report '
+        'artifacts regenerated: bases=$baseCount result=$resultCount '
         '(dirty=${dirtyPages?.length ?? 'all'}) '
         'reconciliation=${reconciliation.path}',
       );
@@ -1847,58 +3924,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     } finally {
       if (mounted) setState(() => _renderingResults = false);
     }
-  }
-
-  /// 「重新生成全部产物」：把**每一页**的 `mask/` `inpainted/` `result/` 重算一遍。
-  ///
-  /// 🔴 为什么需要一个**全量**入口：保存走的是**脏页增量**
-  /// （`_save -> _regenerateResults(dirtyPages)`），而 `writeArtifacts` 只处理
-  /// 计划里的页 —— 于是**一页只要不再被编辑，它缺的产物就永远不会被补回来**。
-  /// S9.5-a 的 78 页 `inpainted 有 / mask 无` 正是这个状态：那批产物产出时
-  /// mask 接线还没写，而后续每次保存都只碰"刚改过的那一页"。
-  ///
-  /// 语义上 `dirtyPages: null` 就是"全部"（该参数早就有这个含义），所以这里
-  /// 没有新机制，只是把那个语义接到一个按钮上。
-  Future<void> _regenerateAllArtifacts() async {
-    final project = _project;
-    if (project == null || _renderingResults) return;
-    final go = await _confirmRegenerateAll();
-    if (!go || !mounted) return;
-    await _regenerateResults(dirtyPages: null);
-    if (!mounted) return;
-    final reconciliation = ArtifactReconciliation.read(project);
-    final summary = reconciliation?['summary'];
-    final detail = summary is Map
-        ? summary.entries.map((e) => '${e.key}=${e.value}').join(', ')
-        : 'no report';
-    context.showMessage(
-      message: 'Regenerated all artifacts. @a'.tlParams({'a': detail}),
-    );
-  }
-
-  /// 全量重生成的确认框。整章重算 + 重新渲染是分钟级的，不能一点就跑。
-  Future<bool> _confirmRegenerateAll() async {
-    final answer = await showDialog<bool>(
-      context: context,
-      builder: (_) => ContentDialog(
-        title: 'Regenerate all artifacts'.tl,
-        content: Text(
-          'Recompute mask, inpainted and result for every page of this project. Use it to fill in pages whose artifacts are missing; a large project can take a while.'.tl,
-        ).paddingHorizontal(16).paddingVertical(8),
-        actions: [
-          TextButton(
-            onPressed: () => context.pop(false),
-            child: Text('Cancel'.tl),
-          ),
-          FilledButton.icon(
-            onPressed: () => context.pop(true),
-            icon: const Icon(Icons.refresh, size: 18),
-            label: Text('Regenerate'.tl),
-          ),
-        ],
-      ),
-    );
-    return answer ?? false;
+    return (baseCount, resultCount);
   }
 
   /// 打开本工程的术语表编辑器（A08 §1.1 · C）。
@@ -2110,7 +4136,96 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                     ),
                     onPressed: project == null
                         ? null
-                        : () => setState(() => _marqueeMode = !active),
+                        : () => setState(() {
+                              _marqueeMode = !active;
+                              // 与跨页框选互斥（两者都靠拖拽，含义不同）。
+                              if (_marqueeMode) _spanMode = false;
+                            }),
+                  ),
+                );
+              },
+            ),
+            // B-2：跨页框选。仅在长画布模式下可用 —— 单页模式里没有相邻页。
+            Builder(
+              builder: (context) {
+                final active = _spanMode;
+                final available = project != null && _stripMode;
+                return Tooltip(
+                  message: active
+                      ? 'Cancel cross-page box'.tl
+                      : 'Cross-page box select'.tl,
+                  child: IconButton(
+                    isSelected: active,
+                    style: active
+                        ? IconButton.styleFrom(
+                            backgroundColor:
+                                context.colorScheme.tertiaryContainer,
+                            foregroundColor:
+                                context.colorScheme.onTertiaryContainer,
+                          )
+                        : null,
+                    icon: Icon(
+                      active
+                          ? Icons.select_all
+                          : Icons.select_all_outlined,
+                      color: active
+                          ? context.colorScheme.onTertiaryContainer
+                          : null,
+                    ),
+                    onPressed: available
+                        ? () => setState(() {
+                              _spanMode = !active;
+                              if (_spanMode) _marqueeMode = false;
+                            })
+                        : null,
+                  ),
+                );
+              },
+            ),
+            // B-2b：识别跨页块 —— 对当前视口中心的缝跑检测，候选确认后落块。
+            // 仅长画布可用（单页没有相邻页）；不是模式按钮，点一下跑一次。
+            IconButton(
+              tooltip: 'Detect cross-page block'.tl,
+              icon: const Icon(Icons.document_scanner_outlined),
+              onPressed: project == null ||
+                      !_stripMode ||
+                      _blockOpBusy
+                  ? null
+                  : () => unawaited(_detectAcrossSeam()),
+            ),
+            // B-3：建组点选。与框选/跨页框选互斥，但不挡滚动（见
+            // [_groupPickMode] 与 StudioScrollCanvas.groupPickMode）。
+            // P32：单页（含缩放）模式同样可用 —— 同页大框套小框、翻页跨页
+            // 点选都走这条通道。
+            Builder(
+              builder: (context) {
+                final active = _groupPickMode;
+                final available = project != null;
+                return Tooltip(
+                  message: active
+                      ? 'Cancel grouping'.tl
+                      : 'Pick blocks to group'.tl,
+                  child: IconButton(
+                    isSelected: active,
+                    style: active
+                        ? IconButton.styleFrom(
+                            backgroundColor:
+                                context.colorScheme.secondaryContainer,
+                            foregroundColor:
+                                context.colorScheme.onSecondaryContainer,
+                          )
+                        : null,
+                    icon: Icon(
+                      active
+                          ? Icons.account_tree
+                          : Icons.account_tree_outlined,
+                      color: active
+                          ? context.colorScheme.onSecondaryContainer
+                          : null,
+                    ),
+                    onPressed: available && !_blockOpBusy
+                        ? _toggleGroupPick
+                        : null,
                   ),
                 );
               },
@@ -2167,7 +4282,53 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                   ),
                   onPressed: project == null
                       ? null
-                      : () => setState(() => _stripMode = !strip),
+                      : () => setState(() {
+                            _stripMode = !strip;
+                            // D14：切进长画布就自动关掉缩略图栏 —— 避免留下
+                            // 一个"开着却看不见"（且按钮已置灰）的状态。
+                            if (_stripMode) {
+                              _thumbRail = false;
+                              // P30：长画布的逐页估高要用文件头真值（横版首页
+                              // 不能带偏整本竖版页的高度）。
+                              unawaited(_ensurePageSizes());
+                            } else {
+                              // 离开长画布：跨页框选是长画布专属，复位。
+                              // 🔴 P32：建组点选**保留** —— 单页模式同样支持
+                              // 点选；跨页建组要能在单页间翻页累计名单。
+                              _spanMode = false;
+                            }
+                          }),
+                );
+              },
+            ),
+            // A-1：缩略图栏开关，与「连续条漫 / 单页」相邻 —— 两者都是"怎么看
+            // 这一章"的**视图模式**。不可用时**置灰**（不隐藏），与日漫的处理
+            // 方式统一；四种不可用各一句独立 tooltip（A-1.2）。
+            Builder(
+              builder: (context) {
+                final gate = _thumbRailGate;
+                final available = thumbRailAvailable(gate);
+                final active = _thumbRailActive;
+                return Tooltip(
+                  message: _thumbRailTooltip(gate, active),
+                  child: IconButton(
+                    isSelected: active,
+                    style: active
+                        ? IconButton.styleFrom(
+                            backgroundColor:
+                                context.colorScheme.secondaryContainer,
+                            foregroundColor:
+                                context.colorScheme.onSecondaryContainer,
+                          )
+                        : null,
+                    icon: Icon(
+                      active ? Icons.view_list : Icons.view_list_outlined,
+                      color: active
+                          ? context.colorScheme.onSecondaryContainer
+                          : null,
+                    ),
+                    onPressed: available ? _toggleThumbRail : null,
+                  ),
                 );
               },
             ),
@@ -2175,27 +4336,6 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
               tooltip: 'Publish finished product'.tl,
               icon: const Icon(Icons.outbox_outlined),
               onPressed: project == null ? null : _publish,
-            ),
-            // 🔴 P10.15 序1: 全量产物重生成。保存走的是**脏页增量**，所以
-            // 「一页不再被编辑 ⇒ 它缺的 mask/inpainted/result 永远补不回来」。
-            // 这个按钮就是那条缺口的唯一出口（S9.5-a 的 78 页掩膜来源于此）。
-            Builder(
-              builder: (context) {
-                final busy = _renderingResults;
-                return IconButton(
-                  tooltip: 'Regenerate all artifacts'.tl,
-                  icon: busy
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.refresh),
-                  onPressed: project == null || busy
-                      ? null
-                      : () => unawaited(_regenerateAllArtifacts()),
-                );
-              },
             ),
             IconButton(
               tooltip: 'Continuous preview'.tl,
@@ -2216,6 +4356,20 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
               tooltip: 'Glossary'.tl,
               icon: const Icon(Icons.menu_book_outlined),
               onPressed: project == null ? null : _openGlossary,
+            ),
+            // 🔴 P1a：AI 翻译设置整块从阅读设置搬进工作室后，这里给一个入口
+            // （与详情页「翻译这一章」、阅读器侧栏同源，都改 `ReaderSettings`）。
+            // 用 `Icons.translate`，和阅读设置里的 AI 翻译块图标一致。
+            IconButton(
+              tooltip: 'Translation settings'.tl,
+              icon: const Icon(Icons.translate),
+              onPressed: project == null
+                  ? null
+                  : () => context.to(
+                        () => StudioTranslationSettingsPage(
+                          comicId: widget.comicId,
+                        ),
+                      ),
             ),
             // 右上角最外侧：「翻译工程」可展开菜单。与列表页那一份是**同一个**
             // 组件（`StudioProjectMenu`）—— 两处各写一遍，加第二个动作时
@@ -2255,7 +4409,11 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                     }
                     return Row(
                       children: [
-                        SizedBox(width: 156, child: _buildPageRail()),
+                        // A-1.3：缩略图模式加宽到 240（D6），紧凑模式保持 156。
+                        SizedBox(
+                          width: _thumbRailActive ? _kThumbRailWidth : 156,
+                          child: _buildPageRail(),
+                        ),
                         const VerticalDivider(width: 1),
                         Expanded(child: canvas),
                         const VerticalDivider(width: 1),
@@ -2297,62 +4455,145 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     return Column(
       children: [
         Expanded(
-          child: _stripMode
-              // 连续长画布：整章一路滚下去，页内可点选/拖拽文本框。
-              // 翻到哪一页由 strip 回报，页轨/页码随之同步。
-              ? StudioScrollCanvas(
-                  key: _stripKey,
-                  controller: _stripController,
-                  pages: _stripPages(),
-                  blocksFor: _blocksFor,
-                  editable: true,
-                  onSelect: _selectBlock,
-                  onMoveBlock: _moveBlock,
-                  onResizeBlock: _resizeBlock,
-                  onMarquee: (pageKey, rect) => _onMarquee(rect),
-                  marqueeMode: _marqueeMode,
-                  onEditText: (pageKey, index) =>
-                      _selectBlock(pageKey, index),
-                  onPageChanged: (index) {
-                    if (index == _pageIndex) return;
-                    setState(() {
-                      _pageIndex = index;
-                      // 🔴 P9.7: 与 [_selectPage] 同一条规则 —— 滚动翻页也是
-                      // 翻页。这里以前只改页码，于是长画布模式下"上一页开的
-                      // 框选模式"会跟着滚到下一页继续生效。
-                      _marqueeMode = false;
-                    });
-                  },
-                )
-              : InteractiveViewer(
-                  minScale: 0.2,
-                  maxScale: 8,
-                  child: Center(
-                    child: EditableTextBlockCanvas(
-                      blocks: _canvasBlocks,
+          // 🔴 P27：这里只在**常驻 Stack** 上条件增删一个覆盖条子，绝不条件重挂
+          // 下方的条带 ListView（同帧双 ScrollPosition 的崩溃就是那么来的）。
+          child: Stack(
+            children: [
+              _stripMode
+                  // 连续长画布：整章一路滚下去，页内可点选/拖拽文本框。
+                  // 翻到哪一页由 strip 回报，页轨/页码随之同步。
+                  ? StudioScrollCanvas(
+                      key: _stripKey,
+                      controller: _stripController,
+                      pages: _stripPages(),
+                      blocksFor: _blocksFor,
+                      editable: true,
+                      // P31：把选择态按真身页喂给条带（此前条带恒为 -1，
+                      // 长画布里手柄根本不画）。
+                      selectedPageKey: _selectedPageKey,
                       selectedIndex: _selectedBlock,
-                      onSelect: (index) => _selectBlock(key ?? '', index),
-                      onMoveBlock: (index, oldTopLeft, newTopLeft) {
-                        if (key != null) {
-                          _moveBlock(key, index, oldTopLeft, newTopLeft);
-                        }
-                      },
-                      onResizeBlock: (index, oldRect, newRect) {
-                        if (key != null) {
-                          _resizeBlock(key, index, oldRect, newRect);
-                        }
-                      },
-                      onMarquee: (rect) => _onMarquee(rect),
+                      groupFrameFor: _activeGroupFrameFor,
+                      onSelect: _selectBlock,
+                      onMoveBlock: _moveBlock,
+                      onResizeBlock: _resizeBlock,
+                      onResizeGroup: _resizeGroup,
+                      onMarquee: (pageKey, rect) => _onMarquee(rect),
                       marqueeMode: _marqueeMode,
-                      onEditText: (index) => _selectBlock(key ?? '', index),
-                      base: _base,
-                      loading: _loadingBase,
+                      spanMode: _spanMode,
+                      onSpanMarquee: _onSpanMarquee,
+                      groupPickMode: _groupPickMode,
+                      onPickBlock: _onPickBlock,
+                      hiddenPages: _hiddenPages,
+                      probedSizeOf: (pageKey) {
+                        final size = _pageSizeCache[pageKey];
+                        if (size == null) return null;
+                        return (width: size.width, height: size.height);
+                      },
+                      onEditText: (pageKey, index) =>
+                          _selectBlock(pageKey, index),
+                      onPageChanged: (index) {
+                        if (index == _pageIndex) return;
+                        setState(() {
+                          _pageIndex = index;
+                          // 🔴 P9.7: 与 [_selectPage] 同一条规则 —— 滚动翻页也是
+                          // 翻页。这里以前只改页码，于是长画布模式下"上一页开的
+                          // 框选模式"会跟着滚到下一页继续生效。
+                          _marqueeMode = false;
+                          _spanMode = false;
+                        });
+                      },
+                    )
+                  : InteractiveViewer(
+                      minScale: 0.2,
+                      maxScale: 8,
+                      child: Center(
+                        child: EditableTextBlockCanvas(
+                          blocks: _canvasBlocks,
+                          selectedIndex: _selectedBlock,
+                          onSelect: (index) => _selectBlock(key ?? '', index),
+                          onMoveBlock: (index, oldTopLeft, newTopLeft) {
+                            if (key != null) {
+                              _moveBlock(key, index, oldTopLeft, newTopLeft);
+                            }
+                          },
+                          onResizeBlock: (index, oldRect, newRect) {
+                            if (key != null) {
+                              _resizeBlock(key, index, oldRect, newRect);
+                            }
+                          },
+                          // P31：nest 组外框整体缩放（单页画布）。
+                          groupFrame: key == null ? null : _activeGroupFrameFor(key),
+                          onResizeGroup: (groupId, oldBounds, newBounds) {
+                            if (key != null) {
+                              _resizeGroup(key, groupId, oldBounds, newBounds);
+                            }
+                          },
+                          onMarquee: (rect) => _onMarquee(rect),
+                          marqueeMode: _marqueeMode,
+                          onEditText: (index) => _selectBlock(key ?? '', index),
+                          // P32：单页（含缩放）模式下的建组点选。命中块即
+                          // 入名单（再点取消），画布内部已禁用拖/缩/双击等
+                          // 普通编辑手势；跨页用页轨/翻页按钮换页，名单保留。
+                          groupPickMode: _groupPickMode,
+                          onPickBlock: (index) {
+                            if (key != null) _onPickBlock(key, index);
+                          },
+                          base: _base,
+                          loading: _loadingBase,
+                        ),
+                      ),
                     ),
-                  ),
-                ),
+              if (_groupPickMode) _buildGroupPickBar(),
+            ],
+          ),
         ),
         _buildStatusBar(key),
       ],
+    );
+  }
+
+  /// B-3：建组点选时的浮动提示/完成条。不吃条带手势（只盖顶部一小条），
+  /// 滚动与页内点选都照常。
+  Widget _buildGroupPickBar() {
+    final scheme = Theme.of(context).colorScheme;
+    final count = _groupDraft.length;
+    return Positioned(
+      top: 8,
+      left: 8,
+      right: 8,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Material(
+          elevation: 3,
+          borderRadius: BorderRadius.circular(20),
+          color: scheme.secondaryContainer,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.touch_app_outlined,
+                    size: 18, color: scheme.onSecondaryContainer),
+                const SizedBox(width: 8),
+                Text(
+                  'Finish group (@a picked)'.tlParams({'a': '$count'}),
+                  style: ts.s12.copyWith(color: scheme.onSecondaryContainer),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.tonalIcon(
+                  onPressed: count < 2 ? null : _confirmCreateGroup,
+                  icon: const Icon(Icons.check, size: 18),
+                  label: Text('Finish group'.tl),
+                ),
+                TextButton(
+                  onPressed: _cancelGroupPick,
+                  child: Text('Cancel'.tl),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -2409,6 +4650,40 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                 ),
               ),
             ),
+            // P30：页码右边的小方框 —— 该页在**连续长画布**里显示(✓)/隐藏(✗)。
+            // 两种视图模式都显示、都可点：单页模式下横版宣传图照常看，靠这个
+            // ✗ 表达"它在长画布里被隐藏了"。
+            if (key != null)
+              Tooltip(
+                message: (_hiddenPages.contains(key)
+                        ? 'Show in continuous strip'
+                        : 'Hide in continuous strip')
+                    .tl,
+                child: InkWell(
+                  onTap: () => _toggleStripHidden(key),
+                  child: Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: _hiddenPages.contains(key)
+                            ? scheme.error
+                            : scheme.onSurfaceVariant,
+                      ),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Icon(
+                      _hiddenPages.contains(key)
+                          ? Icons.close
+                          : Icons.check,
+                      size: 14,
+                      color: _hiddenPages.contains(key)
+                          ? scheme.error
+                          : scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
             IconButton(
               tooltip: 'Next page'.tl,
               onPressed: current < total ? () => _selectPage(_pageIndex + 1) : null,
@@ -2507,11 +4782,279 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     _selectPage(result - 1);
   }
 
+  /// A-1.2 门控：缩略图栏当前能不能用（原因码见 [ThumbRailGate]）。
+  ThumbRailGate get _thumbRailGate => thumbRailGate(
+        hasProject: _project != null,
+        stripMode: _stripMode,
+        pageCount: _pageKeys.length,
+      );
+
+  /// 缩略图栏"生效中"：开着**且**当前可用。
+  ///
+  /// 🔴 两个条件都要。`_thumbRail` 是用户的开关，门控是"现在这个模式/方向/页数
+  /// 下它还有没有意义"。少了门控，切到长画布后左栏会停在一个已失效的宽版上
+  /// （D14 已要求联动关闭，这里再兜一层，保证任何路径下都不会留下"宽版但失效"）。
+  bool get _thumbRailActive => _thumbRail && thumbRailAvailable(_thumbRailGate);
+
+  /// 缩略图栏按钮的 tooltip：可用时说明"点它会做什么"，不可用时说明"为什么
+  /// 不能开"（四种原因四句话，不共用一句）。
+  String _thumbRailTooltip(ThumbRailGate gate, bool active) {
+    switch (gate) {
+      case ThumbRailGate.noProject:
+        return 'No project is open'.tl;
+      case ThumbRailGate.stripMode:
+        return 'Not needed in continuous strip mode'.tl;
+      case ThumbRailGate.tooFewPages:
+        return 'Needs at least two pages to check page seams'.tl;
+      case ThumbRailGate.ready:
+        return active ? 'Hide thumbnail rail'.tl : 'Show thumbnail rail'.tl;
+    }
+  }
+
+  /// 惰性读取所有页的尺寸（**只读文件头**，见 `page_size_probe.dart`）。
+  Future<void> _ensurePageSizes() async {
+    final project = _project;
+    if (project == null) return;
+    var changed = false;
+    for (final key in _pageKeys) {
+      if (_pageSizeCache.containsKey(key)) continue;
+      final path = _resolvePageFile(key)?.path ?? project.originalPath(key);
+      _pageSizeCache[key] = probePageSizeFromFile(path);
+      changed = true;
+    }
+    if (changed && mounted) setState(() {});
+  }
+
+  void _toggleThumbRail() {
+    final next = !_thumbRail;
+    setState(() => _thumbRail = next);
+    // 打开时才需要尺寸（要据此隐藏横版页）；关闭不动缓存 —— 再打开不必重读。
+    if (next) unawaited(_ensurePageSizes());
+  }
+
+  /// P30：切换某页在**连续长画布**中的隐藏状态（持久化 + 一个撤销步）。
+  ///
+  /// 纯视图层：不删块/跨页/组数据。隐藏的是**当前**页且正处在长画布时，
+  /// 把视图带到下一张可见页（后可见优先，否则前可见）；单页模式下只改状态，
+  /// 页面照常显示（左下角勾选框表达"它在长画布里是隐藏的"）。
+  void _toggleStripHidden(String? pageKey) {
+    final project = _project;
+    if (project == null || pageKey == null) return;
+    final next = toggleHiddenPage(_hiddenPages, pageKey);
+    final becameHidden = next.contains(pageKey);
+    final command = captureSeamReviewEdit(
+      project.raw,
+      key: stripHiddenKey,
+      pageKey: pageKey,
+      label: 'Hide page in continuous strip',
+      mutate: () => writeHiddenPages(project.raw, next),
+    );
+    if (command.isEmpty) return;
+    _history.push(command);
+    setState(() {
+      _hiddenPages = next;
+      // 块投影不依赖隐藏集，但 ++revision 与其余编辑提交保持同一条节奏。
+      _revision++;
+    });
+    if (!becameHidden) return;
+    final currentKey =
+        _pageIndex >= 0 && _pageIndex < _pageKeys.length
+            ? _pageKeys[_pageIndex]
+            : null;
+    if (currentKey != pageKey) return;
+    if (!_stripMode) return;
+    final target = nextVisibleAfterHide(
+      current: _pageIndex,
+      visible: visiblePageIndices(pageKeys: _pageKeys, hidden: next),
+    );
+    if (target == null) return;
+    // 等隐藏页高度回收完再跳，避免在旧高度上算出错位偏移。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _selectPage(target);
+    });
+  }
+
+  // ── B-1 · 缝发现与标记 ───────────────────────────────────────────────
+
+  /// 当前工程的缝检视记录（快照）。
+  Map<String, String> get _seamReviews =>
+      _project?.seamReviews ?? const <String, String>{};
+
+  /// 某页是不是"缩略图栏里被隐藏的横版页"（A-1.4 / D11）。
+  ///
+  /// 尺寸未知（尚未探测完）时**不**当作隐藏页 —— 宁可暂时多显示一条可选缝，
+  /// 也不要在尺寸就绪前把缝误标成 `n/a`。
+  bool _isHiddenPage(String pageKey) {
+    final size = _pageSizeCache[pageKey];
+    return size != null && isLandscapePage(size.width, size.height);
+  }
+
+  SeamCounts get _seamCounts => seamCounts(
+        seamsOf(_pageKeys),
+        reviews: _seamReviews,
+        isHiddenPage: _isHiddenPage,
+      );
+
+  /// 把 [seam] 标成 [state]；`null` = 清除记录（回到"未记录"）。
+  ///
+  /// 一个 undo step（[SeamReviewEditCommand]），与块编辑同一条路径 ⇒ "未保存"
+  /// 提示与撤销都认它。
+  void _setSeamReview(SeamEntry seam, String? state) {
+    final project = _project;
+    if (project == null) return;
+    final command = captureSeamReviewEdit(
+      project.raw,
+      key: seamReviewKey,
+      pageKey: seam.upper,
+      label: 'Seam review',
+      mutate: () {
+        if (state == null) {
+          project.clearSeamReview(seam.id);
+        } else {
+          project.setSeamReview(seam.id, state);
+        }
+      },
+    );
+    if (command.isEmpty) return;
+    _history.push(command);
+    setState(() => _revision++);
+  }
+
+  /// D7：跳到**下一条**待检视的缝（选中它的上页 —— 缝就是那条下边缘）。
+  ///
+  /// 从**当前页的下边缘**往后找并回绕：这样连点几次是"一条一条往下走"，而不是
+  /// 每次都跳回工程里第一条 todo。当前页是末页（没有下边缘）时从末条缝起算，
+  /// 于是回绕到第一条。
+  void _jumpToNextUnreviewedSeam() {
+    final seams = seamsOf(_pageKeys);
+    if (seams.isEmpty) return;
+    final current = _pageIndex >= 0 && _pageIndex < _pageKeys.length
+        ? _pageKeys[_pageIndex]
+        : null;
+    final upperOfCurrent = seams.indexWhere((s) => s.upper == current);
+    final index = nextUnreviewedIndex(
+      seams,
+      reviews: _seamReviews,
+      isHiddenPage: _isHiddenPage,
+      fromIndex: upperOfCurrent >= 0 ? upperOfCurrent : seams.length - 1,
+    );
+    if (index == null) return;
+    final upper = _pageKeys.indexOf(seams[index].upper);
+    if (upper >= 0) _selectPage(upper);
+  }
+
+  /// 相邻两张缩略图之间那条**缝**。
+  ///
+  /// 只会拿到 `clean` / `split` / `todo` 三态：标记只插在阅读序**相邻的两张可见
+  /// 页**之间（[_buildPageRail]），而两侧只要有一页是被隐藏的横版页就不会插进去
+  /// —— 那种缝是 `n/a`，在栏里根本不出现（D11）。
+  Widget _buildSeamMarker(SeamEntry seam) {
+    final scheme = Theme.of(context).colorScheme;
+    final state = effectiveSeamState(
+      seam,
+      reviews: _seamReviews,
+      isHiddenPage: _isHiddenPage,
+    );
+    final (Color color, IconData icon, String label) = switch (state) {
+      SeamState.clean => (
+          scheme.primary,
+          Icons.check_circle_outline,
+          'Page seam: clean'.tl,
+        ),
+      SeamState.split => (
+          scheme.error,
+          Icons.content_cut,
+          'Page seam: truncated'.tl,
+        ),
+      _ => (
+          scheme.outline,
+          Icons.remove,
+          'Page seam: not checked'.tl,
+        ),
+    };
+    // 标记**居中**、很小，绝不压在上下两张图的边缘上 —— 那正是要看"有没有被
+    // 切到的字"的地方（A-1.1 第 5 条）。
+    return SizedBox(
+      height: 18,
+      child: Center(
+        child: PopupMenuButton<SeamState>(
+          tooltip: label,
+          padding: EdgeInsets.zero,
+          iconSize: 16,
+          splashRadius: 16,
+          // `todo` 就是"没有记录" ⇒ 落盘时清掉该条（`null`）。
+          onSelected: (value) => _setSeamReview(
+            seam,
+            value == SeamState.todo ? null : value.wire,
+          ),
+          itemBuilder: (_) => [
+            CheckedPopupMenuItem(
+              value: SeamState.clean,
+              checked: state == SeamState.clean,
+              child: Text('Mark as clean'.tl),
+            ),
+            CheckedPopupMenuItem(
+              value: SeamState.split,
+              checked: state == SeamState.split,
+              child: Text('Mark as truncated'.tl),
+            ),
+            CheckedPopupMenuItem(
+              value: SeamState.todo,
+              checked: state == SeamState.todo,
+              child: Text('Clear mark'.tl),
+            ),
+          ],
+          icon: Icon(icon, size: 16, color: color),
+        ),
+      ),
+    );
+  }
+
+  /// 缩略图栏顶部：还有几条缝没看 + "下一条"跳转（D7）。
+  Widget _buildSeamHeader() {
+    final counts = _seamCounts;
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 6, 2),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              counts.toReview == 0
+                  ? 'All page seams reviewed'.tl
+                  : '@a page seam(s) to review'.tlParams({'a': counts.toReview}),
+              style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
+              maxLines: 2,
+            ),
+          ),
+          IconButton(
+            tooltip: 'Next unreviewed page seam'.tl,
+            iconSize: 18,
+            visualDensity: VisualDensity.compact,
+            onPressed:
+                counts.toReview == 0 ? null : _jumpToNextUnreviewedSeam,
+            icon: const Icon(Icons.skip_next),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPageRail({bool horizontal = false}) {
     final project = _project;
     if (project == null) return const SizedBox.shrink();
+    // 缩略图模式只在**竖排左栏**生效；窄屏底栏（horizontal）永远是紧凑模式。
+    final thumb = !horizontal && _thumbRailActive;
+    final indices = thumb
+        ? thumbRailVisibleIndices(
+            pageCount: _pageKeys.length,
+            widthOf: (i) => _pageSizeCache[_pageKeys[i]]?.width,
+            heightOf: (i) => _pageSizeCache[_pageKeys[i]]?.height,
+          )
+        : List<int>.generate(_pageKeys.length, (i) => i);
     final children = <Widget>[];
-    for (var i = 0; i < _pageKeys.length; i++) {
+    for (final i in indices) {
       final key = _pageKeys[i];
       final page = project.pages[key];
       final total = page?.blocks.length ?? 0;
@@ -2521,10 +5064,13 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           // Falls back to `inpainted`/`mask` so the rail still renders for a
           // project whose raw comic folder is gone.
           file: _resolvePageFile(key) ?? File(project.originalPath(key)),
+          // 🔴 真实页号（`i + 1`），不是过滤后的位置 —— 隐藏横版页时序号必须
+          // 跟着**它自己那一页**，不能整体前移（A-1.4）。
           label: '${i + 1}',
           selected: i == _pageIndex,
           complete: total > 0 && done == total,
           partial: done > 0 && done < total,
+          large: thumb,
           onTap: () => _selectPage(i),
         ),
       );
@@ -2536,6 +5082,40 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         itemBuilder: (_, i) => SizedBox(width: 96, child: children[i]),
       );
     }
+    if (thumb) {
+      // 🔴 缩略图模式给固定高度：单张放大后要能看出"这页上下边缘有没有被切到
+      // 的字"，统一高度让上下两张的**缝**在视觉上连续可比。
+      //
+      // 缝标记**只插在阅读序真正相邻的两张之间**（`indices[k-1] + 1 ==
+      // indices[k]`）。中间夹着被隐藏的横版页时，那两条缝都是 `n/a`、永远
+      // 不可检视，这里就不该出现可点的标记（D11）。
+      final plan = <Object>[];
+      for (var k = 0; k < indices.length; k++) {
+        if (k > 0 && indices[k - 1] + 1 == indices[k]) {
+          plan.add(SeamEntry(_pageKeys[indices[k - 1]], _pageKeys[indices[k]]));
+        }
+        plan.add(k);
+      }
+      return Column(
+        children: [
+          _buildSeamHeader(),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: plan.length,
+              itemBuilder: (_, i) {
+                final item = plan[i];
+                if (item is SeamEntry) return _buildSeamMarker(item);
+                return SizedBox(
+                  height: _kThumbTileHeight,
+                  child: children[item as int],
+                );
+              },
+            ),
+          ),
+        ],
+      );
+    }
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: children.length,
@@ -2543,7 +5123,152 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     );
   }
 
+  /// A-2：右栏 = 折叠图标条（44px 常驻）+ 三个保活 Tab（块 / 组 / 运行）。
+  ///
+  /// 🔴 **不丢编辑态**：折叠只让内容区 [Offstage] 零尺寸，三个子视图始终在
+  /// [IndexedStack] 里保活 —— 块面板的 TextEditingController、组面板未提交的
+  /// 分配草稿都不会因切 Tab/折叠而销毁。
   Widget _buildPanel() {
+    final scheme = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: scheme.surface,
+      child: Row(
+        children: [
+          Flexible(
+            flex: _panelCollapsed ? 0 : 1,
+            child: Offstage(
+              offstage: _panelCollapsed,
+              child: SizedBox.expand(child: _panelContent()),
+            ),
+          ),
+          if (_panelCollapsed) const Spacer(),
+          _panelRail(),
+        ],
+      ),
+    );
+  }
+
+  Widget _panelContent() {
+    return Column(
+      children: [
+        SizedBox(height: 40, child: _panelTabBar()),
+        const Divider(height: 1),
+        Expanded(
+          child: IndexedStack(
+            sizing: StackFit.expand,
+            index: _panelTab < 0
+                ? 0
+                : (_panelTab > 2 ? 2 : _panelTab),
+            children: [
+              _blockTab(),
+              _groupTab(),
+              _runTab(),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _panelTabBar() {
+    final scheme = Theme.of(context).colorScheme;
+    Widget tab(IconData icon, String label, int index) {
+      final selected = _panelTab == index;
+      final color = selected
+          ? scheme.onSecondaryContainer
+          : scheme.onSurfaceVariant;
+      return Expanded(
+        child: InkWell(
+          onTap: () => setState(() => _panelTab = index),
+          child: ColoredBox(
+            color: selected ? scheme.secondaryContainer : Colors.transparent,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 18, color: color),
+                const SizedBox(height: 2),
+                Text(label, style: ts.s12.copyWith(color: color)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        // P30：折叠钮不再放这里 —— 它与窄图标条上的展开钮共用同一个位置
+        // （窄条顶部），展开态三个切换只出现在本 Tab 行，不再与窄条重复。
+        tab(Icons.touch_app_outlined, 'Text block'.tl, 0),
+        tab(Icons.account_tree_outlined, 'Group'.tl, 1),
+        tab(Icons.playlist_play, 'Run'.tl, 2),
+      ],
+    );
+  }
+
+  /// 右缘 44px 窄图标条。
+  ///
+  /// P30 去重（用户图 2）：
+  /// * **展开态**：窄条只留一个「折叠」钮（chevron_right）—— 文字块/组/运行
+  ///   三个切换只在内容区顶部的 Tab 行，窄条不再重复一遍；
+  /// * **折叠态**：内容区（连同 Tab 行）Offstage 保活，窄条放出「展开」钮
+  ///   （chevron_left）+ 三个图标，点图标 = 展开并切到该 Tab。
+  /// 折叠/展开因此共用窄条顶部这一个位置，不会两个钮同时出现。
+  Widget _panelRail() {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: 44,
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        border: Border(left: Divider.createBorderSide(context)),
+      ),
+      child: Column(
+        children: [
+          IconButton(
+            tooltip: _panelCollapsed
+                ? 'Expand panel'.tl
+                : 'Collapse panel'.tl,
+            iconSize: 20,
+            visualDensity: VisualDensity.compact,
+            icon: Icon(
+              _panelCollapsed ? Icons.chevron_left : Icons.chevron_right,
+            ),
+            onPressed: () =>
+                setState(() => _panelCollapsed = !_panelCollapsed),
+          ),
+          // 展开态窄条到此为止：三个切换只在 Tab 行里，不重复。
+          if (_panelCollapsed) ...[
+            const Divider(height: 1),
+            _railTabIcon(Icons.touch_app_outlined, 'Text block'.tl, 0),
+            _railTabIcon(Icons.account_tree_outlined, 'Group'.tl, 1),
+            _railTabIcon(Icons.playlist_play, 'Run'.tl, 2),
+            const Spacer(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// 折叠态窄条上的单个 Tab 图标：点击 = 展开右栏并切到该 Tab。
+  Widget _railTabIcon(IconData icon, String tip, int index) {
+    final scheme = Theme.of(context).colorScheme;
+    final selected = _panelTab == index;
+    return IconButton(
+      tooltip: tip,
+      iconSize: 20,
+      visualDensity: VisualDensity.compact,
+      color: selected ? scheme.primary : null,
+      icon: Icon(icon),
+      onPressed: () => setState(() {
+        _panelTab = index;
+        _panelCollapsed = false;
+      }),
+    );
+  }
+
+  /// 块 Tab：选中块 → 块属性面板（B-5：跨页块多一个「解跨页」按钮）；否则
+  /// 显示工程根信息与点选提示（管线选项挪去【运行】Tab）。
+  Widget _blockTab() {
     final project = _project;
     final block = _currentBlock;
     if (block != null) {
@@ -2554,6 +5279,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         block: block,
         index: _selectedBlock,
         revision: _revision,
+        isCrossPage: readSpan(block)?.isCrossPage ?? false,
         onEdit: (label, mutate, {bool syncRichText = false}) {
           final pageKey = _selectedPageKey;
           if (pageKey == null) return;
@@ -2575,23 +5301,28 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         onTranslate: _blockOpBusy || _pageKeys.isEmpty
             ? null
             : () => _translateSelectedBlock(),
+        // 🔴 2026-10-09 续：单块级修图 / 复原。禁用条件与识别/翻译相同（busy
+        // 或没有可用原图的页），回调内部会进一步判"块有没有译文"等细节。
+        onRepair: _blockOpBusy || _pageKeys.isEmpty
+            ? null
+            : () => _repairSelectedBlock(),
+        onRestoreOriginal: _blockOpBusy || _pageKeys.isEmpty
+            ? null
+            : () => _restoreOriginalSelectedBlock(),
+        onDissolveSpan:
+            _blockOpBusy ? null : _dissolveSelectedSpanBlock,
+        // P33 ⑦b：取色同样需要**原图**（`inpainted/` 上的字已经被抹掉了，
+        // 在上面取样取到的是译文的颜色），所以禁用条件与识别/翻译一致。
+        onSampleColor: _blockOpBusy || _pageKeys.isEmpty
+            ? null
+            : () => _resampleSelectedBlockColor(),
         busy: _blockOpBusy,
       );
     }
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       children: [
-        Text('Page'.tl, style: ts.s16),
-        const SizedBox(height: 8),
-        _kv('Source root', project?.directory ?? '-', small: true),
-        _kv('Artifact root', project?.workspace ?? '-', small: true),
-        _kv(
-          'Layout',
-          (project?.isInPlaceLayout ?? true) ? 'in-place'.tl : 'split'.tl,
-          small: true,
-        ),
-        const Divider(height: 28),
-        _buildPipelinePanel(context),
+        ..._projectInfoTiles(project),
         const Divider(height: 28),
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -2603,6 +5334,125 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       ],
     );
   }
+
+  /// 运行 Tab：工程根信息 + 自动管线选项（旧版无选中块时的默认内容）。
+  Widget _runTab() {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      children: [
+        ..._projectInfoTiles(_project),
+        const Divider(height: 28),
+        _buildPipelinePanel(context),
+      ],
+    );
+  }
+
+  List<Widget> _projectInfoTiles(TranslationProject? project) => [
+        Text('Page'.tl, style: ts.s16),
+        const SizedBox(height: 8),
+        _kv('Source root', project?.directory ?? '-', small: true),
+        _kv('Artifact root', project?.workspace ?? '-', small: true),
+        _kv(
+          'Layout',
+          (project?.isInPlaceLayout ?? true) ? 'in-place'.tl : 'split'.tl,
+          small: true,
+        ),
+      ];
+
+  /// 组 Tab：组选择器（多组时）+ 组模式面板；一个组都没有时给入口说明。
+  Widget _groupTab() {
+    final groups = _groupProjection.groups;
+    if (groups.isEmpty) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('Text group'.tl, style: ts.s16),
+          const SizedBox(height: 8),
+          Text(
+            'Switch to the continuous strip, tap the group icon, then pick the blocks that belong to one sentence.'.tl,
+            style:
+                ts.s12.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+          ),
+        ],
+      );
+    }
+    final active = _activeGroup ?? groups.values.first;
+    final views = <StudioGroupMemberView>[
+      for (final member in active.members) _memberView(member),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: DropdownButton<String>(
+                  isDense: true,
+                  isExpanded: true,
+                  value: groups.containsKey(active.id) ? active.id : null,
+                  items: [
+                    for (final g in groups.values)
+                      DropdownMenuItem(
+                        value: g.id,
+                        child: Text(
+                          '@a · @b'.tlParams({
+                            'a': g.id.length > 10
+                                ? '${g.id.substring(0, 10)}…'
+                                : g.id,
+                            'b': '${g.members.length}',
+                          }),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: (id) => setState(() => _chosenGroupId = id),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: StudioGroupPanel(
+            key: ValueKey('group#${active.id}'),
+            group: active,
+            revision: _revision,
+            busy: _blockOpBusy,
+            members: views,
+            onModeChanged: (mode) => _setGroupMode(active.id, mode),
+            onCombine: () => _combineGroupSource(active.id),
+            onTranslateOnce: () => _translateGroupOnce(active.id),
+            onSourceSubmitted: (text) =>
+                _setGroupSource(active.id, text),
+            onTranslationSubmitted: (text) =>
+                _setGroupTranslation(active.id, text),
+            onReorder: (from, to) =>
+                _reorderGroupMember(active.id, from, to),
+            onRemoveMember: (i) => _removeGroupMember(active.id, i),
+            onSelectMember: (i) => _selectGroupMember(active.members[i]),
+            onApplyAssignment: (values) =>
+                _applyGroupAssignment(active.id, values),
+            onDissolve: () => _dissolveGroup(active.id),
+          ),
+        ),
+      ],
+    );
+  }
+
+  StudioGroupMemberView _memberView(GroupMemberRef ref) {
+    final pageNumber = _pageKeys.indexOf(ref.page) + 1;
+    final block = findBlockByUid(
+      _project?.pages[ref.page]?.blocks ?? const <TextBlock>[],
+      ref.uid,
+    );
+    return StudioGroupMemberView(
+      pageLabel: 'Page @a'.tlParams({'a': '$pageNumber'}),
+      sourcePreview: block?.sourceText ?? '',
+      exists: block != null,
+    );
+  }
+
 
   /// 管线选项面板（未选中块时显示在属性面板位置）。
   ///
@@ -2670,12 +5520,22 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                   : (on) => setState(
                       () => _runStages = _runStages.copyWith(translate: on)),
             ),
+            // 🔴 第四段「修图」（2026-10-09 用户修订）。默认不勾：抹字不可逆，
+            // 用户要先看块、拖块、改完再出图。
+            FilterChip(
+              label: Text('Repair artwork'.tl),
+              selected: _runStages.repair,
+              onSelected: running
+                  ? null
+                  : (on) => setState(
+                      () => _runStages = _runStages.copyWith(repair: on)),
+            ),
           ],
         ),
         const SizedBox(height: 6),
         Text(
-          // 与弹窗同一句话：三段能不能互相独立，取决于同一份工作量判断。
-          'Stages run in order: detect, then recognize, then translate.'.tl,
+          // 与弹窗同一句话：四段能不能互相独立，取决于同一份工作量判断。
+          'Stages run in order: detect, then recognize, then translate. Repair artwork erases the original lettering and draws the translation into the same boxes; it only touches the image files, so check the boxes in the studio first.'.tl,
           style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
         ),
         SwitchListTile(
@@ -2708,16 +5568,22 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
               selected: _runDirection == ReadingDirection.rightToLeft,
               onSelected: running
                   ? null
-                  : (_) => setState(
-                      () => _runDirection = ReadingDirection.rightToLeft),
+                  : (_) => setState(() {
+                      _runDirection = ReadingDirection.rightToLeft;
+                      // 缩略图栏只对"上→下"有意义：切到左右阅读就关掉，
+                      // 不留一个已失效的宽版左栏。
+                      _thumbRail = false;
+                    }),
             ),
             ChoiceChip(
               label: Text('Left to right'.tl),
               selected: _runDirection == ReadingDirection.leftToRight,
               onSelected: running
                   ? null
-                  : (_) => setState(
-                      () => _runDirection = ReadingDirection.leftToRight),
+                  : (_) => setState(() {
+                      _runDirection = ReadingDirection.leftToRight;
+                      _thumbRail = false;
+                    }),
             ),
             ChoiceChip(
               label: Text('Top to bottom'.tl),
@@ -2862,6 +5728,64 @@ class _StudioPipelineState {
   String lastMessage = '';
 }
 
+/// 投影缓存：`_revision` 变了就整体作废（见 `_blocksFor`）。
+class _BlockProjectionCache {
+  _BlockProjectionCache(this.revision);
+
+  /// 建立本缓存时的 [_revision]。
+  final int revision;
+
+  /// 页 key → 该页要画的块列表（含投影片段）。
+  final Map<String, List<CanvasTextBlock>> byPage = {};
+}
+
+/// 跨页块在**某一页**上的投影片段：真身在 [ownerKey] 页的 `blocks[ownerIndex]`。
+///
+/// 它不是落盘形态 —— 落盘只有真身的 `_span.parts`（D8：per-page 子矩形是真相），
+/// 这里只是"要把这段画到这一页上"的运行时索引。
+class _SpanFragment {
+  const _SpanFragment({
+    required this.ownerKey,
+    required this.ownerIndex,
+    required this.rect,
+  });
+
+  final String ownerKey;
+  final int ownerIndex;
+
+  /// 该片段在**本页页内坐标**里的矩形。
+  final IntRect rect;
+}
+
+/// B-3/B-4：一次 [_revision] 下的组投影：工程里的全部组 + 成员反查表。
+class _GroupProjection {
+  _GroupProjection(this.revision);
+
+  final int revision;
+
+  /// 组 id → 组（`readGroups` 的新表，仅读）。
+  final Map<String, BlockGroup> groups = {};
+
+  /// 成员键 `"<page>#<uid>"` → 组标记。
+  final Map<String, _GroupTag> tags = {};
+}
+
+/// 一个块在组里的可视化标记：组 id + 阅读序序号（1 起）+ 是否连线形态。
+class _GroupTag {
+  const _GroupTag(this.refKey, this.groupId, this.ordinal, this.isLink);
+
+  final String refKey;
+  final String groupId;
+  final int ordinal;
+  final bool isLink;
+}
+
+/// A-1.3 缩略图模式左栏宽度（D6 = 240）。
+const double _kThumbRailWidth = 240;
+
+/// A-1.3 缩略图模式单张高度。统一高度让上下相邻两张的**缝**在视觉上连续可比。
+const double _kThumbTileHeight = 300;
+
 class _PageTile extends StatelessWidget {
   const _PageTile({
     required this.file,
@@ -2870,6 +5794,7 @@ class _PageTile extends StatelessWidget {
     required this.complete,
     required this.partial,
     required this.onTap,
+    this.large = false,
   });
 
   final File file;
@@ -2879,19 +5804,34 @@ class _PageTile extends StatelessWidget {
   final bool partial;
   final VoidCallback onTap;
 
+  /// 缩略图模式（A-1.3）：单张更大、序号**居中**、完成状态改用**边框色**。
+  final bool large;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // A-1.1 第 5 条：缩略图模式的覆盖层**不贴边** —— 上下边缘正是用户要看
+    // "缝"的地方。位置由 [thumbTileOverlay] 唯一决定（界面与断言同一判据）。
+    final centered = thumbTileOverlay(large: large) == ThumbTileOverlay.center;
+    // 完成状态色。缩略图模式把它落在**边框**上（无贴边覆盖点）；紧凑模式仍用
+    // 右上角的状态点（保持不变）。
+    final statusColor = complete
+        ? const Color(0xFF3B6D11)
+        : partial
+        ? const Color(0xFFBA7517)
+        : scheme.outlineVariant;
     return InkWell(
       onTap: onTap,
       child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        margin: EdgeInsets.symmetric(horizontal: 8, vertical: large ? 5 : 3),
         decoration: BoxDecoration(
           border: Border.all(
-            color: selected ? scheme.primary : scheme.outlineVariant,
-            width: selected ? 2 : 0.5,
+            color: selected
+                ? scheme.primary
+                : (centered ? statusColor : scheme.outlineVariant),
+            width: selected ? 2 : (centered ? 1.5 : 0.5),
           ),
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(large ? 8 : 6),
         ),
         child: Stack(
           fit: StackFit.expand,
@@ -2903,8 +5843,9 @@ class _PageTile extends StatelessWidget {
                   file,
                   fit: BoxFit.contain,
                   // Decoding a 2000px page for a 96px tile is the single
-                  // easiest way to make a long project stutter.
-                  cacheWidth: 96,
+                  // easiest way to make a long project stutter. 缩略图模式
+                  // 放大到 240px 左栏后 96 会把字糊成一团；320 仍远小于原图。
+                  cacheWidth: large ? 320 : 96,
                   filterQuality: FilterQuality.low,
                   errorBuilder: (context, error, stackTrace) =>
                       const SizedBox.shrink(),
@@ -2913,42 +5854,54 @@ class _PageTile extends StatelessWidget {
             else
               Padding(
                 padding: const EdgeInsets.all(2),
-                child: Icon(Icons.broken_image_outlined, size: 20, color: scheme.outline),
-              ),
-            Positioned(
-              left: 2,
-              bottom: 2,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                decoration: BoxDecoration(
-                  color: scheme.surface.withValues(alpha: 0.85),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-                child: Text(label, style: ts.s12),
-              ),
-            ),
-            Positioned(
-              right: 2,
-              top: 2,
-              child: Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: complete
-                      ? const Color(0xFF3B6D11)
-                      : partial
-                      ? const Color(0xFFBA7517)
-                      : Colors.transparent,
-                  border: complete || partial
-                      ? null
-                      : Border.all(color: scheme.outlineVariant, width: 0.5),
+                child: Icon(
+                  Icons.broken_image_outlined,
+                  size: large ? 28 : 20,
+                  color: scheme.outline,
                 ),
               ),
-            ),
+            if (centered)
+              Align(alignment: Alignment.center, child: _label(scheme))
+            else
+              Positioned(left: 2, bottom: 2, child: _label(scheme)),
+            // 状态点只在紧凑模式出现 —— 缩略图模式用边框色代替。
+            if (!centered)
+              Positioned(
+                right: 2,
+                top: 2,
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: complete
+                        ? const Color(0xFF3B6D11)
+                        : partial
+                        ? const Color(0xFFBA7517)
+                        : Colors.transparent,
+                    border: complete || partial
+                        ? null
+                        : Border.all(color: scheme.outlineVariant, width: 0.5),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _label(ColorScheme scheme) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: large ? 6 : 4,
+        vertical: large ? 2 : 1,
+      ),
+      decoration: BoxDecoration(
+        color: scheme.surface.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(label, style: large ? ts.s14 : ts.s12),
     );
   }
 }

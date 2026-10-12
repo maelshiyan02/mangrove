@@ -15,10 +15,14 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:mangrove/foundation/bundled_fonts.dart';
 import 'package:mangrove/foundation/image_translation/balloon_clustering.dart';
+import 'package:mangrove/foundation/image_translation/font_fit.dart';
+import 'package:mangrove/foundation/image_translation/text_color.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import 'package:mangrove/foundation/system_fonts.dart';
 import 'package:mangrove/foundation/translation_project/edit_command.dart';
 import 'package:mangrove/foundation/translation_project/project.dart';
 import 'package:mangrove/foundation/translation_project/project_writer.dart';
@@ -104,6 +108,14 @@ void runP1Checks(
 // ---------------------------------------------------------------------------
 
 void _fontChecks(CheckSink check, Directory root) {
+  // 🔴 P33：下面第 4/5/6/7/9 条是在「**没有**系统字体表」的前提下写的。
+  // 系统字体探测上线以后，一台装了雅黑的机器上
+  // `resolveFamily('Microsoft YaHei UI')` 会走系统字体分支 —— 那是**正确的**
+  // 新行为，却会让第 5 条变红。为了让两批断言各自在确定的状态下测量，这里
+  // 先把表清空，末尾再注入合成表单独测新分支（测完恢复现场）。
+  final savedIndex = systemFonts;
+  systemFonts = SystemFontIndex(const <SystemFontInfo>[]);
+
   // 1) 打包字体文件真的在磁盘上。
   //
   // 🔴 空结果判 FAIL：只断言"表里有两条记录"而不断言文件存在的话，把表清空
@@ -313,6 +325,434 @@ void _fontChecks(CheckSink check, Directory root) {
     'canvas resolves=${canvasResolves} rawPassThrough=${canvasRaw} '
     'studioHandsOffRaw=${studioHandsOff} '
     '(the canvas must resolve, or the preview lies about the exported page)',
+  );
+
+  // ── P33 · 系统字体探测 + 双端参数统一（⑦a）────────────────────────────
+  _fontSystemChecks(check, root);
+
+  systemFonts = savedIndex;
+
+  // ── P33 · 原图文字取色（⑦b）───────────────────────────────────────────
+  _textColorChecks(check);
+}
+
+/// 合成一块「背景 + 抗锯齿边 + 实心笔画」的两色调夹具。
+///
+/// 🔴 抗锯齿边是**必须的**：它是"腐蚀到底有没有用"这件事唯一的证据来源。
+/// 只有纯两色的夹具，腐蚀前后取到同一个颜色，断言就变成装饰品 —— 而这类
+/// 装饰品正是本项目反复踩的那种（P29/P31 都重写过）。
+RgbaImage _twoToneFixture({
+  required List<int> bg,
+  required List<int> ink,
+  required List<int> aa,
+  int w = 64,
+  int h = 64,
+  int inkSize = 24,
+}) {
+  final pixels = Uint8List(w * h * 4);
+  void put(int x, int y, List<int> c) {
+    final i = (y * w + x) * 4;
+    pixels[i] = c[0];
+    pixels[i + 1] = c[1];
+    pixels[i + 2] = c[2];
+    pixels[i + 3] = 255;
+  }
+
+  final left = (w - inkSize) ~/ 2;
+  final top = (h - inkSize) ~/ 2;
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      put(x, y, bg);
+    }
+  }
+  // 1px 的抗锯齿圈（真实扫描件里是 1~2px）。
+  for (var y = top - 1; y <= top + inkSize; y++) {
+    for (var x = left - 1; x <= left + inkSize; x++) {
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      put(x, y, aa);
+    }
+  }
+  for (var y = top; y < top + inkSize; y++) {
+    for (var x = left; x < left + inkSize; x++) {
+      put(x, y, ink);
+    }
+  }
+  return RgbaImage(w, h, pixels);
+}
+
+void _textColorChecks(CheckSink check) {
+  final rect = IntRect(4, 4, 60, 60);
+
+  // --- 21) 白底黑字 → 取到黑（不是"黑与白的加权平均"）-------------------
+  final darkOnLight = estimateTextColor(
+    _twoToneFixture(
+      bg: const [255, 255, 255],
+      ink: const [0, 0, 0],
+      aa: const [100, 100, 100],
+    ),
+    rect,
+  );
+  final darkOk = darkOnLight != null;
+  check(
+    'color.black_text_on_white',
+    darkOk &&
+        darkOnLight.textRgb.every((c) => c <= 32) &&
+        darkOnLight.backgroundRgb.every((c) => c >= 223),
+    darkOk
+        ? 'text=${darkOnLight.textRgb} bg=${darkOnLight.backgroundRgb} '
+            'samples=${darkOnLight.textSamples} eroded=${darkOnLight.eroded} '
+            'contrast=${darkOnLight.contrast.toStringAsFixed(0)}'
+        : 'estimateTextColor returned null on a synthetic black-on-white box',
+  );
+
+  // --- 22) 黑底白字 → 取到白 --------------------------------------------
+  //
+  // 🔴 这条是对"按亮度判文字"那类实现的证伪：白底黑字与黑底白字是两种都常见
+  // 的排版（后者在夜间场景、反白 SFX 里到处都是），按亮度判必在其中一种上
+  // 取反 —— 取反后拿到的是**背景色**，画上去就是隐形的字。
+  final lightOnDark = estimateTextColor(
+    _twoToneFixture(
+      bg: const [0, 0, 0],
+      ink: const [255, 255, 255],
+      aa: const [155, 155, 155],
+    ),
+    rect,
+  );
+  final lightOk = lightOnDark != null;
+  check(
+    'color.white_text_on_black',
+    lightOk &&
+        lightOnDark.textRgb.every((c) => c >= 223) &&
+        lightOnDark.backgroundRgb.every((c) => c <= 32),
+    lightOk
+        ? 'text=${lightOnDark.textRgb} bg=${lightOnDark.backgroundRgb} '
+            'samples=${lightOnDark.textSamples}'
+        : 'estimateTextColor returned null on a synthetic white-on-black box',
+  );
+
+  // --- 23) 故障实现「恒返回黑」必须被打红 ---------------------------------
+  //
+  // 🔴 对拍而不是许诺：把"恒黑"这个坏实现与正确实现放在同一块夹具上比，判据
+  // 必须能分开两者。否则"取色功能已完成"这句话没有证据 —— 它在一个恒返回
+  // 黑色的实现上也照样是绿的。
+  final faultyBlack = <int>[0, 0, 0];
+  final spread = lightOk
+      ? (lightOnDark.textRgb[0] - faultyBlack[0]).abs() +
+          (lightOnDark.textRgb[1] - faultyBlack[1]).abs() +
+          (lightOnDark.textRgb[2] - faultyBlack[2]).abs()
+      : 0;
+  check(
+    'color.constant_black_fault_is_caught',
+    lightOk && spread > 300,
+    lightOk
+        ? 'white-on-black text=${lightOnDark.textRgb} vs a "always black" '
+            'implementation $faultyBlack — channel spread $spread must stay huge'
+        : 'no estimate to compare against the faulty implementation',
+  );
+
+  // --- 24) 腐蚀真的起作用（BT 口径的核心）--------------------------------
+  //
+  // 未腐蚀的均值把 1px 抗锯齿圈（本夹具里 100 灰）算进文字色，取到 26 灰而
+  // 不是 0 —— 画上去就是"比原字淡一截"。腐蚀后只剩实心笔画。
+  final noErosion = darkOk
+      ? (darkOnLight.textRgb[0] + darkOnLight.textRgb[1] + darkOnLight.textRgb[2]) /
+          3.0
+      : 0.0;
+  // 手算「不腐蚀」的期望值：784 个文字像素 = 576 个 0 + 208 个 100。
+  const expectedWithoutErosion = (208 * 100) / 784;
+  check(
+    'color.erosion_removes_antialiased_edge',
+    darkOk &&
+        darkOnLight.eroded &&
+        (noErosion - expectedWithoutErosion).abs() > 15,
+    darkOk
+        ? 'eroded mean=${noErosion.toStringAsFixed(1)}; '
+            'skipping erosion would give '
+            '${expectedWithoutErosion.toStringAsFixed(1)} '
+            '(a visible "lighter than the original ink" shift)'
+        : 'no estimate — cannot compare erosion modes',
+  );
+
+  // --- 25) 纯色区域返回 null，不编一个颜色出来 ---------------------------
+  final flat = _twoToneFixture(
+    bg: const [200, 200, 200],
+    ink: const [200, 200, 200],
+    aa: const [200, 200, 200],
+  );
+  check(
+    'color.flat_region_returns_null',
+    estimateTextColor(flat, rect) == null,
+    'a uniform crop must yield null (there is no text to sample), got '
+    '${estimateTextColor(flat, rect)}',
+  );
+
+  // --- 26) 彩字：色相要保住 ---------------------------------------------
+  final red = estimateTextColor(
+    _twoToneFixture(
+      bg: const [200, 200, 200],
+      ink: const [220, 20, 20],
+      aa: const [210, 110, 110],
+    ),
+    rect,
+  );
+  final redOk = red != null;
+  check(
+    'color.coloured_text_keeps_hue',
+    redOk &&
+        red.textRgb[0] > 200 &&
+        red.textRgb[1] < 60 &&
+        red.textRgb[2] < 60,
+    redOk
+        ? 'text=${red.textRgb} (a red SFX must not come back grey)'
+        : 'estimateTextColor returned null on coloured text',
+  );
+
+  // ⚠️ 刻意**不写**"同一输入两次结果一致"那条断言：它无法反向验证 —— 任何纯
+  // 函数在相同输入上都给出相同输出，注入不了"让它变不确定"的故障，于是那条
+  // 断言永远绿（装饰品）。无状态这件事由本文件头部的约定（纯 Dart、无全局
+  // 可变状态）与"零 Flutter 依赖"保证，不靠一条打不红的断言装作验证过。
+
+  // --- 27) `_color_auto` 的写/删语义（旧工程零字节 diff）------------------
+  //
+  // 🔴 这是"自动/手动"两条路径的开关：键存在 = 自动路径可以覆盖 `frgb`；
+  // 键不存在 = 用户定的，谁都不许动。手动时**必须删键**，否则每个旧块落盘
+  // 时都会多一个键，FT 零字节 diff 就破了。
+  final block = TextBlock.createDefault(rect: IntRect(0, 0, 40, 20));
+  final hadKeyAtBirth = block.raw.containsKey('_color_auto');
+  block.colorIsAuto = true;
+  final afterSet = block.raw['_color_auto'];
+  block.colorIsAuto = false;
+  final afterClear = block.raw.containsKey('_color_auto');
+  check(
+    'color.auto_flag_round_trip',
+    !hadKeyAtBirth && afterSet == true && !afterClear,
+    'new block carries the key=$hadKeyAtBirth (must be false); '
+    'after set=$afterSet; after clearing it still exists=$afterClear',
+  );
+}
+
+/// P33 新增的字体断言。全部自带「故障实现对拍」：每条都拿正确实现与一个
+/// 写坏的变体同时跑，断言两者结果**不同** —— 这样"判据有没有区分力"在每次
+/// 构建里都被检验，而不靠"写的时候手工试过一次"。
+void _fontSystemChecks(CheckSink check, Directory root) {
+  // --- 12) 装着的 CJK 字族要原样使用 -------------------------------------
+  //
+  // 合成表而不是真扫 `C:\Windows\Fonts`：扫描结果随机器而变，而断言必须是
+  // 确定性的（"在这台机器上雅黑存在"证明不了代码对）。
+  SystemFontInfo face(
+    String family,
+    Map<FontScript, double> coverage,
+  ) => SystemFontInfo(
+    family: family,
+    subfamily: 'Regular',
+    weight: 400,
+    italic: false,
+    path: '/fake/$family.ttf',
+    codepoints: 20000,
+    coverage: coverage,
+  );
+  final cjkOnly = <FontScript, double>{
+    FontScript.cjk: 1.0,
+    FontScript.latin: 1.0,
+  };
+  final latinOnly = <FontScript, double>{FontScript.latin: 1.0};
+  systemFonts = SystemFontIndex(<SystemFontInfo>[
+    face('Fake CJK Face', cjkOnly),
+    face('Fake Latin Face', latinOnly),
+    face('Microsoft YaHei UI', cjkOnly),
+  ]);
+
+  final installed = resolveFamily('Fake CJK Face');
+  check(
+    'font.system_family_used_when_installed',
+    installed.family == 'Fake CJK Face' &&
+        !installed.fallback &&
+        installed.reason.contains('system font'),
+    'resolveFamily("Fake CJK Face") -> "${installed.family}" '
+    'fallback=${installed.fallback}; reason: ${installed.reason}',
+  );
+
+  // --- 13) 装着但**不能显示中文**的字族不许用 -----------------------------
+  //
+  // 🔴 这条守的是 A05 §3 的底线："中文一定出字"。FT 工程里写 `Arial` 完全
+  // 可能，而 Arial 在每台 Windows 上都装着 —— 若"装了"就等于"能用"，译文
+  // 会变成一片豆腐块且**不报错**。
+  final latin = resolveFamily('Fake Latin Face');
+  check(
+    'font.non_cjk_system_family_not_used',
+    latin.family == primaryBundledFamily && latin.fallback,
+    'a Latin-only installed face must NOT be used: '
+    '-> "${latin.family}" fallback=${latin.fallback}; reason: ${latin.reason}',
+  );
+
+  // --- 14) 系统字体压过历史别名 ------------------------------------------
+  //
+  // 别名表（雅黑→思源黑）的存在前提是"雅黑没被打进包里"。探测上线后这个
+  // 前提不成立了：机器上真有雅黑还换成思源黑，等于静默替换用户意图。
+  final yaheiLive = resolveFamily('Microsoft YaHei UI');
+  check(
+    'font.system_family_beats_legacy_alias',
+    yaheiLive.family == 'Microsoft YaHei UI' && !yaheiLive.fallback,
+    'with the face installed it must be used as-is: -> '
+    '"${yaheiLive.family}" fallback=${yaheiLive.fallback}; '
+    'reason: ${yaheiLive.reason}',
+  );
+
+  // --- 15) 选择器只列能出中文的系统字体 -----------------------------------
+  final liveChoices = fontFamilyChoices(null);
+  check(
+    'font.selector_lists_installed_cjk_only',
+    liveChoices.any((c) => c.family == 'Fake CJK Face') &&
+        !liveChoices.any((c) => c.family == 'Fake Latin Face'),
+    'listed: ${[for (final c in liveChoices) c.family].join(", ")} '
+    '(a Latin-only face in this list would be a tofu trap)',
+  );
+
+  // --- 16) sfnt 解析：真实打包字体必须读出正确的名字与覆盖 ----------------
+  //
+  // 拿 `assets/fonts/` 里的真字体做 known-answer 测试：Noto Sans SC 有汉字
+  // 与假名、**没有**谚文 —— 这一条同时验了 name 表解析与 cmap 覆盖判定。
+  final scFile = File('${root.path}/assets/fonts/NotoSansSC-Regular.otf');
+  if (!scFile.existsSync()) {
+    check(
+      'font.sfnt_parses_bundled_face',
+      false,
+      'NotoSansSC-Regular.otf missing — cannot verify the sfnt parser',
+    );
+    check(
+      'font.sfnt_coverage_distinguishes_scripts',
+      false,
+      'NotoSansSC-Regular.otf missing — cannot verify cmap coverage',
+    );
+  } else {
+    final bytes = scFile.readAsBytesSync();
+    final info = parseFontBytes(bytes, scFile.path);
+    final ok = info != null;
+    check(
+      'font.sfnt_parses_bundled_face',
+      ok &&
+          info.family == 'Noto Sans SC' &&
+          info.weight == 400 &&
+          !info.italic &&
+          info.codepoints > 10000,
+      ok
+          ? 'family="${info.family}" weight=${info.weight} '
+              'italic=${info.italic} codepoints=${info.codepoints} '
+              'coverage=${info.coverage}'
+          : 'parseFontBytes returned null on a real bundled OTF',
+    );
+    // 🔴 对拍：把 cmap 覆盖判成"全都支持"，这条断言立刻失去意义。下面这个
+    // 坏变体用来证明判据本身有区分力（不是靠抛异常变红的装饰品）。
+    final bad = ok
+        ? SystemFontInfo(
+            family: info.family,
+            subfamily: info.subfamily,
+            weight: info.weight,
+            italic: info.italic,
+            path: info.path,
+            codepoints: info.codepoints,
+            coverage: const <FontScript, double>{
+              FontScript.cjk: 1.0,
+              FontScript.hangul: 1.0,
+              FontScript.kana: 1.0,
+            },
+          )
+        : null;
+    check(
+      'font.sfnt_coverage_distinguishes_scripts',
+      ok &&
+          info.covers(FontScript.cjk) &&
+          info.covers(FontScript.kana) &&
+          !info.covers(FontScript.hangul) &&
+          bad != null &&
+          bad.covers(FontScript.hangul) != info.covers(FontScript.hangul),
+      ok
+          ? 'SC covers cjk=${info.coverage[FontScript.cjk]?.toStringAsFixed(2)} '
+              'kana=${info.coverage[FontScript.kana]?.toStringAsFixed(2)} '
+              'hangul=${info.coverage[FontScript.hangul]?.toStringAsFixed(2)} '
+              '(hangul must be < $scriptCoverageThreshold); '
+              'a coverage table hard-coded to 1.0 is distinguishable: '
+              'hangul bad=${bad?.covers(FontScript.hangul)}'
+          : 'no parse result to compare',
+    );
+  }
+
+  // --- 17) sfnt 解析：垃圾字节返回 null，不抛 -----------------------------
+  //
+  // 🔴 系统字体目录里什么都可能躺着（`.fon`、零字节、快捷方式）。扫描一次要
+  // 遍历几百个文件，任何一次抛异常都会让整次扫描半途而废 —— 而"字体列表
+  // 少了一半"是不报错的。
+  //
+  // 🔴 这条断言要打中 line 116 的守卫（`tables == null` 时本应 return null）。
+  // 纯随机字节会在 line 113 的**魔数校验**处就 return null，根本到不了 116，
+  // 注入那里的故障时它不会红（装饰品）。所以这里喂一条「长得像 sfnt、但表
+  // 目录为空」的坏字节：前 4 字节是合法魔数 0x00010000（通过魔数校验），接着
+  // numTables=0 让 `_readTableDirectory` 返回 null —— 正好落进 116 的守卫。
+  final junk = Uint8List(64);
+  junk[0] = 0x00; junk[1] = 0x00; junk[2] = 0x01; junk[3] = 0x00; // sfnt magic
+  junk[4] = 0x00; junk[5] = 0x00; // numTables = 0 → table dir null
+  for (var i = 6; i < junk.length; i++) junk[i] = (i * 37 + 11) & 0xFF;
+  SystemFontInfo? junkResult;
+  var threw = false;
+  try {
+    junkResult = parseFontBytes(junk, '/fake/junk.bin');
+  } catch (_) {
+    threw = true;
+  }
+  check(
+    'font.sfnt_rejects_garbage',
+    !threw && junkResult == null,
+    threw
+        ? 'parseFontBytes THREW on a bogus sfnt (magic ok, empty table dir) — '
+            'one bad file would abort the whole system font scan'
+        : 'bogus sfnt (magic ok, 0 tables) -> '
+            '${junkResult == null ? "null (rejected)" : "ACCEPTED"}',
+  );
+
+  // --- 18) 字距必须随字号缩放（⑦a-1 修的真 bug）--------------------------
+  //
+  // 🔴 成品路径 `page_renderer._fillStyle` 原来是 `(v - 1.0)` —— 0.15 个
+  // **逻辑像素**，在 40px 的字上完全看不出来，于是"调字距滑块没反应"在出图
+  // 上是个真 bug，而画布上是正常的。判据取 40px 下的具体数值，故障实现
+  // （不乘字号）给出 0.15 —— 相差 40 倍，不可能靠边界相等蒙过去。
+  final goodSpacing = letterSpacingPx(1.15, 40.0);
+  final badSpacing = 1.15 - 1.0; // 漏乘字号的旧实现
+  check(
+    'font.letter_spacing_scales_with_size',
+    goodSpacing != null &&
+        (goodSpacing - 6.0).abs() < 1e-9 &&
+        (goodSpacing - badSpacing).abs() > 1.0,
+    'letterSpacingPx(1.15, 40) = $goodSpacing px; '
+    'the old size-independent expression gives $badSpacing px '
+    '(0.15 px is invisible — that was the bug)',
+  );
+
+  // --- 19) 行距默认值两端统一 ---------------------------------------------
+  //
+  // 画布侧写 `?? 1.15`、成品侧 `RegionFontStyle` 默认 1.2：同一个"没设过行距"
+  // 的块在两端行高差 0.05em。
+  check(
+    'font.line_spacing_default_is_shared',
+    lineSpacingOf(null) == defaultLineSpacingValue &&
+        lineSpacingOf(2.0) == 2.0 &&
+        defaultLineSpacingValue == 1.2,
+    'lineSpacingOf(null)=${lineSpacingOf(null)} (was 1.15 on the canvas, '
+    '1.2 in RegionFontStyle); explicit values pass through: '
+    '${lineSpacingOf(2.0)}',
+  );
+
+  // --- 20) 字重表两端共用 -------------------------------------------------
+  //
+  // 两张逐行相同的 switch 原本分别躺在 `page_renderer._fontWeightOf` 与
+  // `text_block_canvas._weight`，注释里还互相称对方为"查表/阶梯"。
+  check(
+    'font.weight_table_is_shared',
+    fontWeightIndex(100) == 100 &&
+        fontWeightIndex(350) == 300 &&
+        fontWeightIndex(700) == 700 &&
+        fontWeightIndex(999) == 900,
+    '100->${fontWeightIndex(100)} 350->${fontWeightIndex(350)} '
+    '700->${fontWeightIndex(700)} 999->${fontWeightIndex(999)}',
   );
 }
 

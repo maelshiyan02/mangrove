@@ -15,6 +15,7 @@ import 'package:mangrove/foundation/translation_project/studio_enqueue.dart';
 import 'package:mangrove/foundation/js_engine.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/related_source_tasks.dart';
+import 'package:mangrove/foundation/system_fonts.dart';
 import 'package:mangrove/network/app_dio_io.dart';
 import 'package:mangrove/network/cookie_jar.dart';
 import 'package:mangrove/network/repair_download.dart';
@@ -102,6 +103,10 @@ Future<void> initDeferred() async {
       TagsTranslation.readData().wait(),
       OpenCC.init().wait(),
       ImageEnhanceShader.instance.preload().wait(),
+      // P33：系统字体探测（读几百个字体文件头）。启动后尽早跑，这样用户
+      // 打开工作室时表已经填好 —— 扫描没完成时 `systemFonts` 是空表，行为
+      // 与探测功能上线前一致（不会在启动头一秒里突然换掉旧工程的字体）。
+      ensureSystemFontsScanned(),
     ];
     await Future.wait(futures);
     CacheManager().setLimitSize(appdata.settings['cacheSize']);

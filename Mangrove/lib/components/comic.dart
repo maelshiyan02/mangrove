@@ -416,17 +416,23 @@ class ComicTile extends StatelessWidget {
         ? _buildDetailedMode(context, history, tileHistory, chapterProgress)
         : _buildBriefMode(context, tileHistory, chapterProgress);
 
+    final categoryPill = badge == null
+        ? null
+        : _buildCategoryPill(context, badge!);
+
     if (!isFavorite &&
         !isReadLater &&
         tileHistory == null &&
         progress == null &&
         (missingPages == null || missingPages! <= 0)) {
-      return child;
+      if (categoryPill == null) return child;
+      return Stack(children: [Positioned.fill(child: child), categoryPill]);
     }
 
     return Stack(
       children: [
         Positioned.fill(child: child),
+        if (categoryPill != null) categoryPill,
         if (isFavorite ||
             isReadLater ||
             tileHistory != null ||
@@ -519,6 +525,37 @@ class ComicTile extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 右上角分类小标签（素材 / 工程 / 成品）。颜色按文案区分：素材=蓝、工程=橙、
+  /// 成品=绿 —— 与 `local_comics_page` 里 `comicCardKindOf` 的三分一一对应。
+  ///
+  /// 🔴 放在**右上角**：左上角已经被收藏/稍后读/历史/缺页标记占着，右上角在两种
+  /// 显示模式里都是空的（详细模式里合集标记也只画在合集卡上）。
+  Widget _buildCategoryPill(BuildContext context, String label) {
+    final color = switch (label) {
+      '工程' => Colors.orange,
+      '成品' => Colors.green,
+      _ => Colors.blue, // 素材
+    };
+    return Positioned(
+      right: 6,
+      top: 8,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.toOpacity(0.92),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          label,
+          style: ts.s10.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ),
     );
   }
@@ -3353,6 +3390,48 @@ class SimpleComicTile extends StatelessWidget {
       );
     }
 
+    // ── 翻译工程卡片：左下=翻译组、右下=第几话 ────────────────────────────
+    //
+    // 🔴 四角里**只有这两角是空的**（左上=收藏/稍后读/历史/缺页⚠️，右上=分类
+    // pill + 合集标记），所以新增角标不必挤走任何既有标记。
+    //
+    // 为什么非要占封面：漫画名普遍太长，卡片上那一行放不下；而封面图像本身就
+    // 是"这是哪一本"。于是"来源"已经由右上的三色分类说了，剩下要补的正是
+    // **翻这一话的是谁**（左下）与**这是第几话**（右下）—— 同一本漫画的不同
+    // 话封面完全相同，没有右下这个号，几十张卡片看上去是同一张。
+    final studioBadges = _studioTileBadges(comic.id);
+    if (studioBadges != null) {
+      cover = Stack(
+        fit: StackFit.expand,
+        children: [
+          cover,
+          if (studioBadges.$2.isNotEmpty)
+            Positioned(
+              left: 3,
+              bottom: 3,
+              child: _StudioCornerPill(
+                text: studioBadges.$2,
+                color: Colors.purple,
+                maxWidth: width * 0.62,
+              ),
+            ),
+          if (studioBadges.$1.isNotEmpty)
+            Positioned(
+              right: 3,
+              bottom: 3,
+              // 章节号是这两枚里更要紧的一枚：它按用户要求做得更大，因为
+              // 三位数（甚至超长篇的四位数）在 10px 下会挤成一团认不出来。
+              child: _StudioCornerPill(
+                text: studioBadges.$1,
+                color: Colors.red.shade700,
+                big: true,
+                maxWidth: width * 0.5,
+              ),
+            ),
+        ],
+      );
+    }
+
     Widget child = Container(
       width: width,
       height: height,
@@ -3408,4 +3487,84 @@ class SimpleComicTile extends StatelessWidget {
 
     return child;
   }
+}
+
+/// 封面角上的一枚标签。
+///
+/// ## 🔴 怎么防它和封面撞色
+///
+/// 底板用**不透明**的彩色，文字恒为白。
+///
+/// 半透明底板（像右上分类 pill 那样的 `.toOpacity(0.92)`）会随封面的明暗一起
+/// 变，浅色封面上白字直接消失 —— 而封面是什么颜色完全不可预测，任何"猜一个
+/// 对比色"的写法都会在某一本上翻车。不透明底板 + 白字是**唯一**对每张封面都
+/// 成立的写法。
+///
+/// 要区分四个角，改的是底板的**色相**（紫 / 红 / 绿 / 橙 / 蓝），不是透明度
+/// —— 这是"四角不同颜色"与"不能被封面吃掉"唯一能同时满足的组合。
+class _StudioCornerPill extends StatelessWidget {
+  const _StudioCornerPill({
+    required this.text,
+    required this.color,
+    this.big = false,
+    this.maxWidth = 120,
+  });
+
+  final String text;
+  final Color color;
+
+  /// 章节号那一枚：三位数、甚至超长篇的四位数都要一眼读出，所以字号整体抬一档。
+  final bool big;
+
+  final double maxWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: big ? 6 : 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: big ? 14 : 10,
+          fontWeight: FontWeight.w700,
+          height: 1.15,
+        ),
+      ),
+    );
+  }
+}
+
+/// 翻译工程卡片的封面角标：`$1` = 第几话，`$2` = 翻译组。非工程卡片返回 null。
+///
+/// 两个值各自都可能是空（老工程没绑定 ⇒ 组名为空；平铺工程没章节 ⇒ 话数为空），
+/// 两个都空就当作"没有角标"，不渲染一枚空壳。
+///
+/// 🔴 话数取自 `BtProject.chapters` 的键（一个工程 = 一章，与工作室的约定同源），
+/// 而不是反过来从工程**目录名**里抠 —— 那会是与 `studioProjectNameFor` 对不上
+/// 就漂移的第二份解析。翻译组取绑定表（它的唯一 owner），没绑定才回落到章节名
+/// 里的 `[…]`。
+(String, String)? _studioTileBadges(String comicId) {
+  if (!BtProjectManager.isBtComic(comicId)) return null;
+  final project = BtProjectManager().projectFor(comicId);
+  if (project == null) return null;
+  final keys = project.chapters.keys;
+  if (keys.isEmpty) return null;
+  final chapterName = keys.first;
+  final number = RegExp(r'\d+').firstMatch(chapterName)?.group(0) ?? '';
+  final origin = StudioReaderStore.originForProject(project.jsonFile.path);
+  var group = origin?.$2 ?? '';
+  if (group.isEmpty) {
+    final bracket = RegExp(r'\[([^\]]+)\]').firstMatch(chapterName);
+    group = bracket?.group(1)?.trim() ?? '';
+  }
+  if (number.isEmpty && group.isEmpty) return null;
+  return (number, group);
 }

@@ -19,6 +19,7 @@ import 'dart:typed_data';
 
 import 'package:mangrove/foundation/image_translation/inpaint.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import 'package:mangrove/foundation/translation_project/block_artifacts.dart';
 import 'package:mangrove/foundation/translation_project/gray_png.dart';
 import 'package:mangrove/foundation/translation_project/mask_producer.dart';
 import 'package:mangrove/foundation/translation_project/studio_block_ops.dart';
@@ -491,6 +492,263 @@ Future<void> runP7Checks(
     () => '绿=入参逐字节不变 / 故障=入参被就地改写',
   );
 
+  // ── 3.5 · buildRestorationMask（2026-10-09 续 · 复原掩膜外扩） ─────────
+
+  probe(
+    'restore.mask_dilates_by_default_30_percent',
+    // 默认 dilation=1.3 → 宽高各扩 15% → 面积扩 69%（≥30%）。
+    // 判据：dilated 版本的前景像素数 ≥ 原块版本的 * 1.1（留余量）。
+    () async {
+      final img = _pageWithGlyphs(64, 64, 26, 26, 12, 12);
+      final rect = IntRect(24, 24, 36, 36);
+      final originalMask = buildMaskPage(img, [rect]);
+      final dilatedMask = buildRestorationMask(img, rect);
+      // 数 dilated 掩膜里前景像素数
+      var dilatedCount = 0;
+      for (final p in dilatedMask) {
+        if (p > 0) dilatedCount++;
+      }
+      return dilatedCount >= originalMask.strokes * 1.1;
+    },
+    () async {
+      final img = _pageWithGlyphs(64, 64, 26, 26, 12, 12);
+      final rect = IntRect(24, 24, 36, 36);
+      final originalMask = buildMaskPage(img, [rect]);
+      // 故障路径 = dilation 被写成 1.0（根本没扩）
+      final noDilateMask = buildRestorationMask(img, rect, dilation: 1.0);
+      var count = 0;
+      for (final p in noDilateMask) {
+        if (p > 0) count++;
+      }
+      return count >= originalMask.strokes * 1.1;
+    },
+    () => '绿=dilated 掩膜前景 ≥ 原块 * 1.1 / 故障=dilation=1.0 没扩也被判成≥1.1',
+  );
+
+  probe(
+    'restore.mask_clamps_to_image_boundary',
+    // 块紧贴图像左边缘 → 外扩后左边界被夹到 0，不是负数。
+    // 判据：掩膜尺寸正确（= 整页），且前景像素分布在图像内（不是夹取后全空）。
+    () async {
+      final img = _pageWithGlyphs(32, 32, 0, 14, 8, 4);
+      final rect = IntRect(2, 14, 10, 18);
+      final m = buildRestorationMask(img, rect);
+      // 尺寸必须是整页
+      if (m.length != 32 * 32) return false;
+      // 必须有前景像素（边界 clamp 不该把所有前景吞掉）
+      var hasForeground = false;
+      for (final p in m) {
+        if (p > 0) { hasForeground = true; break; }
+      }
+      return hasForeground;
+    },
+    () async {
+      final img = _pageWithGlyphs(32, 32, 0, 14, 8, 4);
+      final rect = IntRect(2, 14, 10, 18);
+      // 故障路径 = 不 clamp，让外扩越过边界 → 可能抛异常或返回尺寸不对的掩膜
+      // 用 dilation=5.0 强制大幅外扩，测试 clamp 是否真的在工作
+      final m = buildRestorationMask(img, rect, dilation: 5.0);
+      return m.length != 32 * 32;
+    },
+    () => '绿=尺寸正确 + 有前景 / 故障=外扩越过边界后尺寸不对（clamp 没生效）',
+  );
+
+  probe(
+    'restore.mask_polarity_is_255',
+    // 极性必须与 buildMaskPage 一致：255 = 被掩（需要恢复的像素）。
+    () async {
+      final img = _pageWithGlyphs(32, 32, 10, 10, 12, 8);
+      final rect = IntRect(8, 8, 20, 16);
+      final m = buildRestorationMask(img, rect);
+      // 至少有一个前景像素是 255（不是 1 或其他值）
+      for (final p in m) {
+        if (p == 255) return true;
+        if (p > 0 && p != 255) return false;
+      }
+      return false; // 全 0 也算 false，至少要有一点前景
+    },
+    () async {
+      final img = _pageWithGlyphs(32, 32, 10, 10, 12, 8);
+      final rect = IntRect(8, 8, 20, 16);
+      // 故障路径 = 返回的是反极性（0=被掩，255=保留）
+      final m = buildRestorationMask(img, rect);
+      var hasForeground = false;
+      for (final p in m) {
+        if (p == 255) hasForeground = true;
+      }
+      return !hasForeground; // 反极性的话应该没有 255
+    },
+    () => '绿=前景像素是 255 / 故障=极性反了（前景不是 255）',
+  );
+
+  // ── 3.6 · 单块修图/复原的像素合并（block_artifacts.dart） ────────────
+  //
+  // 这一层没有 dart:ui，全部可 headless 验。夹具思想：现有底图涂成"蓝色页"
+  // （代表同页其他块已抹好的像素），新擦的块给出一个红色哨兵像素 —— 合并只能
+  // 在掩膜像素上替换，块外必须保持蓝色。
+
+  /// 造一张纯色 RGBA 图，再把 [paintAt] 里的像素索引涂成 [rgb]。
+  RgbaImage painted(
+    int w,
+    int h,
+    int base,
+    Map<int, int> paintAt,
+  ) {
+    final img = _solid(w, h, base);
+    paintAt.forEach((idx, rgb) {
+      final i = idx * 4;
+      img.pixels[i] = (rgb >> 16) & 0xFF;
+      img.pixels[i + 1] = (rgb >> 8) & 0xFF;
+      img.pixels[i + 2] = rgb & 0xFF;
+      img.pixels[i + 3] = 0xFF;
+    });
+    return img;
+  }
+
+  probe(
+    'blockrepair.merge_pastes_only_inside_mask',
+    // 绿=只在掩膜像素上换成新擦值（红），块外保留现有底图（蓝，=其他块）。
+    () async {
+      const w = 8, h = 8;
+      final erased = painted(w, h, 0xFFFFFF, {10: 0xFF0000});
+      final existing = _solid(w, h, 0x0000FF);
+      final mask = Uint8List(w * h)..[10] = 255;
+      final out = mergeRepairedInpainted(
+        erasedBlock: erased,
+        blockMask: mask,
+        existingInpainted: existing,
+      );
+      if (out == null) return false;
+      final redAtMask = out[10 * 4] == 0xFF &&
+          out[10 * 4 + 1] == 0x00 &&
+          out[10 * 4 + 2] == 0x00;
+      final blueElsewhere = out[11 * 4] == 0x00 &&
+          out[11 * 4 + 2] == 0xFF;
+      return redAtMask && blueElsewhere;
+    },
+    // 故障=整页覆盖（直接用 erasedBlock）→ 块外从蓝变白，其他块被抹回来。
+    () async {
+      const w = 8, h = 8;
+      final erased = painted(w, h, 0xFFFFFF, {10: 0xFF0000});
+      final existing = _solid(w, h, 0x0000FF);
+      final mask = Uint8List(w * h)..[10] = 255;
+      // 模拟"覆盖式"错误实现：无视掩膜，整张换成新擦图。
+      final out = Uint8List.fromList(erased.pixels);
+      final keptOtherBlock = out[11 * 4 + 2] == 0xFF &&
+          out[11 * 4] == 0x00;
+      return keptOtherBlock; // 错误实现这里应为 false（白底，不是蓝）
+    },
+    () => '绿=掩膜处换红、块外保蓝（其他块不丢）/ 故障=整页覆盖把其他块抹回原图',
+  );
+
+  probe(
+    'blockrepair.merge_first_repair_equals_erased_block',
+    // 绿=没有现有底图时，输出就是"只擦了这一块"的整页图（逐字节）。
+    () async {
+      final erased = painted(8, 8, 0xFFFFFF, {10: 0xFF0000});
+      final mask = Uint8List(64)..[10] = 255;
+      final out = mergeRepairedInpainted(
+        erasedBlock: erased,
+        blockMask: mask,
+      );
+      if (out == null || out.length != erased.pixels.length) return false;
+      for (var i = 0; i < out.length; i++) {
+        if (out[i] != erased.pixels[i]) return false;
+      }
+      return true;
+    },
+    // 故障=错误地返回了原图（抹字丢失）：位置 10 的 G 通道，红哨兵=0、
+    // 白底原图=255 —— 同一性质（输出必须逐字节等于新擦图）在故障片段上为假。
+    () async {
+      final erased = painted(8, 8, 0xFFFFFF, {10: 0xFF0000});
+      final original = _solid(8, 8, 0xFFFFFF);
+      return original.pixels[10 * 4 + 1] == erased.pixels[10 * 4 + 1];
+    },
+    () => '绿=首次修图输出=新擦图 / 故障=输出原图（抹字白做）',
+  );
+
+  probe(
+    'blockrepair.merge_rejects_mismatched_geometry',
+    // 绿=现有底图尺寸不一致 → null（不许拉伸套图）。
+    () async {
+      final out = mergeRepairedInpainted(
+        erasedBlock: _solid(8, 8, 0xFFFFFF),
+        blockMask: Uint8List(64),
+        existingInpainted: _solid(4, 4, 0xEEEEEE),
+      );
+      return out == null;
+    },
+    // 故障=同尺寸合法输入也返回 null。
+    () async {
+      final out = mergeRepairedInpainted(
+        erasedBlock: _solid(8, 8, 0xFFFFFF),
+        blockMask: Uint8List(64),
+        existingInpainted: _solid(8, 8, 0xEEEEEE),
+      );
+      return out == null;
+    },
+    () => '绿=尺寸不符 → null / 故障=同尺寸也 null',
+  );
+
+  probe(
+    'blockrepair.union_keeps_existing_only_pixels',
+    // 绿=并集保留"只在旧掩膜里"的像素（=其他块的抹字记录）。
+    () async {
+      final existing = Uint8List(64)
+        ..[1] = 255
+        ..[2] = 255;
+      final added = Uint8List(64)
+        ..[2] = 255
+        ..[3] = 255;
+      final u = unionMasks(added: added, existing: existing);
+      return u[1] == 255 && u[2] == 255 && u[3] == 255 && u[4] == 0;
+    },
+    // 故障=覆盖式并集（后写覆盖）→ 旧块独占的像素 1 被清零。
+    () async {
+      final existing = Uint8List(64)
+        ..[1] = 255
+        ..[2] = 255;
+      final added = Uint8List(64)
+        ..[2] = 255
+        ..[3] = 255;
+      final overwrite = Uint8List.fromList(added); // 无视 existing
+      return overwrite[1] == 255 && overwrite[3] == 255;
+    },
+    () => '绿=旧块独占像素保留 / 故障=覆盖式把旧块记录清掉',
+  );
+
+  probe(
+    'blockrepair.subtract_and_intersect_are_scoped',
+    // subtract: {1,2} - {2} = {1}；intersect: 外扩检测 ∩ 实际抹除 = 只盖真抹的。
+    () async {
+      final from = Uint8List(64)
+        ..[1] = 255
+        ..[2] = 255;
+      final removed = Uint8List(64)..[2] = 255;
+      final s = subtractMasks(from: from, removed: removed);
+      if (s[1] != 255 || s[2] != 0) return false;
+
+      // 复原场景：位置 4 的字形属于交叠的另一个块、没被抹过（不在 existing
+      // 里）；位置 5 两者都在。取交后 4 必须为 0，5 必须为 255。
+      final dilated = Uint8List(64)
+        ..[4] = 255
+        ..[5] = 255;
+      final erased = Uint8List(64)..[5] = 255;
+      final hit = intersectMasks(dilated, erased);
+      return hit[4] == 0 && hit[5] == 255;
+    },
+    // 故障=复原直接用外扩掩膜（不取交）→ 交叠块位置 4 也被盖回。
+    () async {
+      final dilated = Uint8List(64)
+        ..[4] = 255
+        ..[5] = 255;
+      final erased = Uint8List(64)..[5] = 255;
+      final hit = intersectMasks(dilated, erased);
+      return hit[4] == 255; // 正确实现下必须为 false
+    },
+    () => '绿=扣除精准/取交只盖真抹像素 / 故障=误伤交叠块或扣多了',
+  );
+
   // ── 4 · S-N1 · 裁剪窗口 ──────────────────────────────────────────────
 
   probe(
@@ -780,19 +1038,55 @@ Future<void> runP7Checks(
   probe(
     'wiring.result_still_renders_in_a_second_pass',
     // 🔴 顺序契约：`result/` 以 `inpainted/` 为**输入**位图，与它放进同一次
-    // 并发调用就会读到还没写出来的底图。
+    // 并发调用就会读到还没写出来的底图。这个契约现在有**五处**落点必须同时
+    // 成立：整页修图（`_regenerateResults` 的 inLayeredOrder 两阶段）+ 单块
+    // 修图 + 单块复原（都是先写 inpainted 再 await _rerenderResultPage）+
+    // B-5 跨页块修图 / 跨页块复原（逐页循环，同样先写后画；复原的 inpainted
+    // 落盘在 `_restoreSpanParts` 里，调用点仍在其后）。
     () async {
       final studio = code(_studioPath);
-      final bases = studio.indexOf('ProjectArtifactKind.inpainted');
-      final result = studio.indexOf('ProjectArtifactKind.result');
+      bool basesBeforeResult(String text) {
+        final bases = text.indexOf('ProjectArtifactKind.inpainted');
+        final result = text.indexOf('ProjectArtifactKind.result');
+        return bases > 0 && result > bases;
+      }
+
+      // (1) 整页修图：方法体窗口内 inpainted 先于 result。
+      final start = studio.indexOf(
+        'Future<(int, int)> _regenerateResults',
+      );
+      final end = studio.indexOf('void _openGlossary()', start);
+      if (start < 0 || end < 0) return false;
+      if (!basesBeforeResult(studio.substring(start, end))) return false;
+
+      // (2) 块级四条路径（单块修图 / 单块复原 / B-5 跨页修图 / B-5 跨页复原）：
+      // 每次重画调用与上一次调用之间必须夹着一次 inpainted 落盘
+      //（=底图先写、result 后画），且一共四次调用。
+      const call = 'await _rerenderResultPage(project, root, pageKey);';
+      var from = 0;
+      var calls = 0;
+      while (true) {
+        final at = studio.indexOf(call, from);
+        if (at < 0) break;
+        final prevInpainted =
+            studio.lastIndexOf('ProjectArtifactKind.inpainted', at);
+        final prevCall = studio.lastIndexOf(call, at - 1);
+        if (prevInpainted < 0 || prevInpainted < prevCall) return false;
+        calls++;
+        from = at + call.length;
+      }
+      return calls == 4;
+    },
+    // 故障路径 = 合成的反序片段（result 在前、inpainted 在后），同一判据必须
+    // 判它为 false —— 否则判据对"写反顺序"毫无分辨力。
+    () async {
+      final faulty = 'write ProjectArtifactKind.result first, '
+          'then ProjectArtifactKind.inpainted';
+      final bases = faulty.indexOf('ProjectArtifactKind.inpainted');
+      final result = faulty.indexOf('ProjectArtifactKind.result');
       return bases > 0 && result > bases;
     },
-    () async {
-      // 故障路径 = 只剩一次调用（result 在 bases 之前或与之同批）。
-      final studio = code(_studioPath);
-      return !studio.contains('ProjectArtifactKind.inpainted');
-    },
-    () => '绿=result 排在 inpainted 之后的第二次调用 / 故障=inpainted 缺席',
+    () => '绿=三处落点都是 inpainted 先 / result 后 / 故障=反序片段也判通过',
   );
 
   probe(

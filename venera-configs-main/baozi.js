@@ -5,7 +5,25 @@ class Baozi extends ComicSource {
   // 唯一标识符
   key = "baozi";
 
-  version = "1.2.0";
+  // 🔴 2026-10-11 (Mangrove P39) 清理死域名：
+  // - `bzmgcn.com` / `baozimhcn.com` / `cnbzmg.com` 现已 302 重定向到官方
+  //   `www.baozimh.com/__gatekeeper_challenge`（Cloudflare 硬挑战，实测 cn.cnbzmg.com
+  //   /cn.bzmgcn.com/cn.baozimhcn.com 全部 403），是「包子每章卡在验证」的元凶；
+  // - `asgb-a3.bzcdn.net` TLS 证书主体不匹配（SEC_E_WRONG_PRINCIPAL）。
+  // 存活镜像 webmota/kukuc/twmanga/dinnerku 与图床 s1.bzcdn / s2.bzcdn 等均实测
+  // 200 且**无 CF 挑战**（P39 取证），固优先使用。保留上游 PoW 挑战降级逻辑。
+  //
+  // 🔴 2026-10-11 P41：镜像长期"200 但拿不到图"的真根因不是网络/CF，而是站点
+  // Vue SSR + AMP 改版后章节页图片 DOM 变为
+  // `.comic-contain div[data-v] > amp-img.comic-contain__item[data-src]`，
+  // 旧解析器选择器 `.comic-contain > .chapter-img` 0 命中 → 误兜底 appcn。
+  // loadEp::parseImages 已改为后代选择器直取 .comic-contain__item（新旧通吃）。
+  //
+  // 🔴 2026-10-11 P42：站点把**每个章节再分页**（标题形如 "第1话(1/4)"，
+  // URL 依次 0_<ep>.html / 0_<ep>_2.html …，每页约 50 张且相邻页有重叠）。
+  // 旧实现只取第一页 ⇒ 每章恒定 50 张（用户复测："被限制成 50 页"）。
+  // loadEp 已改为逐页抓取 + 按图片 URL 去重保序。
+  version = "1.2.4";
 
   minAppVersion = "1.0.0";
 
@@ -30,8 +48,6 @@ class Baozi extends ComicSource {
         { value: "kukuc.co" },
         { value: "twmanga.com" },
         { value: "dinnerku.com" },
-        { value: "bzmgcn.com" },
-        { value: "baozimhcn.com" },
       ],
       default: "webmota.com",
     },
@@ -40,7 +56,6 @@ class Baozi extends ComicSource {
       type: "select",
       options: [
         { value: "s1.bzcdn.net" },
-        { value: "asgb-a3.bzcdn.net" },
         { value: "as-rsa1-usla.baozicdn.com" },
         { value: "as.baozimh.com" },
         { value: "s1.baozicdn.com" },
@@ -109,7 +124,31 @@ class Baozi extends ComicSource {
     return this.loadSetting("domains") || this.settings.domains.default;
   }
 
-  // 有序的网页域名候选: 选中域名 → 上次可用域名 → 其余配置域名
+  // 最近触发过验证挑战(PoW)的域名 → 30 分钟内降级。
+  // 目的: 验证一次之后, 后续章节直接走可用域, 不再每章都先吃一次 2 分钟挑战。
+  get _challengedDomains() {
+    try {
+      return this.loadData("challenged_domains") || {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  _markChallenged(domain) {
+    if (!domain) return;
+    try {
+      const map = this._challengedDomains;
+      map[domain] = Date.now();
+      this.saveData("challenged_domains", map);
+    } catch (e) {}
+  }
+
+  _isChallenged(domain) {
+    const ts = this._challengedDomains[domain];
+    return !!ts && Date.now() - ts < 30 * 60 * 1000;
+  }
+
+  // 有序的网页域名候选: 上次可用域名 → 选中域名 → 其余未挑战域 → 被挑战域
   get webDomains() {
     const selected = this.selectedDomain;
     let rest = this.settings.domains.options
@@ -120,10 +159,15 @@ class Baozi extends ComicSource {
       this.autoFailover && this._goodDomain && this._goodDomain !== selected
         ? this._goodDomain
         : null;
-    let ordered = [selected];
-    if (good) ordered.push(good);
-    ordered.push(...rest.filter((d) => d !== good));
-    return ordered;
+    const fresh = (d) => !this._isChallenged(d);
+    let ordered = [];
+    if (good && fresh(good)) ordered.push(good);
+    if (fresh(selected)) ordered.push(selected);
+    ordered.push(...rest.filter((d) => d !== good && fresh(d)));
+    // 被挑战过的域排最后: 真没别的可用时再试
+    if (!fresh(selected)) ordered.push(selected);
+    ordered.push(...rest.filter((d) => d !== good && !fresh(d)));
+    return [...new Set(ordered)];
   }
 
   // 与 webDomains 对应的完整 baseUrl 候选
@@ -153,6 +197,9 @@ class Baozi extends ComicSource {
     }
     // 自定义的"页面可达但内容为空/被风控"标记
     if (/domainblock/i.test(msg)) return true;
+    // 403+挑战被 Dart 侧包装成 CloudflareException：换下一个镜像域名
+    // （挑战域的 cookie 与本域不互通，重试本域只会再吃一次挑战）。
+    if (/cloudflare/i.test(msg)) return true;
     return /timeout|timed out|connection (?:reset|closed|refused|aborted|closed by peer)|peer closed|broken pipe|network error|failed to fetch|fetch failed|unexpected.?eof|socket (?:exception|hangu|error)|getaddrinfo|host lookup|name or service not known|errnoexception|winerror|10054|10061|11001/i.test(
       msg
     );
@@ -172,6 +219,10 @@ class Baozi extends ComicSource {
         return result;
       } catch (e) {
         lastError = e;
+        // 挑战(PoW)过的域名降级, 后续请求直接走可用域
+        if (/cloudflare|challenge/i.test(String((e && e.message) || e))) {
+          this._markChallenged(domain);
+        }
         if (i < bases.length - 1 && this._isFallbackError(e)) {
           continue;
         }
@@ -643,15 +694,23 @@ class Baozi extends ComicSource {
     },
     loadEp: async (comicId, epId) => {
       // 网页阅读页与 App 页 DOM 同构, 使用同一解析器
+      // 🔴 2026-10-11 (Mangrove P41) 站点 Vue SSR + AMP 改版:
+      //   .comic-contain
+      //     └ div[data-v]            (新增的包裹层, 旧版没有)
+      //         └ amp-img#chapter-img-N-N.comic-contain__item[data-src]
+      //   旧选择器 ".comic-contain > .chapter-img" 同时假设了「直接子节点」
+      //   和「chapter-img 是 class」, 改版后双重不匹配 → HTTP 200 却解析出
+      //   0 张图 → 四个镜像全抛 DomainBlock → 误兜底 appcn → Cloudflare 卡死
+      //   (P41 运行时埋点实锤, curl 同页 50 图正常)。
+      //   新写法直接选容器后代的 .comic-contain__item 取 data-src,
+      //   对新旧(节点是 amp-img 或内层包裹 item)两种 DOM 都成立。
       const parseImages = (body) => {
         const doc = new HtmlDocument(body);
         const images = [];
-        doc.querySelectorAll(".comic-contain > .chapter-img").forEach(
+        doc.querySelectorAll(".comic-contain .comic-contain__item").forEach(
           (imgNode) => {
-            const imgUrl =
-              imgNode.querySelector(".comic-contain__item")?.attributes?.[
-                "data-src"
-              ];
+            const attrs = imgNode.attributes || {};
+            const imgUrl = attrs["data-src"] || attrs["src"];
             if (imgUrl) {
               images.push(this._applyImageSettings(imgUrl));
             }
@@ -660,21 +719,77 @@ class Baozi extends ComicSource {
         return images;
       };
 
+      // 🔴 2026-10-11 (Mangrove P42) 站点把**每个章节再分页**:
+      //   章节页标题形如 "第1话(1/4)", URL 依次 0_<ep>.html / 0_<ep>_2.html …
+      //   每页约 50 张, 且相邻页**有重叠**(part1 = 1..50, part2 = 47..100)。
+      //   旧实现只取第一页 → 每章恒定 50 张, 用户看到"被限制成 50 页"。
+      //   现改为逐页抓取后按图片 URL **去重保序**, 拿回整章。
+      const pagerOf = (body) => {
+        const t = String(body).match(/<title>([^<]*)<\/title>/);
+        if (!t) return null;
+        const m = t[1].match(/[（(](\d+)\s*\/\s*(\d+)[）)]/);
+        if (!m) return null;
+        return { current: parseInt(m[1], 10), total: parseInt(m[2], 10) };
+      };
+      const pagePath = (page) =>
+        page === 1 ? `0_${epId}.html` : `0_${epId}_${page}.html`;
+
+      // getPage(page) 返回该页 {status, body}(取不到返回 null)。
+      // 首页无图 → 视作域名被风控(抛 DomainBlock 触发换域);
+      // 已知总页数时中间页失败 → 同样抛 DomainBlock 触发换域, 避免静默截断。
+      const collectPages = async (getPage) => {
+        const images = [];
+        const seen = new Set();
+        let total = null;
+        for (let page = 1; page <= 200; page++) {
+          const res = await getPage(page);
+          if (!res || res.status !== 200) {
+            if (page === 1) {
+              throw `Invalid status code: ${res ? res.status : "null"}`;
+            }
+            if (total != null && page <= total) {
+              throw new Error(
+                `DomainBlock: chapter page ${page} status ${res ? res.status : "null"}`
+              );
+            }
+            break;
+          }
+          const pager = pagerOf(res.body);
+          if (pager) {
+            // 越界页被站点钳制到末页(标题变成 "(5/4)"), 直接结束
+            if (pager.current > pager.total) break;
+            if (total == null) total = pager.total;
+          }
+          let added = 0;
+          for (const url of parseImages(res.body)) {
+            if (seen.has(url)) continue;
+            seen.add(url);
+            images.push(url);
+            added++;
+          }
+          if (page === 1) {
+            if (images.length === 0) {
+              throw new Error("DomainBlock: empty chapter images");
+            }
+          } else if (added === 0) {
+            // 没有分页标记的站点形态下, 靠"本页没有新图"判断到底
+            break;
+          }
+          if (total != null && page >= total) break;
+        }
+        return images;
+      };
+
       // 1) 优先走网页阅读页: 随主域名自动故障转移, 无需 Cloudflare 验证
       //    https://<lang>.<镜像>/comic/chapter/<comicId>/0_<epId>.html
       try {
         const images = await this.withDomains(async (base) => {
-          const res = await Network.get(
-            `${base}/comic/chapter/${comicId}/0_${epId}.html`
-          );
-          if (res.status !== 200) {
-            throw `Invalid status code: ${res.status}`;
-          }
-          const list = parseImages(res.body);
-          if (list.length === 0) {
-            throw new Error("DomainBlock: empty chapter images");
-          }
-          return list;
+          return await collectPages(async (page) => {
+            const res = await Network.get(
+              `${base}/comic/chapter/${comicId}/${pagePath(page)}`
+            );
+            return { status: res.status, body: res.body };
+          });
         });
         return { images: images };
       } catch (webError) {
@@ -683,12 +798,14 @@ class Baozi extends ComicSource {
         if (!this._isFallbackError(webError)) {
           throw webError;
         }
-        const appUrl = `https://appcn.baozimh.com/baozimhapp/comic/chapter/${comicId}/0_${epId}.html`;
-        const res = await Network.get(appUrl);
-        if (res.status !== 200) {
-          throw `Invalid status code: ${res.status}`;
-        }
-        return { images: parseImages(res.body) };
+        const appBase = "https://appcn.baozimh.com/baozimhapp";
+        const images = await collectPages(async (page) => {
+          const res = await Network.get(
+            `${appBase}/comic/chapter/${comicId}/${pagePath(page)}`
+          );
+          return { status: res.status, body: res.body };
+        });
+        return { images: images };
       }
     },
 

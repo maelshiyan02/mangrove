@@ -677,31 +677,20 @@ abstract mixin class _ComicPageActions {
 
   void showMoreActions() {
     var context = App.rootContext;
-    final translationEnabled = ImageTranslationService.isEnabledForComic(
-      comic.id,
-      comic.sourceKey,
-    );
+    // 「翻译这一章」的真相是**绑定表**（`studioReaderBindings[cid@src@eid]`），
+    // 与阅读设置里那个开关同源 —— 不是旧的那枚按漫画布尔（它让"设置说开着、绑定早
+    // 没了"的控件在按下之前就在说谎）。详情页没有"当前章"上下文，取第一本已下载
+    // 章节作为代表章。
+    final translationOn = _comicTranslationBound();
     showMenuX(context, Offset(context.width - 16, context.padding.top), [
-      // Per-comic AI translation switch. Toggling notifies the service, which
-      // the detail page listens to, so the pre-translate button appears/hides
-      // in sync (when the engine is also ready).
       MenuEntry(
         icon: Icons.translate_rounded,
-        text: translationEnabled
-            ? "Disable AI translation".tl
-            : "Enable AI translation".tl,
-        color: translationEnabled ? context.colorScheme.primary : null,
+        text: translationOn
+            ? "Disable translation".tl
+            : "Translate this chapter".tl,
+        color: translationOn ? context.colorScheme.primary : null,
         onClick: () {
-          ImageTranslationService.setEnabledForComic(
-            comic.id,
-            comic.sourceKey,
-            !translationEnabled,
-          );
-          context.showMessage(
-            message: translationEnabled
-                ? "AI translation disabled".tl
-                : "AI translation enabled".tl,
-          );
+          unawaited(_toggleComicTranslation(!translationOn));
         },
       ),
       // Only offered when this comic actually has repeats: a chapter list
@@ -850,6 +839,72 @@ abstract mixin class _ComicPageActions {
         ),
       MenuEntry(icon: Icons.block, text: "Block".tl, onClick: blockThisComic),
     ]);
+  }
+
+  /// 详情页没有"当前章"上下文（阅读设置里那个开关绑定的是具体某一章）。
+  /// 这里取**第一本已下载章节**作为代表章去查/写绑定表 —— 菜单只关心"这本漫画有没有
+  /// 开过翻译"，不要求精确到某一页。BT 工程回落旧按漫画布尔（它的译文来自工程本身）。
+  bool _comicTranslationBound() {
+    final cid = comic.id;
+    final sourceKey = comic.sourceKey;
+    if (BtProjectManager.isBtComic(cid)) {
+      return ImageTranslationService.isEnabledForComic(cid, sourceKey);
+    }
+    final local = LocalManager().find(cid, comic.comicType);
+    if (local == null || local.downloadedChapters.isEmpty) return false;
+    final eid = local.downloadedChapters.first;
+    return StudioReaderStore.bindingFor(
+          cid: cid,
+          sourceKey: sourceKey,
+          eid: eid,
+        ) !=
+        null;
+  }
+
+  /// 把这一章排进/退出工作室管线（与阅读设置里的开关同源）。
+  ///
+  /// 打开只等"入队"这步（建工程 + 写绑定 + 排任务），跑的过程在任务列表里看、在那里
+  /// 取消。关 = 取消在跑的任务 + 解绑，**不删工程、不删产物**（那是用户在工作室里的
+  /// 劳动成果，开关只表达"现在不读它"）。
+  Future<void> _toggleComicTranslation(bool value) async {
+    final cid = comic.id;
+    final sourceKey = comic.sourceKey;
+    if (BtProjectManager.isBtComic(cid)) {
+      ImageTranslationService.setEnabledForComic(cid, sourceKey, value);
+      appdata.saveData();
+      update();
+      return;
+    }
+    final local = LocalManager().find(cid, comic.comicType);
+    if (local == null || local.downloadedChapters.isEmpty) {
+      App.rootContext.showMessage(
+        message: "No downloaded chapter to translate".tl,
+      );
+      return;
+    }
+    final eid = local.downloadedChapters.first;
+    if (value) {
+      final status = await StudioChapterQueue.enqueue(
+        cid: cid,
+        sourceKey: sourceKey,
+        eid: eid,
+        title: local.title,
+        comicType: comic.comicType,
+      );
+      App.rootContext.showMessage(message: studioEnqueueMessage(status));
+    } else {
+      final canceled = StudioChapterQueue.cancelIfRunning(
+        cid: cid,
+        sourceKey: sourceKey,
+      );
+      StudioChapterQueue.unbind(cid: cid, sourceKey: sourceKey, eid: eid);
+      App.rootContext.showMessage(
+        message: canceled
+            ? "Translation canceled".tl
+            : "AI translation disabled".tl,
+      );
+    }
+    update();
   }
 
   /// Block entry for the detail page. The list long-press menu has one too, but

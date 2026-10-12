@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:mangrove/foundation/log.dart';
+
 import 'project.dart';
 import 'project_io.dart';
 import 'project_writer.dart';
@@ -603,6 +605,34 @@ abstract final class ProjectBootstrap {
       );
       copied = copy.copied;
       missing = copy.missing;
+      // 🔴 封面优先用**原漫画自带的封面**（`comicDirectory/cover.<ext>`），而不是
+      // 复制好的第一页 —— 工程封面该是"这一本"的封面，而章节第一页可能是扉页/
+      // 广告/版权页（P9 实测：龙女友两话工程因此都用了第一页当封面）。
+      // 原漫画没有封面时才回落到第一页（老行为）。
+      //
+      // 落点仍是工程根 `root`：`BtProjectManager.coverPathFor` 现在**两处都查**
+      // （`source/` 与工程根），所以新老工程都能命中，无需迁移文件。
+      final comicCover = comicCoverPathIn(plan.comicDirectory);
+      if (comicCover != null) {
+        final dot = comicCover.lastIndexOf('.');
+        final ext = dot >= 0 ? comicCover.substring(dot) : '';
+        try {
+          await File(comicCover).copy('$root/cover$ext');
+        } catch (e, s) {
+          Log.error('ProjectBootstrap', 'comic cover copy failed: $e', s);
+        }
+      } else if (copied.isNotEmpty) {
+        final firstKey = copied.first;
+        final dot = firstKey.lastIndexOf('.');
+        final ext = dot >= 0 ? firstKey.substring(dot) : '';
+        final coverFrom = File('$sourceRoot/$firstKey');
+        final coverTo = File('$root/cover$ext');
+        try {
+          await coverFrom.copy(coverTo.path);
+        } catch (e, s) {
+          Log.error('ProjectBootstrap', 'cover image copy failed: $e', s);
+        }
+      }
     }
 
     final project = TranslationProject.buildFrom(
@@ -630,6 +660,24 @@ abstract final class ProjectBootstrap {
       project: project,
       report: report,
     );
+  }
+
+  /// 原漫画自带的封面（`comicDirectory/cover.<ext>`）；没有则 null。
+  ///
+  /// 🔴 漫画名普遍太长，卡片上要靠**封面图像**来认书，所以工程封面必须是
+  /// "这一本"的封面，而不是复制进来的某一页。抽成函数而不是内联在 `create`
+  /// 里，是为了让"原封面优先于第一页"这条规则能被 headless 单独打红 ——
+  /// 内联的话它只能跟着整次 `create` 一起被验，故障定位不了。
+  ///
+  /// 与 `BtProjectManager.coverKeyFor` 同序同集合（jpg/jpeg/png/webp）：两处
+  /// 各写一份扩展名列表迟早会漂，漂的后果是"能复制但读不到"。
+  static String? comicCoverPathIn(String comicDirectory) {
+    if (comicDirectory.isEmpty) return null;
+    for (final ext in const ['jpg', 'jpeg', 'png', 'webp']) {
+      final path = '$comicDirectory/cover.$ext';
+      if (File(path).existsSync()) return path;
+    }
+    return null;
   }
 
   /// 把一个**已经存在**的工程从"引用 `downloads/` 原图"迁到"自带

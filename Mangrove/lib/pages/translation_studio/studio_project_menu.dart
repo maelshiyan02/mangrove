@@ -52,6 +52,7 @@ import 'package:mangrove/foundation/comic_card_kind.dart';
 import 'package:mangrove/foundation/context.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
+import 'package:mangrove/foundation/open_folder.dart';
 import 'package:mangrove/foundation/translation_project/project_bootstrap.dart';
 import 'package:mangrove/foundation/translation_project/studio_project_entry.dart';
 import 'package:mangrove/foundation/translation_project/studio_reader.dart';
@@ -116,6 +117,7 @@ class StudioProjectOutcome {
     required this.missingSources,
     required this.reusedExisting,
     this.listed = true,
+    this.projectJsonPath = '',
   });
 
   /// 建好的工程在本地库里的 id（`bt_<hash>`）。
@@ -137,6 +139,28 @@ class StudioProjectOutcome {
   /// 不说的话用户看到的是"工程没找到，请重扫工程根"，而真正该做的是去设置里
   /// 把那个目录加进去。
   final bool listed;
+
+  /// 工程的 `imgtrans_*.json` 路径。
+  ///
+  /// 「创建成功」弹窗从它派生两样东西：工程根目录（显示给用户 + 【打开文件夹】）
+  /// 与"磁盘真的就绪"的判据。**只存 json 路径、不另外存目录** —— 目录是派生的，
+  /// 存两份迟早会不一致，而不一致的那一处恰好决定跳转按钮亮不亮。
+  final String projectJsonPath;
+}
+
+/// 工程根目录（`json` 的父目录）。取不到返回空串。
+///
+/// 🔴 放在**文件级**而不是某个 State 类里：三步向导与「创建成功」弹窗都要用它，
+/// 而它们是**两个不同的类** —— 类内的私有静态方法只能经类名访问，跨类调不到。
+/// 放文件级，两处都直接调。
+///
+/// 与 `_projectDirectoryName` 切的是同一份 `jsonPath`，只是切点不同 —— 两处各切
+/// 一遍字符串迟早会漂（其中一处漏掉 `replaceAll` 就会在 Windows 上拿到半截带
+/// `\` 的路径），所以两边的注释刻意互相指着。
+String _projectRootOf(String jsonPath) {
+  final path = jsonPath.replaceAll('\\', '/');
+  final slash = path.lastIndexOf('/');
+  return slash <= 0 ? '' : path.substring(0, slash);
 }
 
 /// 打开三步向导；用户确认创建后跳进工作室。
@@ -152,21 +176,173 @@ Future<void> createStudioProject(
     builder: (_) => _StudioProjectDialog(presetComicId: presetComicId),
   );
   if (outcome == null || !context.mounted) return;
+  // 🔴 建完**不**自动跳工作室：跳转那一刻工作室那侧的工程登记还没跟上，用户看到
+  // 的是"没找到工程"的空白（实测：退出重进才好）。改成先落地「创建成功」窗 ——
+  // 工程落在哪儿、有几页没复制上、要不要现在过去，全摆在同一屏里由用户自己按。
+  // 等他按下【打开翻译工程】时，工程早已落盘并被 `scan` 登记。
+  final openProject = await showDialog<bool>(
+    context: context,
+    builder: (_) => _StudioProjectCreatedDialog(outcome: outcome),
+  );
+  if (openProject != true || !context.mounted) return;
   await context.to(() => TranslationStudioPage(comicId: outcome.comicId));
-  final message = outcome.reusedExisting
-      ? 'Opened the existing project: @a'.tlParams({'a': outcome.projectName})
-      : 'Project created: @a'.tlParams({'a': outcome.projectName});
-  App.rootContext.showMessage(message: message);
-  if (!outcome.listed) {
-    App.rootContext.showMessage(
-      message: 'The project is outside the studio workspace root, so the studio list will not show it. Add that folder in Settings.'.tl,
-    );
+}
+
+/// 创建成功之后的落地窗 —— **不**自动跳进工作室。
+///
+/// 🔴 为什么不直接 `context.to(TranslationStudioPage)`：跳转那一刻工作室那侧的
+/// 工程登记还没跟上，`_load()` 拿不到工程就显示"没找到"（用户实测：退出重进才
+/// 好）。把"要不要过去"交还给用户，等按钮被按下时工程早已落盘并被登记。
+/// 顺带把工程落在哪个文件夹说清楚并给一个【打开文件夹】—— 这在"工程根不在
+/// `btProjectRoot`"那类排查里永远是第一步动作。
+class _StudioProjectCreatedDialog extends StatefulWidget {
+  const _StudioProjectCreatedDialog({required this.outcome});
+
+  final StudioProjectOutcome outcome;
+
+  @override
+  State<_StudioProjectCreatedDialog> createState() =>
+      _StudioProjectCreatedDialogState();
+}
+
+class _StudioProjectCreatedDialogState
+    extends State<_StudioProjectCreatedDialog> {
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_verify());
   }
-  if (outcome.missingSources > 0) {
-    App.rootContext.showMessage(
-      message: '@a page(s) could not be copied'.tlParams({
-        'a': '${outcome.missingSources}',
-      }),
+
+  /// 【打开翻译工程】的判据：**磁盘真的就绪**才亮。
+  ///
+  /// 三条同时成立才算数，少一条都不亮 —— 亮着却跳进一个空页面比不亮更糟：
+  /// * 工程 json 在（落盘完成）；
+  /// * 本地库登记了它（`listed`）—— 没登记的话跳过去就是"没找到工程"；
+  /// * 没有复制失败的页（`missingSources == 0`）—— 缺页在工作室里表现为
+  ///   "没有可读页图"，与"页面本来就是空的"长得一样。
+  Future<void> _verify() async {
+    final outcome = widget.outcome;
+    final jsonPath = outcome.projectJsonPath;
+    final ready = outcome.listed &&
+        outcome.missingSources == 0 &&
+        jsonPath.isNotEmpty &&
+        File(jsonPath).existsSync();
+    if (!mounted) return;
+    setState(() => _ready = ready);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final outcome = widget.outcome;
+    final directory = _projectRootOf(outcome.projectJsonPath);
+    final colorScheme = Theme.of(context).colorScheme;
+    final notes = <String>[
+      if (!outcome.listed)
+        'The project is outside the studio workspace root, so the studio list will not show it. Add that folder in Settings.'
+            .tl,
+      if (outcome.missingSources > 0)
+        '@a page(s) could not be copied'
+            .tlParams({'a': '${outcome.missingSources}'}),
+    ];
+    return Dialog(
+      child: SizedBox(
+        width: 460,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.check_circle_outline, color: colorScheme.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      outcome.reusedExisting
+                          ? 'Opened the existing project'.tl
+                          : 'Project created'.tl,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                outcome.projectName,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+              // 工程落在哪儿 —— 用户排查"工作室为什么看不到它"的第一步动作。
+              Text(
+                'Project folder'.tl,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      directory.isEmpty ? '—' : directory,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: directory.isEmpty
+                        ? null
+                        : () => openFolderPath(directory),
+                    icon: const Icon(Icons.folder_open_outlined, size: 16),
+                    label: Text('Open folder'.tl),
+                  ),
+                ],
+              ),
+              if (notes.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                for (final note in notes)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      note,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: colorScheme.error,
+                      ),
+                    ),
+                  ),
+              ],
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => context.pop(false),
+                    child: Text('Confirm'.tl),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton(
+                    // 🔴 未就绪就禁用，而不是"跳过去再说" —— 跳过去看到空页面
+                    // 会被当成又一个 bug，而这个状态其实完全可判定。
+                    onPressed: _ready ? () => context.pop(true) : null,
+                    child: Text('Open the translation project'.tl),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -444,6 +620,7 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
         // 🔴 登记不到就**必须**上报：工程根不在 `btProjectRoot` 里时，磁盘上
         // 一切正常而工作室看不到它（见 [StudioProjectOutcome.listed]）。
         listed: BtProjectManager().projectFor(comicId) != null,
+        projectJsonPath: binding.jsonPath,
       ),
     );
   }

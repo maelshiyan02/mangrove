@@ -45,6 +45,12 @@ import 'package:mangrove/headless_p6_checks.dart';
 import 'package:mangrove/headless_p7_checks.dart';
 import 'package:mangrove/headless_p8_checks.dart';
 import 'package:mangrove/headless_p9_checks.dart';
+import 'package:mangrove/headless_p10_checks.dart';
+import 'package:mangrove/headless_p11_checks.dart';
+import 'package:mangrove/headless_p12_checks.dart';
+import 'package:mangrove/headless_p13_checks.dart';
+import 'package:mangrove/headless_p14_checks.dart';
+import 'package:mangrove/headless_p15_checks.dart';
 import 'package:mangrove/headless_pipeline_check.dart';
 import 'package:mangrove/headless_script_checks.dart';
 
@@ -2628,6 +2634,23 @@ Future<void> runBlockOpsCheck(List<String> args, int commandIndex) async {
       exit(1);
     }
     await runP7Checks(check, packageRoot: packageRoot);
+    // A-1（缩略图栏）的纯逻辑断言并入同一命令 —— 与 P7 共用"包根 + 源码扫描"
+    // 这一套。新增 5 条，基线随之 51 → 56。
+    await runP10Checks(check, packageRoot: packageRoot);
+    // B-1（缝发现与标记）的纯逻辑断言并入同一命令。新增 4 条，基线 56 → 60。
+    await runP11Checks(check);
+    // B-3/B-4（文字块小组 + 组合翻译分配）的纯逻辑断言并入同一命令。
+    // 新增 13 条，基线 60 → 73。
+    await runP12Checks(check);
+    // B-2（跨页文本块 + 临时拼接 + 条带几何）的纯逻辑断言并入同一命令。
+    // 新增 8 条，基线 73 → 81。
+    await runP13Checks(check);
+    // B-2 步骤 b + B-5（6 条，基线 81 → 87）与 P30 长画布按页隐藏（5 条，
+    // 87 → 92）的纯逻辑断言都在 runP14Checks 内。
+    await runP14Checks(check);
+    // P31（WEBP 尺寸探测 / 解码调度状态机+名额账 / nest 组外框整体缩放）的
+    // 纯逻辑断言并入同一命令。新增 12 条（均带故障路径），基线 92 → 104。
+    await runP15Checks(check);
     passed = checks.every((c) => c['passed'] == true);
     await finish(
       passed,

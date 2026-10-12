@@ -7,7 +7,11 @@ class ReaderSettings extends StatefulWidget {
     this.comicId,
     this.comicSource,
     this.chapterEid,
+    this.onlyTranslation = false,
   });
+
+  /// 当为 true：本面板只展示 AI 翻译相关设置（翻译工作室用），其余阅读设置隐藏。
+  final bool onlyTranslation;
 
   final void Function(String key)? onChanged;
   final String? comicId;
@@ -71,13 +75,17 @@ class _ReaderSettingsState extends State<ReaderSettings> {
     setState(() => _translationBusy = true);
     var message = '';
     if (value) {
-      final comic = LocalManager().find(cid, ComicType.local);
+      // 🔴 类型从 sourceKey 重建（与 `StudioReaderLink.locate` 同一条规则），
+      // 不能写死 `ComicType.local` —— 从网络源下载到本地的漫画在 `local.db`
+      // 里的类型是非 0 的源类型整数，写死 local 会取不到 title、且任务被错标成本地。
+      final comicType = ComicType.fromKey(sourceKey);
+      final comic = LocalManager().find(cid, comicType);
       final status = await StudioChapterQueue.enqueue(
         cid: cid,
         sourceKey: sourceKey,
         eid: eid,
         title: comic?.title ?? '',
-        comicType: ComicType.local,
+        comicType: comicType,
       );
       message = studioEnqueueMessage(status);
     } else {
@@ -373,6 +381,9 @@ class _ReaderSettingsState extends State<ReaderSettings> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.onlyTranslation) {
+      return _buildTranslationOnly(context);
+    }
     final comicId = widget.comicId;
     final sourceKey = widget.comicSource;
     final key = "$comicId@$sourceKey";
@@ -1090,281 +1101,296 @@ class _ReaderSettingsState extends State<ReaderSettings> {
               ),
           ],
         ).toSliver(),
+        _buildTranslateThisChapterTile().toSliver(),
+      ],
+    );
+  }
+
+  /// 普通阅读设置里保留的"翻译这一章"开关（AI 翻译整块已迁往翻译工作室）。
+  ///
+  /// 与详情页【翻译这一章】、阅读器侧栏同源：真相是绑定表
+  /// `studioReaderBindings[cid@src@eid]`，不是 `appdata` 里的布尔。
+  Widget _buildTranslateThisChapterTile() {
+    if (widget.comicId == null || widget.comicSource == null) {
+      return ListTile(
+        title: Text("Translate this chapter".tl),
+        subtitle: Text(
+          "Enable this per comic from its detail page or the in-reader settings."
+              .tl,
+        ),
+        enabled: false,
+      );
+    }
+    return ListTile(
+      title: Text("Translate this chapter".tl),
+      subtitle: Text(
+        "Queues this chapter for the translation studio. The original shows until the finished pages are ready."
+            .tl,
+      ),
+      trailing: _translationBusy
+          ? const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Switch(
+              value: _isChapterTranslated(),
+              onChanged: (v) => _toggleChapterTranslation(v),
+            ),
+    );
+  }
+
+  /// AI 翻译设置整块（翻译工作室用）。`onlyTranslation` 模式下 `build` 直接返回它。
+  ///
+  /// 🔴 `comicSpecific` / `deviceSpecific` 决定 Source/Target/Text-removal 三个
+  /// `SelectSetting` 的存储作用域——普通阅读设置按当时的开关走，工作室则恒为
+  /// 按本漫画（工作室面对的就是某一个具体工程）。
+  Widget _buildTranslationOnly(BuildContext context) {
+    return SmoothCustomScrollView(
+      scrollbarTopPadding: context.padding.top + 56,
+      slivers: [
+        SliverAppbar(title: Text("Translation settings".tl)),
         _SettingsExpansionTile(
-          expansionKey: const PageStorageKey('readerTranslationGroup'),
+          expansionKey: const PageStorageKey('studioTranslationGroup'),
+          initiallyExpanded: true,
           icon: Icons.translate,
-          title: "AI Translation (experimental)".tl,
-          children: [
-            _CallbackSetting(
-              title: "How AI translation works".tl,
-              subtitle: "Setup and usage in plain language".tl,
-              actionTitle: "Help".tl,
-              callback: _showTranslationHelp,
-            ),
-            // 🔴 S9.5-b：这个开关的语义**变了**（`P6 §S9.5` 交付 1）。
-            //
-            //   旧：打开 = 翻开一页就**当场**翻译它（读时即时翻译，产物进
-            //       阅读器的 OCR 缓存，工作室看不见）。
-            //   新：打开 = **这一章入队工作室管线**（建/复用工程 → 跑检测/识别/
-            //       翻译 → 出 `result/`），阅读器只负责读**工程产物**。
-            //
-            // 所以开关的**真相是绑定表**（`studioReaderBindings[cid@src@eid]`），
-            // 不是 `appdata` 里的一个布尔。拿布尔当真相会出现"设置说开着、
-            // 绑定早就不在了"的开关 —— 一个按下之前就已经在说谎的控件。
-            if (widget.comicId != null && widget.comicSource != null)
-              ListTile(
-                title: Text("Translate this chapter".tl),
-                subtitle: Text(
-                  "Queues this chapter for the translation studio. The original shows until the finished pages are ready."
-                      .tl,
-                ),
-                trailing: _translationBusy
-                    ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Switch(
-                        value: _isChapterTranslated(),
-                        onChanged: (v) => _toggleChapterTranslation(v),
-                      ),
-              )
-            else
-              ListTile(
-                title: Text("Translate this chapter".tl),
-                subtitle: Text(
-                  "Enable this per comic from its detail page or the in-reader settings."
-                      .tl,
-                ),
-                enabled: false,
-              ),
-            SelectSetting(
-              title: "Translation engine".tl,
-              settingKey: TranslationEngines.settingKey,
-              help:
-                  "Online engines use your configured LLM provider or the keyless Google Translate endpoint. Offline engines run fully on this device after a one-time model download; pick one and install it under \"Translation models\". Classical Latin has no offline model and always uses an online engine."
-                      .tl,
-              optionTranslation: {
-                TranslationEngines.cloudLlmId:
-                    "Online (LLM / Google Translate)".tl,
-                TranslationEngines.nllb13b.id:
-                    "Offline · NLLB 1.3B — best quality (~1.9 GB)".tl,
-                TranslationEngines.nllb600m.id:
-                    "Offline · NLLB 600M — lightweight (~0.9 GB)".tl,
-                TranslationEngines.opusJaEn.id:
-                    "Offline · Opus-MT — Japanese to English (~110 MB)".tl,
-              },
-              onChanged: () {
-                TranslationModels.invalidateReadyCache();
-                setState(() {});
-                widget.onChanged?.call(TranslationEngines.settingKey);
-              },
-            ),
-            _CallbackSetting(
-              title: "LLM providers".tl,
-              subtitle: _activeProviderSubtitle(),
-              actionTitle: "Manage".tl,
-              callback: () async {
-                await context.to(() => const LlmProvidersPage());
-                if (mounted) setState(() {});
-              },
-            ),
-            _CallbackSetting(
-              title: "Translation prompt".tl,
-              subtitle: LlmPromptStore.isCustom ? "Custom".tl : "Built-in".tl,
-              actionTitle: "Edit".tl,
-              callback: () async {
-                await context.to(() => const TranslationPromptPage());
-                if (mounted) setState(() {});
-              },
-            ),
-            _CallbackSetting(
-              title: "Test translation".tl,
-              subtitle: "Check the endpoint with a sample line".tl,
-              actionTitle: "Test".tl,
-              callback: _testTranslation,
-            ),
-            SelectSetting(
-              title: "Source language".tl,
-              settingKey: "imageTranslationSource",
-              help:
-                  "Spanish and Latin share the English OCR model. Classical Latin cannot be translated by the offline NLLB engines — use an online engine for it."
-                      .tl,
-              optionTranslation: {
-                "auto": "Auto detect".tl,
-                "ja": "Japanese".tl,
-                "en": "English".tl,
-                "ko": "Korean".tl,
-                "zh": "Chinese".tl,
-                "es": "Spanish".tl,
-                "la": "Latin".tl,
-              },
-              onChanged: () {
-                setState(() {});
-                widget.onChanged?.call("imageTranslationSource");
-              },
-              comicId: isEnabledSpecificSettings ? widget.comicId : null,
-              comicSource: isEnabledSpecificSettings
-                  ? widget.comicSource
-                  : null,
-              useDeviceSettings: useDeviceSpecificSettings,
-            ),
-            SelectSetting(
-              title: "Target language".tl,
-              settingKey: "imageTranslationTarget",
-              optionTranslation: {
-                "zh": "Simplified Chinese".tl,
-                "zh-TW": "Traditional Chinese".tl,
-                "en": "English".tl,
-                "ja": "Japanese".tl,
-                "ko": "Korean".tl,
-                "fr": "French".tl,
-                "de": "German".tl,
-                "es": "Spanish".tl,
-                "ru": "Russian".tl,
-                "la": "Latin".tl,
-              },
-              onChanged: () {
-                setState(() {});
-                widget.onChanged?.call("imageTranslationTarget");
-              },
-              comicId: isEnabledSpecificSettings ? widget.comicId : null,
-              comicSource: isEnabledSpecificSettings
-                  ? widget.comicSource
-                  : null,
-              useDeviceSettings: useDeviceSpecificSettings,
-            ),
-            SelectSetting(
-              title: "Performance mode".tl,
-              settingKey: TranslationPerformanceConfig.settingKey,
-              optionTranslation: {
-                "saver": "Save resources (low memory)".tl,
-                "balanced": "Balanced (recommended)".tl,
-                "fast": "Fast (more battery)".tl,
-                "custom": "Custom".tl,
-              },
-              onChanged: () {
-                _setTranslationPreset(
-                  '${appdata.settings[TranslationPerformanceConfig.settingKey]}',
-                );
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.tune),
-              title: Text("Advanced settings".tl),
-              trailing: Icon(
-                _translationAdvanced ? Icons.expand_less : Icons.expand_more,
-              ),
-              onTap: () =>
-                  setState(() => _translationAdvanced = !_translationAdvanced),
-            ),
-            if (_translationAdvanced) ...[
-              SelectSetting(
-                title: "Text removal".tl,
-                settingKey: "imageTranslationInpaintMode",
-                help:
-                    "How the original text is removed before the translation is drawn. Smart erase reconstructs the background so no solid block covers the bubble; Color patch is the old opaque block."
-                        .tl,
-                optionTranslation: {
-                  "smart": "Smart erase".tl,
-                  "patch": "Color patch".tl,
-                },
-                onChanged: () {
-                  setState(() {});
-                  widget.onChanged?.call("imageTranslationInpaintMode");
-                },
-                comicId: isEnabledSpecificSettings ? widget.comicId : null,
-                comicSource: isEnabledSpecificSettings
-                    ? widget.comicSource
-                    : null,
-                useDeviceSettings: useDeviceSpecificSettings,
-              ),
-              _SliderSetting(
-                title: "Pages per pre-translation request".tl,
-                settingsIndex: "imageTranslationPreBatchPages",
-                interval: 1,
-                min: 1,
-                max: App.isDesktop ? 20 : 8,
-                onChanged: () {
-                  _markTranslationCustom("imageTranslationPreBatchPages");
-                },
-              ),
-              _SliderSetting(
-                title: "OCR parallelism (0 = auto)".tl,
-                settingsIndex: "imageTranslationOcrWorkers",
-                interval: 1,
-                min: 0,
-                max: App.isDesktop ? 6 : 2,
-                onChanged: () {
-                  _markTranslationCustom("imageTranslationOcrWorkers");
-                },
-              ),
-              _SliderSetting(
-                title: "Image download concurrency".tl,
-                settingsIndex: "imageTranslationImageConcurrency",
-                interval: 1,
-                min: 1,
-                max: App.isDesktop ? 6 : 3,
-                onChanged: () {
-                  _markTranslationCustom("imageTranslationImageConcurrency");
-                },
-              ),
-              _SliderSetting(
-                title: "Translation request concurrency".tl,
-                settingsIndex: "imageTranslationLlmConcurrency",
-                interval: 1,
-                min: 1,
-                max: App.isDesktop ? 4 : 3,
-                onChanged: () {
-                  _markTranslationCustom("imageTranslationLlmConcurrency");
-                },
-              ),
-            ],
-            _CallbackSetting(
-              title: "Translation models".tl,
-              subtitle: _translationModelsSubtitle(),
-              actionTitle: "Manage".tl,
-              callback: () => context.to(
-                () => TranslationModelsPage(sourceLang: _effectiveSourceLang()),
-              ),
-            ),
-            _CallbackSetting(
-              title: "Clear translation results".tl,
-              subtitle:
-                  "Deletes all stored page translations and rendered images. Language and glossary learned per comic are kept."
-                      .tl,
-              actionTitle: "Clear".tl,
-              // Confirm first: every cleared page costs tokens to translate
-              // again, and the button sits next to ones that only navigate.
-              callback: () => showConfirmDialog(
-                context: App.rootContext,
-                title: "Clear translation results".tl,
-                content:
-                    "Deletes every stored page translation and rendered image. Translating them again will spend API tokens."
-                        .tl,
-                btnColor: context.colorScheme.error,
-                onConfirm: () async {
-                  var removed = await ImageTranslationService.instance
-                      .clearAllTranslationCache();
-                  // Also drop the pre-translation status the chapter picker
-                  // reads from, so cleared results leave no stale ticks.
-                  PreTranslationTaskManager.instance.clearAllChapterStatus();
-                  if (context.mounted) {
-                    context.showMessage(
-                      message: "Translation results cleared".tl,
-                    );
-                  }
-                  Log.info(
-                    'Image Translation',
-                    'Cleared $removed translated pages by user',
-                  );
-                },
-              ),
-            ),
-          ],
+          title: "Translation settings".tl,
+          children: _aiTranslationChildren(
+            comicSpecific: true,
+            deviceSpecific: false,
+          ),
         ).toSliver(),
       ],
     );
+  }
+
+  List<Widget> _aiTranslationChildren({
+    required bool comicSpecific,
+    required bool deviceSpecific,
+  }) {
+    final cid = comicSpecific ? widget.comicId : null;
+    final src = comicSpecific ? widget.comicSource : null;
+    return [
+      _CallbackSetting(
+        title: "How AI translation works".tl,
+        subtitle: "Setup and usage in plain language".tl,
+        actionTitle: "Help".tl,
+        callback: _showTranslationHelp,
+      ),
+      SelectSetting(
+        title: "Translation engine".tl,
+        settingKey: TranslationEngines.settingKey,
+        help:
+            "Online engines use your configured LLM provider or the keyless Google Translate endpoint. Offline engines run fully on this device after a one-time model download; pick one and install it under \"Translation models\". Classical Latin has no offline model and always uses an online engine."
+                .tl,
+        optionTranslation: {
+          TranslationEngines.cloudLlmId:
+              "Online (LLM / Google Translate)".tl,
+          TranslationEngines.nllb13b.id:
+              "Offline · NLLB 1.3B — best quality (~1.9 GB)".tl,
+          TranslationEngines.nllb600m.id:
+              "Offline · NLLB 600M — lightweight (~0.9 GB)".tl,
+          TranslationEngines.opusJaEn.id:
+              "Offline · Opus-MT — Japanese to English (~110 MB)".tl,
+        },
+        onChanged: () {
+          TranslationModels.invalidateReadyCache();
+          setState(() {});
+          widget.onChanged?.call(TranslationEngines.settingKey);
+        },
+      ),
+      _CallbackSetting(
+        title: "LLM providers".tl,
+        subtitle: _activeProviderSubtitle(),
+        actionTitle: "Manage".tl,
+        callback: () async {
+          await context.to(() => const LlmProvidersPage());
+          if (mounted) setState(() {});
+        },
+      ),
+      _CallbackSetting(
+        title: "Translation prompt".tl,
+        subtitle: LlmPromptStore.isCustom ? "Custom".tl : "Built-in".tl,
+        actionTitle: "Edit".tl,
+        callback: () async {
+          await context.to(() => const TranslationPromptPage());
+          if (mounted) setState(() {});
+        },
+      ),
+      _CallbackSetting(
+        title: "Test translation".tl,
+        subtitle: "Check the endpoint with a sample line".tl,
+        actionTitle: "Test".tl,
+        callback: _testTranslation,
+      ),
+      SelectSetting(
+        title: "Source language".tl,
+        settingKey: "imageTranslationSource",
+        help:
+            "Spanish and Latin share the English OCR model. Classical Latin cannot be translated by the offline NLLB engines — use an online engine for it."
+                .tl,
+        optionTranslation: {
+          "auto": "Auto detect".tl,
+          "ja": "Japanese".tl,
+          "en": "English".tl,
+          "ko": "Korean".tl,
+          "zh": "Chinese".tl,
+          "es": "Spanish".tl,
+          "la": "Latin".tl,
+        },
+        onChanged: () {
+          setState(() {});
+          widget.onChanged?.call("imageTranslationSource");
+        },
+        comicId: cid,
+        comicSource: src,
+        useDeviceSettings: deviceSpecific,
+      ),
+      SelectSetting(
+        title: "Target language".tl,
+        settingKey: "imageTranslationTarget",
+        optionTranslation: {
+          "zh": "Simplified Chinese".tl,
+          "zh-TW": "Traditional Chinese".tl,
+          "en": "English".tl,
+          "ja": "Japanese".tl,
+          "ko": "Korean".tl,
+          "fr": "French".tl,
+          "de": "German".tl,
+          "es": "Spanish".tl,
+          "ru": "Russian".tl,
+          "la": "Latin".tl,
+        },
+        onChanged: () {
+          setState(() {});
+          widget.onChanged?.call("imageTranslationTarget");
+        },
+        comicId: cid,
+        comicSource: src,
+        useDeviceSettings: deviceSpecific,
+      ),
+      SelectSetting(
+        title: "Performance mode".tl,
+        settingKey: TranslationPerformanceConfig.settingKey,
+        optionTranslation: {
+          "saver": "Save resources (low memory)".tl,
+          "balanced": "Balanced (recommended)".tl,
+          "fast": "Fast (more battery)".tl,
+          "custom": "Custom".tl,
+        },
+        onChanged: () {
+          _setTranslationPreset(
+            '${appdata.settings[TranslationPerformanceConfig.settingKey]}',
+          );
+        },
+      ),
+      ListTile(
+        leading: const Icon(Icons.tune),
+        title: Text("Advanced settings".tl),
+        trailing: Icon(
+          _translationAdvanced ? Icons.expand_less : Icons.expand_more,
+        ),
+        onTap: () =>
+            setState(() => _translationAdvanced = !_translationAdvanced),
+      ),
+      if (_translationAdvanced) ...[
+        SelectSetting(
+          title: "Text removal".tl,
+          settingKey: "imageTranslationInpaintMode",
+          help:
+              "How the original text is removed before the translation is drawn. Smart erase reconstructs the background so no solid block covers the bubble; Color patch is the old opaque block."
+                  .tl,
+          optionTranslation: {
+            "smart": "Smart erase".tl,
+            "patch": "Color patch".tl,
+          },
+          onChanged: () {
+            setState(() {});
+            widget.onChanged?.call("imageTranslationInpaintMode");
+          },
+          comicId: cid,
+          comicSource: src,
+          useDeviceSettings: deviceSpecific,
+        ),
+        _SliderSetting(
+          title: "Pages per pre-translation request".tl,
+          settingsIndex: "imageTranslationPreBatchPages",
+          interval: 1,
+          min: 1,
+          max: App.isDesktop ? 20 : 8,
+          onChanged: () {
+            _markTranslationCustom("imageTranslationPreBatchPages");
+          },
+        ),
+        _SliderSetting(
+          title: "OCR parallelism (0 = auto)".tl,
+          settingsIndex: "imageTranslationOcrWorkers",
+          interval: 1,
+          min: 0,
+          max: App.isDesktop ? 6 : 2,
+          onChanged: () {
+            _markTranslationCustom("imageTranslationOcrWorkers");
+          },
+        ),
+        _SliderSetting(
+          title: "Image download concurrency".tl,
+          settingsIndex: "imageTranslationImageConcurrency",
+          interval: 1,
+          min: 1,
+          max: App.isDesktop ? 6 : 3,
+          onChanged: () {
+            _markTranslationCustom("imageTranslationImageConcurrency");
+          },
+        ),
+        _SliderSetting(
+          title: "Translation request concurrency".tl,
+          settingsIndex: "imageTranslationLlmConcurrency",
+          interval: 1,
+          min: 1,
+          max: App.isDesktop ? 4 : 3,
+          onChanged: () {
+            _markTranslationCustom("imageTranslationLlmConcurrency");
+          },
+        ),
+      ],
+      _CallbackSetting(
+        title: "Translation models".tl,
+        subtitle: _translationModelsSubtitle(),
+        actionTitle: "Manage".tl,
+        callback: () => context.to(
+          () => TranslationModelsPage(sourceLang: _effectiveSourceLang()),
+        ),
+      ),
+      _CallbackSetting(
+        title: "Clear translation results".tl,
+        subtitle:
+            "Deletes all stored page translations and rendered images. Language and glossary learned per comic are kept."
+                .tl,
+        actionTitle: "Clear".tl,
+        callback: () => showConfirmDialog(
+          context: App.rootContext,
+          title: "Clear translation results".tl,
+          content:
+              "Deletes every stored page translation and rendered image. Translating them again will spend API tokens."
+                  .tl,
+          btnColor: context.colorScheme.error,
+          onConfirm: () async {
+            var removed = await ImageTranslationService.instance
+                .clearAllTranslationCache();
+            PreTranslationTaskManager.instance.clearAllChapterStatus();
+            if (context.mounted) {
+              context.showMessage(
+                message: "Translation results cleared".tl,
+              );
+            }
+            Log.info(
+              'Image Translation',
+              'Cleared $removed translated pages by user',
+            );
+          },
+        ),
+      ),
+    ];
   }
 }
 

@@ -16,6 +16,7 @@ import '../log.dart';
 import '../../utils/file_type.dart';
 import '../chapter_title_parser.dart';
 import 'bt_project.dart';
+import '../translation_project/artifact_reconciliation.dart';
 import '../translation_project/project.dart';
 import '../translation_project/project_bootstrap.dart';
 import '../translation_project/project_io.dart';
@@ -84,6 +85,10 @@ class BtProjectManager extends ChangeNotifier {
 
   BtProject? projectFor(String comicId) => _projects[comicId];
 
+  /// All known project comic ids (the manager's registry keys). UI lists use
+  /// this to enumerate projects without reaching into the private map.
+  List<String> get projectIds => _projects.keys.toList();
+
   /// Runs a scan when the in-memory registry is empty. The registry is the
   /// only thing that can answer reader/cover requests, and not every entry
   /// point (home history, favorites, deep links) passes through the local
@@ -100,6 +105,18 @@ class BtProjectManager extends ChangeNotifier {
     final cached = _projects[comicId];
     if (cached != null) return cached;
     await ensureReady();
+    // 🔴 缓存未命中时**再扫一次**，而不是就此返回 null。
+    //
+    // `ensureReady()` 只要 `_projects` 非空就短路（它保证的是"至少扫过一次"，
+    // 不是"扫的是最新"）。于是刚建好的工程若在那一次扫里被漏掉 —— json 还在
+    // 落盘、或被任何一处判据跳过 —— 这次 miss 会一直 miss 到下次重启，表现正是
+    // "建完跳进工作室显示没找到工程，退出重进就好了"。
+    //
+    // 只补扫**一次**（不是循环）：miss 是罕见路径（工程真不存在 / 刚创建），
+    // 命中路径一次都不多扫，正常打开不受影响。
+    if (!_projects.containsKey(comicId) && isEnabled) {
+      await scan();
+    }
     return _projects[comicId];
   }
 
@@ -129,16 +146,62 @@ class BtProjectManager extends ChangeNotifier {
     if (project == null) return null;
     final key = coverKeyFor(project);
     if (key == null) return null;
-    final path = key.startsWith('cover.')
-        ? '${project.directory}/$key'
-        : (project.displayPath(key) ?? project.originalPath(key));
+    final path = coverPathFor(project, key);
+    if (path == null) return null;
     final bytes = await File(path).readAsBytes();
     if (bytes.isEmpty) return null;
     return BtCover(key, bytes);
   }
 
-  /// Cover key: `cover.<ext>` if a cover file exists in the project directory,
-  /// otherwise the first page key (in BT reading order) whose image file exists.
+  /// Absolute path of the cover file for [key], or null when it is not on disk.
+  ///
+  /// 🔴 `cover.<ext>` lives in **two possible places**, and checking only one of
+  /// them is exactly what silently degraded every studio project's cover to
+  /// "the chapter's first page":
+  /// - the project's image root ([BtProject.directory]) —— 工作室工程这里是
+  ///   `<工程根>/source/`；
+  /// - the json's parent directory (the project root) —— `ProjectBootstrap` 在
+  ///   本查找存在之前写封面的地方。
+  ///
+  /// 工作室工程的 `directory` 指向 `source/`，所以写到工程根的封面**永远查不到**，
+  /// `coverKeyFor` 于是穿过它落到 `pageOrder.first`（章节第一页）。两处都查，
+  /// 新老工程就回到同一条规则上，不需要迁移任何文件。
+  static String? coverPathFor(BtProject project, String key) {
+    if (key.startsWith('cover.')) {
+      return resolveCoverFile(
+        directory: project.directory,
+        jsonPath: project.jsonFile.path,
+        key: key,
+      );
+    }
+    return project.displayPath(key) ?? project.originalPath(key);
+  }
+
+  /// [coverPathFor] 的路径规则本身：`cover.<ext>` 在 `directory` 里 ⇒ 命中；
+  /// 否则在 json 的**父目录**里 ⇒ 命中；两处都没有 ⇒ null。
+  ///
+  /// 🔴 抽成只吃三个字符串的纯函数（只碰文件系统），是为了让"封面查哪两处"
+  /// 这条规则能被 headless 单独打红 —— 内联在 [coverPathFor] 里就必须先造一个
+  /// [BtProject]（私有构造）才能验，实际上等于验不了。
+  static String? resolveCoverFile({
+    required String directory,
+    required String jsonPath,
+    required String key,
+  }) {
+    final inDirectory = '${directory.replaceAll('\\', '/')}/$key';
+    if (File(inDirectory).existsSync()) return inDirectory;
+    final parent = jsonPath.replaceAll('\\', '/');
+    final slash = parent.lastIndexOf('/');
+    if (slash > 0) {
+      final inRoot = '${parent.substring(0, slash)}/$key';
+      if (File(inRoot).existsSync()) return inRoot;
+    }
+    return null;
+  }
+
+  /// Cover key: `cover.<ext>` if a cover file exists in the project image root
+  /// **or the project root**, otherwise the first page key (in BT reading
+  /// order) whose image file exists.
   ///
   /// 🔴 Uses [BtProject.displayPath] (original → inpainted → mask), not the raw
   /// original: a project whose raw comic folder was moved/deleted used to have
@@ -146,8 +209,7 @@ class BtProjectManager extends ChangeNotifier {
   /// studio list silently empty with no clue why.
   static String? coverKeyFor(BtProject project) {
     for (final ext in ['jpg', 'jpeg', 'png', 'webp']) {
-      final coverPath = '${project.directory}/cover.$ext';
-      if (File(coverPath).existsSync()) {
+      if (coverPathFor(project, 'cover.$ext') != null) {
         return 'cover.$ext';
       }
     }
@@ -462,7 +524,7 @@ class BtProjectManager extends ChangeNotifier {
       await for (final entity in dir.list(followLinks: false)) {
         final name = _basename(entity.path);
         if (entity is File) {
-          if (name.startsWith('imgtrans_') && name.endsWith('.json')) {
+          if (isProjectJsonFileName(name)) {
             out.add(entity);
           }
         } else if (entity is Directory) {
@@ -474,6 +536,24 @@ class BtProjectManager extends ChangeNotifier {
     } catch (e, s) {
       Log.error('BT Project', 'Failed to list ${dir.path}: $e', s);
     }
+  }
+
+  /// Whether [name] is a **project** json — the file to register as one
+  /// translation project. Not every `imgtrans_*.json` qualifies.
+  ///
+  /// 🔴 产物对账表**就躺在工程 json 旁边**，名叫 `imgtrans_<名>.artifacts.json`
+  /// （见 [ArtifactReconciliation.pathFor]）—— 它同样 `imgtrans_` 开头、`.json`
+  /// 结尾，于是旧的"前缀 + 后缀"判据把它也当成一个工程登记：本地库/主页多出
+  /// 一张**空**卡片（对账表里没有 `pages`，解析出来是个零页工程），而且它是
+  /// "删不掉"的 —— 磁盘上并没有一个与之对应的工程，删真实工程也带不走它，
+  /// 因为它挂的是**同一本**工程所在的目录（2026-10-09 实测：保存一次就多一个）。
+  ///
+  /// 用**共享后缀** [ArtifactReconciliation.fileSuffix] 排除，而不是在这里再写
+  /// 一遍字面量：对账表换名时若这条漏改，就会静默地再长出幽灵卡片。
+  static bool isProjectJsonFileName(String name) {
+    if (!name.startsWith('imgtrans_')) return false;
+    if (!name.endsWith('.json')) return false;
+    return !name.endsWith(ArtifactReconciliation.fileSuffix);
   }
 
   static String _basename(String path) {
@@ -492,8 +572,17 @@ class BtProjectManager extends ChangeNotifier {
   /// identity rule — and a drifted one shows up as "the project I just created
   /// is not in the list", with a working-looking project on disk.
   static String comicIdForJsonFile(String jsonPath) {
+    // 🔴 分隔符**必须先归一化**：同一个 json 会从两个地方拿路径算 id——
+    // `scan()` 的路径来自 `Directory.list()`（Windows 上是 `\`），而创建流程
+    // 手里的路径来自 `ProjectBootstrap`（`/`）。不归一化的话两条路径算出**两个
+    // 不同的 id**，于是一个刚建好的工程：`scan()` 用 `\` 变体把它登记进
+    // `_projects`，创建向导却用 `/` 变体去查 ⇒ `projectFor()` 返回 null ⇒
+    // 弹"工程不在工作室工程根目录下"，点【打开翻译工程】跳过去也查不到工程
+    // （空白页），而本地库/主页从 DB 拿到的又是 `\` 变体所以显示正常。
+    // 归一化成 `/` 后两边算出同一个 id，写入与查询才对得上。
+    final normalized = jsonPath.replaceAll('\\', '/').toLowerCase();
     var hash = 0x811c9dc5;
-    for (final unit in jsonPath.toLowerCase().codeUnits) {
+    for (final unit in normalized.codeUnits) {
       hash ^= unit;
       hash = (hash * 0x01000193) & 0xffffffff;
     }

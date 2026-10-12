@@ -9,6 +9,7 @@ import 'package:mangrove/foundation/export_tasks.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/missing_pages.dart';
+import 'package:mangrove/foundation/open_folder.dart';
 import 'package:mangrove/network/repair_download.dart';
 import 'package:mangrove/pages/comic_delete_dialog.dart';
 import 'package:mangrove/pages/comic_details_page/comic_page.dart';
@@ -22,6 +23,9 @@ import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/translations.dart';
 import 'package:mangrove/pages/home_page.dart';
 import 'package:url_launcher/url_launcher_string.dart';
+import 'package:mangrove/foundation/translation_project/finished_export.dart';
+import 'package:mangrove/foundation/translation_project/project.dart';
+import 'package:mangrove/pages/translation_studio/studio_project_menu.dart';
 
 /// Short remaining-time text for the download progress label, e.g. "45s",
 /// "5m 30s", "1h 5m".
@@ -119,6 +123,174 @@ class _LocalComicsPageState extends State<LocalComicsPage>
         ? "$percent%"
         : "$percent% · ~${_formatDuration(eta)}";
     return ComicTileProgress(t.progress, label: label, color: Colors.amber);
+  }
+
+  /// 本地库卡片右上角的分类小标签：素材（普通漫画）/ 工程 / 成品（翻译版）。
+  ///
+  /// 判据走纯逻辑层的 [comicCardKindOf]（按 id 前缀分三类，见该文件注释），不在这里
+  /// 各写一遍前缀 —— 加第三种产物时只改一处，避免"某类又混进本地库"。
+  static const Map<ComicCardKind, String> _categoryLabels = {
+    ComicCardKind.downloaded: '素材',
+    ComicCardKind.project: '工程',
+    ComicCardKind.product: '成品',
+  };
+
+  String _categoryLabel(LocalComic comic) =>
+      _categoryLabels[comicCardKindOf(comic.id)] ?? '素材';
+
+  /// 本地库「工程 / 成品」段为空时，在网格位置渲染一张占位卡：
+  /// 虚线边框 + 加号，点击进入对应二级弹窗。
+  /// - 工程段：打开「创建翻译工程」向导（复用 [createStudioProject]）。
+  /// - 成品段：弹出一个本地工程列表，选一个导出成品到 `translated/`。
+  Widget _buildEmptySegmentSliver(BuildContext context) {
+    final isProduct = kindFilter == ComicCardKind.product;
+    final cs = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return SliverToBoxAdapter(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 260),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 48),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: isProduct
+                  ? () => _pickProjectAndPublish(context)
+                  : () async {
+                      await createStudioProject(context);
+                      if (mounted) {
+                        await BtProjectManager().scan();
+                        update();
+                      }
+                    },
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: cs.outline),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.add, size: 48),
+                    const SizedBox(height: 12),
+                    Text(
+                      isProduct
+                          ? 'No published works yet'.tl
+                          : 'No translation projects yet'.tl,
+                      style: textTheme.titleMedium,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      isProduct
+                          ? 'Pick a project to export a finished comic'.tl
+                          : 'Create a new translation project'.tl,
+                      style: textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 成品段为空时的二级弹窗：列出本地翻译工程，选一个导出成品到
+  /// `ComicLibrary/translated/`（复用工作室已有的 [FinishedExport.publish]）。
+  Future<void> _pickProjectAndPublish(BuildContext context) async {
+    await BtProjectManager().ensureReady();
+    final ids = BtProjectManager().projectIds;
+    if (ids.isEmpty) {
+      context.showMessage(message: 'No translation projects found'.tl);
+      return;
+    }
+    final projects = <TranslationProject>[];
+    for (final id in ids) {
+      final tp = await BtProjectManager().ensureTranslationProject(id);
+      if (tp != null) projects.add(tp);
+    }
+    if (projects.isEmpty) {
+      context.showMessage(message: 'No translation projects found'.tl);
+      return;
+    }
+    final chosen = await showDialog<TranslationProject>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Select a project to export'.tl),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: projects.length,
+            itemBuilder: (context, i) {
+              final p = projects[i];
+              return ListTile(
+                title: Text(FinishedExport.comicNameFor(p)),
+                subtitle: Text(p.directory),
+                onTap: () => context.pop(p),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => context.pop(),
+            child: Text('Cancel'.tl),
+          ),
+        ],
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    final libraryRoot = LocalManager().path;
+    if (libraryRoot.isEmpty) {
+      context.showMessage(message: 'Local library is not ready yet.'.tl);
+      return;
+    }
+    final translatedRoot = FilePath.join(
+      Directory(libraryRoot).parent.path,
+      'translated',
+    );
+    final comicName = FinishedExport.comicNameFor(chosen);
+    final controller = showLoadingDialog(
+      context,
+      message: 'Publishing…'.tl,
+      barrierDismissible: false,
+      withProgress: true,
+    );
+    FinishedExportReport report;
+    try {
+      report = await FinishedExport.publish(
+        project: chosen,
+        translatedRoot: translatedRoot,
+        comicName: comicName,
+        onProgress: (done, total) {
+          if (total > 0) controller.setProgress(done / total);
+        },
+      );
+    } catch (e, s) {
+      Log.error('Local Library', 'Publish failed', s);
+      controller.close();
+      if (mounted) {
+        context.showMessage(message: 'Publish failed: @a'.tlParams({'a': e}));
+      }
+      return;
+    }
+    controller.close();
+    if (!mounted) return;
+    context.showMessage(
+      message: report.ok
+          ? 'Exported @name to translated/'.tlParams({'name': comicName})
+          : (report.error != null
+              ? 'Publish failed: @a'.tlParams({'a': report.error!})
+          : 'Nothing published (@a)'.tlParams({'a': comicName})),
+    );
+    update();
   }
 
   /// Re-attach task listeners whenever the queue contents change.
@@ -534,9 +706,18 @@ class _LocalComicsPageState extends State<LocalComicsPage>
                 ),
               ),
             ),
-          SliverGridComics(
+          if (comics.isEmpty &&
+              !searchMode &&
+              !multiSelectMode &&
+              (kindFilter == ComicCardKind.project ||
+                  kindFilter == ComicCardKind.product))
+            _buildEmptySegmentSliver(context)
+          else
+            SliverGridComics(
             comics: comics,
             enableHero: false,
+            // 右上角分类小标签（素材 / 工程 / 成品），颜色在 [ComicTile] 里按文案区分。
+            badgeBuilder: (c) => c is LocalComic ? _categoryLabel(c) : null,
             progressBuilder: (c) => _downloadProgress(c as LocalComic),
             missingBuilder: (c) {
               if (c is! LocalComic) return null;
@@ -1006,44 +1187,7 @@ class _LocalComicsPageState extends State<LocalComicsPage>
 }
 
 /// Opens the folder containing the comic in the system file explorer
-Future<void> openComicFolder(LocalComic comic) async {
-  try {
-    final folderPath = comic.baseDir;
-
-    if (App.isWindows) {
-      await Process.run('explorer', [folderPath]);
-    } else if (App.isMacOS) {
-      await Process.run('open', [folderPath]);
-    } else if (App.isLinux) {
-      // Try different file managers commonly found on Linux
-      try {
-        await Process.run('xdg-open', [folderPath]);
-      } catch (e) {
-        // Fallback to other common file managers
-        try {
-          await Process.run('nautilus', [folderPath]);
-        } catch (e) {
-          try {
-            await Process.run('dolphin', [folderPath]);
-          } catch (e) {
-            try {
-              await Process.run('thunar', [folderPath]);
-            } catch (e) {
-              // Last resort: use the URL launcher with file:// protocol
-              await launchUrlString('file://$folderPath');
-            }
-          }
-        }
-      }
-    } else {
-      // For mobile platforms, use the URL launcher with file:// protocol
-      await launchUrlString('file://$folderPath');
-    }
-  } catch (e, s) {
-    Log.error("Open Folder", "Failed to open comic folder: $e", s);
-    // Show error message to user
-    if (App.rootContext.mounted) {
-      App.rootContext.showMessage(message: "Failed to open folder: $e");
-    }
-  }
-}
+///
+/// 平台分支在 `foundation/open_folder.dart` 的 [openFolderPath] —— 那才是唯一
+/// 一份；本文件与「创建成功」弹窗都朝它依赖（抽到任一侧都会成环，见那里的注释）。
+Future<void> openComicFolder(LocalComic comic) => openFolderPath(comic.baseDir);

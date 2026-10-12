@@ -19,11 +19,19 @@ PKG_DIR = os.path.join(ROOT, 'Mangrove')
 PY = sys.executable
 TOOLS = os.path.join(ROOT, 'tools')
 # 🔴 2026-10-08：夹具从 `S9Fixture`（5 页纯夹具）换成 `MDGH-ch1`（94 页真章节）。
-# S9Fixture 已归档到 `builds/archive/20261008/removed_projects/`（用户决定只用
-# MDGH-ch1 当主验证素材）。edit-check 在 MDGH-ch1 上是 PASS(125)，比 S9Fixture
-# 的 122 还多 3 条（它有 `chapters` / `page_order`），零失败 ⇒ 换基线是安全的。
-FIXTURE = os.path.join(ROOT, 'ComicLibrary', 'projects', 'MDGH-ch1',
-                       'imgtrans_MDGH-ch1.json')
+# 🔴 2026-10-11 (P33) 再订正：`MDGH-ch1` **磁盘上已经不存在了**（只剩
+# `My Dragon Girlfriend Has Returned-1/-3 [Asura Scans]` 与 `Error the Echo`）。
+# 指向不存在的路径时 `edit-check` 不会"跳过"，而是整条命令拿不到 check ⇒
+# `edit_check()` 抛 `RuntimeError`，批跑在第一条就中断，看起来像"构建坏了"。
+# ⇒ 改成磁盘上真实存在的那一份。**夹具名 ≠ 素材名**：MDGH 就是
+# "My Dragon Girlfriend Has Returned" 的缩写，同一素材的现名。
+FIXTURE = os.path.join(
+    ROOT, 'ComicLibrary', 'projects',
+    'My Dragon Girlfriend Has Returned-1 [Asura Scans]',
+    'imgtrans_My Dragon Girlfriend Has Returned-1 [Asura Scans].json',
+)
+if not os.path.exists(FIXTURE):
+    raise SystemExit('edit-check fixture is missing: ' + FIXTURE)
 RESULTS = os.path.join(ROOT, 'builds', 'reverse_verification.json')
 
 

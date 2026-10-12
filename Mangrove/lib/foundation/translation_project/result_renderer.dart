@@ -320,6 +320,67 @@ class _Decoded {
   final int originalWidth;
 }
 
+/// Decodes [file] to raw RGBA pixels, refusing pages the decode budget would
+/// have downscaled.
+///
+/// This is the block-level (single-block repair / restore) entry to the same
+/// decode + coordinate contract the page-level renderers enforce privately
+/// (`canProduceInpaintedBase`): block `xyxy` boxes are source pixels, so a
+/// scaled-down working image would silently misalign every mask. Returns null
+/// for a missing/empty file or an oversized page the callers must skip the
+/// same way [renderInpaintedPage] does.
+Future<RgbaImage?> decodeFullResolutionRgba(File file) async {
+  if (!file.existsSync()) return null;
+  final bytes = await file.readAsBytes();
+  if (bytes.isEmpty) return null;
+  final decoded = await _decodeBounded(bytes);
+  if (!canProduceInpaintedBase(
+    decodedWidth: decoded.image.width,
+    originalWidth: decoded.originalWidth,
+  )) {
+    return null;
+  }
+  return decoded.image;
+}
+
+/// Decodes a greyscale `mask/` PNG into `(width, height, grey)` where `grey`
+/// is one byte per pixel (255 = erased). RGB(A) channels are identical for a
+/// greyscale PNG, so the red channel is enough.
+///
+/// Returns null when the file is missing/empty/undecodable. This deliberately
+/// uses `dart:ui` (not [GrayPng], which is encode-only by design): the app
+/// side already depends on `dart:ui`, and the pure-Dart pixel *logic* stays in
+/// `mask_producer.dart` / `block_artifacts.dart`, where headless checks can
+/// reach it without a surface.
+Future<({int width, int height, Uint8List grey})?> decodeGreyscaleMask(
+  File file,
+) async {
+  if (!file.existsSync()) return null;
+  final bytes = await file.readAsBytes();
+  if (bytes.isEmpty) return null;
+  final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+  final descriptor = await ui.ImageDescriptor.encoded(buffer);
+  final codec = await descriptor.instantiateCodec();
+  final frame = await codec.getNextFrame();
+  final image = frame.image;
+  try {
+    final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (data == null) return null;
+    final rgba = data.buffer.asUint8List();
+    final n = image.width * image.height;
+    final grey = Uint8List(n);
+    for (var i = 0; i < n; i++) {
+      grey[i] = rgba[i * 4];
+    }
+    return (width: image.width, height: image.height, grey: grey);
+  } finally {
+    image.dispose();
+    codec.dispose();
+    descriptor.dispose();
+    buffer.dispose();
+  }
+}
+
 /// Decodes [bytes] with a bounded working size, mirroring
 /// `BtProjectManager._decodeBounded` so a studio save costs the same memory as
 /// the reader's own render (≤12 MP, ≤8000 px on a side).

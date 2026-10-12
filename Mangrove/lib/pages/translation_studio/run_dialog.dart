@@ -220,6 +220,12 @@ class _StudioRunDialogState extends State<_StudioRunDialog> {
     if (reason == nothingToTranslateCode) {
       return 'Nothing to translate: the selected pages have no blocks with source text.'.tl;
     }
+    // 🔴 与上面两条**刻意不同**：这一条的正确动作是"回弹窗勾上「修图」"或
+    // "去工作室核对块"，不是"去跑翻译" —— 复用翻译那条文案会把用户引到
+    // 一个已经做过的事上。
+    if (reason == nothingToRepairCode) {
+      return 'Nothing to repair: no page in the range has a translated box yet. Translate first, or turn on repair artwork after checking the boxes.'.tl;
+    }
     return 'Nothing to do: the selected pages have no matching blocks.'.tl;
   }
 
@@ -265,9 +271,11 @@ class _StudioRunDialogState extends State<_StudioRunDialog> {
       detect: _stages.detect,
       recognize: _stages.recognize,
       translate: _stages.translate,
+      repair: _stages.repair,
       blocks: counts.blocks,
       unrecognized: counts.unrecognized,
       untranslated: counts.untranslated,
+      pagesWithTranslation: counts.translatedPages,
     );
 
     return ContentDialog(
@@ -334,19 +342,39 @@ class _StudioRunDialogState extends State<_StudioRunDialog> {
                       () => _stages = _stages.copyWith(translate: on),
                     ),
                   ),
+                  // 🔴 第四段（2026-10-09 用户修订）：抹除原文 + 填字修图。
+                  //
+                  // 单独一格而不是"翻译完自动做"，因为抹字**不可逆** —— 用户必须
+                  // 先在前三段之后**亲眼核对文字块范围**，再决定出不出图。
+                  // 所以它默认不勾，且文案要说清"这一步会抹掉原图上的字"。
+                  FilterChip(
+                    label: Text('Repair artwork'.tl),
+                    selected: _stages.repair,
+                    avatar: _stages.repair
+                        ? null
+                        : Icon(
+                            Icons.warning_amber_rounded,
+                            size: 16,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                    onSelected: (on) => setState(
+                      () => _stages = _stages.copyWith(repair: on),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 6),
               Text(
-                'Stages run in order: detect, then recognize, then translate.'.tl,
+                'Stages run in order: detect, then recognize, then translate. Repair artwork erases the original lettering and draws the translation into the same boxes; it only touches the image files, so check the boxes in the studio first.'.tl,
                 style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
               ),
               const SizedBox(height: 6),
               Text(
-                'Detect @a pages, recognize @b blocks, translate @c items'.tlParams({
+                'Detect @a pages, recognize @b blocks, translate @c items, repair @d pages'.tlParams({
                   'a': '${workload.detectPages}',
                   'b': '${workload.recognizeBlocks}',
                   'c': '${workload.translateBlocks}',
+                  'd': '${workload.repairPages}',
                 }),
                 style: ts.s14,
               ),

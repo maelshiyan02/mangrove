@@ -224,6 +224,128 @@ BlockListEditCommand captureBlockListEdit(
   );
 }
 
+/// A snapshot pair around one **project-level optional map** (B-1 的
+/// `_seam_reviews`)。
+///
+/// 缝检视是**工程级**元数据（不属于任何一页的块列表），所以这里快照的是**整个
+/// 可选映射** —— 它很小（每条缝一个短字符串）。`null` 表示"该键不存在"，命令
+/// 因此能区分"从来没有过这个键"与"空映射"（不变式：不存在即 nil）。
+///
+/// 🔴 [pageKey] 取缝的**上页**：缝夹在两页之间，上页是用户正在看的那个下边缘。
+/// 它让这条命令仍满足"每条命令都知道自己碰了哪一页"这条脏页跟踪所依赖的
+/// 不变式（[EditHistory.dirtyPages]）。
+class SeamReviewEditCommand extends ProjectEditCommand {
+  SeamReviewEditCommand({
+    required this.pageKey,
+    required this.raw,
+    required this.key,
+    required this.before,
+    required this.after,
+    this.label = 'Seam review',
+  });
+
+  @override
+  final String pageKey;
+
+  /// 工程级 JSON（`TranslationProject.raw`）。
+  final Map<String, Object?> raw;
+
+  /// 被编辑的工程级键（如 `_seam_reviews`）。
+  final String key;
+
+  /// 编辑前该键的值；`null` = 键不存在。
+  final Map<String, Object?>? before;
+
+  /// 编辑后该键的值；`null` = 键应被删除。
+  final Map<String, Object?>? after;
+
+  @override
+  final String label;
+
+  @override
+  bool get isEmpty => jsonEquals(before, after);
+
+  @override
+  void apply() => _put(after);
+
+  @override
+  void revert() => _put(before);
+
+  void _put(Map<String, Object?>? value) {
+    if (value == null) {
+      raw.remove(key);
+      return;
+    }
+    raw[key] = deepCopyJsonMap(value);
+  }
+}
+
+/// 跑 [mutate] 并返回描述这次改动的 [SeamReviewEditCommand]。
+SeamReviewEditCommand captureSeamReviewEdit(
+  Map<String, Object?> raw, {
+  required String key,
+  required String pageKey,
+  required void Function() mutate,
+  String label = 'Seam review',
+}) {
+  Map<String, Object?>? copy() {
+    final value = raw[key];
+    if (value is! Map) return null;
+    return deepCopyJsonMap(<String, Object?>{
+      for (final entry in value.entries) entry.key.toString(): entry.value,
+    });
+  }
+
+  final before = copy();
+  mutate();
+  final after = copy();
+  return SeamReviewEditCommand(
+    pageKey: pageKey,
+    raw: raw,
+    key: key,
+    before: before,
+    after: after,
+    label: label,
+  );
+}
+
+/// 多个原子命令打包成**一个撤销步**（B-3 建组 = 组定义写 `_groups` + 给多个块
+/// 写惰性 `_uid`；B-4 分配 = 逐块译文 + 组 assignment 记录）。
+///
+/// 🔴 原子命令在捕获时已经把改动落到 live JSON（与单条路径同一纪律），这里
+/// 只负责按序 revert / 逆序 apply。`pageKey` 取**第一条非空命令**所在页，
+/// 满足脏页跟踪"每条命令知道自己碰了哪页"的不变式 —— 组元数据命令碰多页，
+/// 但组本身不影响出图（分配产生的逐块命令各自仍带着自己的 pageKey）。
+class CompoundEditCommand extends ProjectEditCommand {
+  CompoundEditCommand(this.commands, {this.label = 'Edit'});
+
+  final List<ProjectEditCommand> commands;
+
+  @override
+  final String label;
+
+  @override
+  String get pageKey =>
+      commands.isEmpty ? '' : commands.first.pageKey;
+
+  @override
+  bool get isEmpty => commands.every((c) => c.isEmpty);
+
+  @override
+  void apply() {
+    for (final command in commands) {
+      command.apply();
+    }
+  }
+
+  @override
+  void revert() {
+    for (var i = commands.length - 1; i >= 0; i--) {
+      commands[i].revert();
+    }
+  }
+}
+
 /// Undo/redo history over [ProjectEditCommand]s.
 ///
 /// Dirty tracking uses a "saved index" into the undo stack rather than a plain

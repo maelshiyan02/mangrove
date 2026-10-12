@@ -118,3 +118,48 @@ double maskCoverage(MaskPage page) {
   if (page.width <= 0 || page.height <= 0) return 0;
   return page.strokes / (page.width * page.height);
 }
+
+/// 构造「复原」用的掩膜 —— 比 [blockRect] 外扩 ≥30%。
+///
+/// ## 为什么必须外扩
+///
+/// [buildMaskPage] 返回的字形级掩膜只覆盖文字笔画本身。但 inpaint 算法
+/// （`TextInpainter.erase`）的实际影响范围**比字形大** —— 笔画被抹掉后
+/// 周围像素被算法改写过（抗锯齿边、背景渐变、网点等）。用原尺寸掩膜复原
+/// 会在字形周围留下一圈糊边（"只盖回了原来那几笔字，没盖回被算法改过的
+/// 周围像素"）。
+///
+/// BallonTranslator 的实操经验：外扩 **≥30%** 是最低限度，宁可多盖一点
+/// （多盖的是原图，一模一样）也不能留糊边。
+///
+/// ## 为什么手动 clamp，不信任 [computeMask] 的窗口
+///
+/// [computeMask] 内部有自己的 padding（`max(4, min(w,h)*0.25)`，最多
+/// 25%），它的 clamp 是给**它自己的工作窗口**用的。我们外扩的是**最终
+/// 掩膜**的覆盖范围 —— 两者语义不同，所以必须在调用 [buildMaskPage]
+/// 之前就自己夹好边界。
+///
+/// 返回的 [Uint8List] 可直接传给 [restoreErasedPage] 的 `mask` 参数。
+/// 全 0 表示这一块没有可复原的笔画（computeMask 返回 null / 窗口
+/// 被图像边界完全吞掉），调用方应据此记 skipped。
+Uint8List buildRestorationMask(
+  RgbaImage image,
+  IntRect blockRect, {
+  double dilation = 1.3,
+}) {
+  final w = image.width;
+  final h = image.height;
+  // 四边各外扩 `(dilation - 1) / 2`，使总宽高各乘 dilation。
+  // 例如 dilation=1.3 → 四边各扩 15% → 总宽高 = 原 * 1.3（满足 ≥30%）。
+  final expandW = (blockRect.width * (dilation - 1) / 2).round();
+  final expandH = (blockRect.height * (dilation - 1) / 2).round();
+  // 🔴 手动 clamp：块在图像边缘时，外扩会越过图像边界。信任自己的 clamp
+  // 而不是 computeMask 的 —— 它的 clamp 是给它自己的工作窗口用的。
+  final x0 = (blockRect.left - expandW).clamp(0, w);
+  final y0 = (blockRect.top - expandH).clamp(0, h);
+  final x1 = (blockRect.right + expandW).clamp(0, w);
+  final y1 = (blockRect.bottom + expandH).clamp(0, h);
+  final dilated = IntRect(x0, y0, x1, y1);
+  final page = buildMaskPage(image, [dilated]);
+  return page.pixels;
+}

@@ -9,12 +9,20 @@
 // 1. 打包了哪些 family（→ `pubspec.yaml` 的 `fonts:`）；
 // 2. 请求了一个**没有打包**的 family 时怎么办（→ [resolveFamily]）。
 //
+// P33（2026-10-11）：用户拍板「**不打包新字体，改用系统字体探测**」——
+// 零包体增长、可选字体极多。本文件因此从「二档」扩成「三档」：
+//   打包字体 → 机器里装着的字体 → 打包字体（回退终点）
+// 🔴 **回退终点与别名表都还在**，所以旧工程的行为一个字节都没变；系统字体
+// 只在机器上真有、且用户主动选中时才生效。详见 [resolveFamily] 的注释。
+//
 // 答案不是"交给 Flutter 自己 fallback"，而是**显式落到打包字体**。理由：
 // Flutter 的默认 fallback 是平台 UI 字体，在没装中文字体的机器上会画出
 // 豆腐块，而这种情况在发行版上一定会出现（Steam 包的 Windows 机器什么
 // 字体都有，Linux 发行版则未必）。显式 fallback 让"字体缺失"这件事
 // 在开发期就暴露成一次断言失败，而不是在用户机器上暴露成一片方块。
 library;
+
+import 'package:mangrove/foundation/system_fonts.dart';
 
 /// 一个打包进 `assets/fonts/` 的字族。
 class BundledFont {
@@ -187,16 +195,23 @@ List<String> bundledFamilyFallbacks(String? requested) {
 
 /// 解析 FT 请求的字族，返回真正该用的 family。
 ///
-/// 三条规则，按顺序：
+/// 五条规则，按顺序：
 ///
 /// 1. **空名** → 打包字体。FT 里 `font_family` 缺失是常态（老工程），而
 ///    "缺失"绝不等于"用系统默认"。
 /// 2. **打包过的 family** → 原样返回。
-/// 3. **已知别名**（历史遗留的雅黑/思源） → 映射到打包字体，`fallback`
+/// 3. **机器里装着的字体**（P33 · 系统字体探测） → 原样返回。
+/// 4. **已知别名**（历史遗留的雅黑/思源） → 映射到打包字体，`fallback`
 ///    为 true。
-/// 4. **完全未知** → 落到 [primaryBundledFamily]，`fallback` 为 true。
+/// 5. **完全未知** → 落到 [primaryBundledFamily]，`fallback` 为 true。
 ///
-/// 第 4 条是本文件存在的理由。Flutter 自己在 `fontFamily` 不存在时会
+/// 🔴 第 3 条压过第 4 条的理由：别名表是「打包字体时代」的权宜之计 ——
+/// 它的存在前提是"雅黑没被打进包里"，而系统字体探测落地后这个前提不成立
+/// 了。机器上真有雅黑却仍换成思源黑，等于**静默替换用户意图**，正是本文件
+/// 开头反对的那类事。第 5 条（回退终点）**没动**：扫描表为空或机器上没有
+/// 该字体时，行为与 P33 之前逐字节一致。
+///
+/// 第 5 条是本文件存在的理由。Flutter 自己在 `fontFamily` 不存在时会
 /// 静默回退到平台默认（Windows 上通常是 Times New Roman / 雅黑），于是
 /// 用户设一个没打包的字体名 → 渲染出来像"生效了"，实际字形已经换了。
 /// 显式落到打包字体后，那条路径至少**在视觉上是可预期的**（中文一定出字），
@@ -220,6 +235,17 @@ ResolvedFamily resolveFamily(String? requested) {
       );
     }
   }
+  // P33: 系统字体探测。两个前提缺一不可 —— 机器上装着，**且**它能显示中文
+  // （[hasCjk] 的门槛就是 A05 §3 的底线：绝不能因为"装了 Arial"就让译文
+  // 变成豆腐块）。空表（未扫描 / 非 Windows）直接落空，不改变旧行为。
+  final installed = systemFonts.byFamily[key];
+  if (installed != null && systemFonts.hasCjk(name)) {
+    return ResolvedFamily(
+      family: installed.first.family,
+      fallback: false,
+      reason: 'system font "$name" (installed on this machine)',
+    );
+  }
   final alias = _aliasToBundled[name];
   if (alias != null) {
     return ResolvedFamily(
@@ -232,28 +258,79 @@ ResolvedFamily resolveFamily(String? requested) {
   return ResolvedFamily(
     family: primaryBundledFamily,
     fallback: true,
-    reason: '"$name" is not bundled; fell back to "$primaryBundledFamily"',
+    reason: '"$name" is neither bundled nor installed; '
+        'fell back to "$primaryBundledFamily"',
   );
 }
 
-/// 面板字族选择器的候选项：打包 family + 当前块用的名字。
+/// 面板字族选择器的候选：一个字族 + 它从哪来 + 能显示什么。
+class FontFamilyChoice {
+  const FontFamilyChoice({
+    required this.family,
+    required this.bundled,
+    required this.label,
+    required this.scripts,
+  });
+
+  final String family;
+
+  /// True = 打进 `assets/fonts/`；false = 机器里装着的 / 工程 json 里写的
+  /// 但我们没有的。
+  final bool bundled;
+
+  /// 下拉里显示的一行。
+  final String label;
+
+  /// 能显示的文种说明（打包字体写死，系统字体由 cmap 实测）。空串表示未知。
+  final String scripts;
+}
+
+/// 面板字族选择器的候选项：打包 family + 系统字体 + 当前块用的名字。
 ///
 /// 🔴 当前块的名字即使不在打包表里也要**列出来**（作为"当前（未打包）"一项）：
 /// 不列的话，用户打开一个 FT 工程会看到面板显示的是打包字体，而 json 里写的
 /// 是另一个名字 —— 于是"我明明有那个字体"变成了一个看起来像 bug 的现象，
 /// 而真相是他选的那个字体根本没进这个应用。
-List<({String family, bool bundled, String label})> fontFamilyChoices(
-  String? current,
-) {
-  final result = <({String family, bool bundled, String label})>[];
+///
+/// 🔴 系统字体**只列能显示 CJK/假名/谚文**的那些（见
+/// `SystemFontIndex.choices`）：一台 Windows 上躺着上百个西文字体，全列出来
+/// 会把真正能用来嵌字的十几个中文字体淹没掉。
+List<FontFamilyChoice> fontFamilyChoices(String? current) {
+  final result = <FontFamilyChoice>[];
   final seen = <String>{};
   for (final font in bundledFonts) {
-    if (!seen.add(font.family)) continue;
-    result.add((family: font.family, bundled: true, label: font.family));
+    if (!seen.add(font.family.toLowerCase())) continue;
+    result.add(
+      FontFamilyChoice(
+        family: font.family,
+        bundled: true,
+        label: font.family,
+        scripts: font.script,
+      ),
+    );
+  }
+  for (final info in systemFonts.choices) {
+    if (!seen.add(info.family.toLowerCase())) continue;
+    result.add(
+      FontFamilyChoice(
+        family: info.family,
+        bundled: false,
+        label: info.family,
+        scripts: info.scriptLabel,
+      ),
+    );
   }
   final name = (current ?? '').trim();
-  if (name.isNotEmpty && !seen.contains(name)) {
-    result.add((family: name, bundled: false, label: '$name (not bundled)'));
+  if (name.isNotEmpty && !seen.contains(name.toLowerCase())) {
+    final installed = systemFonts.has(name);
+    result.add(
+      FontFamilyChoice(
+        family: name,
+        bundled: false,
+        label: installed ? '$name (installed)' : '$name (not bundled)',
+        scripts: '',
+      ),
+    );
   }
   return result;
 }

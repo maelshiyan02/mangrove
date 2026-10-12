@@ -460,6 +460,171 @@ Future<void> runP5Checks(
     () => '绿=弹窗不碰持久化设置 / 故障=对照组（设置页）确实含 appdata ⇒ 判据非恒真',
   );
 
+  // ── 3b · 第四段「修图」与"产物只能由显式选择触发"（2026-10-09） ─────────
+  //
+  // 钉的是用户的两条原话：
+  // ①「拒绝在运行对整个章节进行自动化之后再莫名其妙的使用一次产物生成」
+  // ②「不希望自动抹除原文后修图，希望自动化管线之后人工修正文字块范围再修图」
+  //
+  // ⇒ 契约是：`mask/` `inpainted/` `result/` 的产出**只能**由 [repair] 那一段
+  // 或显式的「保存并修图」触发；Ctrl+S 只写 JSON。
+
+  probe(
+    'stages.repair_defaults_to_off',
+    () async =>
+        // 从持久化值还原（默认路径）时 repair 必须是 false。
+        StudioRunStages.fromJson({'detect': true, 'recognize': true,
+            'translate': true}).repair ==
+            false &&
+        // 显式不给参数构造时也必须是 false。
+        const StudioRunStages(detect: true, recognize: true, translate: true)
+            .repair ==
+            false &&
+        // 而且 `producesArtifacts` 跟着它走。
+        !const StudioRunStages(detect: true, recognize: true, translate: true)
+            .producesArtifacts,
+    // 故障路径 = 「修图默认开」那一版。症状：用户跑完检测+识别+翻译，
+    // 原图上的字**已经被抹掉了**，而他还没机会看一眼块的范围。
+    () async =>
+        StudioRunStages.fromJson({
+          'detect': true,
+          'recognize': true,
+          'translate': true,
+        }).repair ==
+            true,
+    () => '绿=修图默认关闭（旧记录读出来也是 false）/ '
+        '故障=默认开着就把"人工核对块"这一步跳过了',
+  );
+
+  probe(
+    'stages.old_record_does_not_silently_restore_auto_repair',
+    () async =>
+        // 🔴 旧记录**没有** repair 键。它必须读成 false，而不是"跟着 translate 开"。
+        StudioRunStages.fromJson({'translate': true}).repair == false,
+    // 故障路径 = 把缺失的 repair 解释成"跟着 translate"（迁移时最容易犯的
+    // "向后兼容"）。那等于把用户刚取消的自动出图**又悄悄恢复**，且没人会知道。
+    () async =>
+        StudioRunStages.fromJson({'translate': true}).repair == true,
+    () => '绿=旧记录读出 repair=false / 故障=缺失键被补成 true 会复活自动出图',
+  );
+
+  probe(
+    'workload.repair_alone_needs_something_to_draw',
+    () async =>
+        // 只勾修图、且一页译文都没有 ⇒ 必须拦下（画出来是去字白页）。
+        planStudioRun(
+          selectedPages: 5,
+          detect: false,
+          recognize: false,
+          translate: false,
+          repair: true,
+          blocks: 0,
+          unrecognized: 0,
+          untranslated: 0,
+          pagesWithTranslation: 0,
+        ).blockedReason ==
+            nothingToRepairCode,
+    // 反场景 = 同一段但工程里已有 3 页译文 ⇒ 必须放行。
+    // 🔴 这一支不能省：只钉"会拦"的话，一个恒返回 `nothingToRepairCode` 的
+    // 实现也能通过 —— 而那会让「修图」永远按不动。
+    () async =>
+        planStudioRun(
+          selectedPages: 5,
+          detect: false,
+          recognize: false,
+          translate: false,
+          repair: true,
+          blocks: 24,
+          unrecognized: 0,
+          untranslated: 0,
+          pagesWithTranslation: 3,
+        ).blockedReason ==
+            nothingToRepairCode,
+    () => '绿=没译文时拦下 / 故障=恒拦时「修图」永远按不动（判据恒真）',
+  );
+
+  probe(
+    'workload.repair_counts_pages_not_blocks',
+    () async =>
+        // 8 个译文块分布在 3 页上 ⇒ 报 3 页，不是 8。
+        planStudioRun(
+          selectedPages: 5,
+          detect: false,
+          recognize: false,
+          translate: false,
+          repair: true,
+          blocks: 24,
+          unrecognized: 0,
+          untranslated: 0,
+          pagesWithTranslation: 3,
+        ).repairPages ==
+            3,
+    // 故障路径 = 按块计数那一版。`inpainted/` 是**按页**落的文件，报 8 会让
+    // 用户以为要等 8 倍的时间，或者干脆不敢点。
+    () async =>
+        planStudioRun(
+          selectedPages: 5,
+          detect: false,
+          recognize: false,
+          translate: false,
+          repair: true,
+          blocks: 24,
+          unrecognized: 0,
+          untranslated: 0,
+          pagesWithTranslation: 3,
+        ).repairPages ==
+            24,
+    () => '绿=修图按页报（3 页） / 故障=按块报（24）会把等待时间虚报 8 倍',
+  );
+
+  probe(
+    'wiring.save_does_not_spawn_artifact_generation',
+    // 🔴 钉用户原话①：保存**不得**顺带出图。
+    // 判据 = `_save` 的方法体里不再有 `_regenerateResults`。
+    //
+    // 🔴 边界怎么切：`_ComicPageState` 的成员一律缩进 **2 空格**，所以方法体
+    // 结束于下一个 `  Future<` / `  void ` / … 那一行。
+    // ⚠️ 坑：`Future<void>` 里 `Future` 后面是 `<` **不是空格** —— 早先写成
+    // `\n  (Future|void|...) ` 的正则匹配不到，边界退化成"整个文件末尾"，
+    // 于是 `_saveAndRepair` 里的那一句被算进了 `_save`，绿路径直接判 FALSE。
+    // 这条断言本身把"判据写错"和"行为没改"混成了同一个失败，值得单独记一笔。
+    () async => _saveBodySpansRegenerateResults(packageRoot),
+    // 故障路径 = 任何"保存即出图"的形态：`unawaited(_regenerateResults(`、
+    // 直接调用、间接回调，只要它回到 `_save` 里就判红。
+    () async => _saveBodyCallsRegenerateResults(packageRoot),
+    () => '绿=Ctrl+S 只写 JSON / 故障=保存又顺带出图（用户明确拒绝的那件事）',
+  );
+
+  probe(
+    'wiring.the_regenerate_all_entry_is_gone',
+    // 「重新生成全部产物」这个**入口**必须不存在（用户原话：「暂时不需要这个功能」）。
+    // 判据扫全文件：方法名、菜单项、弹窗标题三处都不许有。
+    () async {
+      final file = File('${packageRoot.path}/$_studioPath');
+      if (!file.existsSync()) return false;
+      final source = file.readAsStringSync();
+      return !source.contains('_regenerateAllArtifacts') &&
+          !source.contains('Regenerate all artifacts');
+    },
+    // 故障路径 = 入口还在（哪怕只是把按钮藏起来）。
+    () async => codeHas(_studioPath, '_regenerateAllArtifacts'),
+    () => '绿=全量重生成入口已删 / 故障=入口还在（哪怕只是隐藏）',
+  );
+
+  probe(
+    'wiring.repair_is_the_only_producer_of_artifacts',
+    // 🔴 2026-10-09 续：用户决定删「保存并修图」按钮，出图只剩**一条**入口 ——
+    // 运行弹窗勾了「修图」这一段。判据 = 段内入口存在 + 工具栏入口已删干净。
+    () async =>
+        codeHas(_studioPath, 'stages.repair') &&
+        !codeHas(_studioPath, '_saveAndRepair'),
+    // 故障路径 = 段内入口丢了（不出图），或工具栏入口又回来了（多一条路）。
+    () async =>
+        !codeHas(_studioPath, 'stages.repair') ||
+        codeHas(_studioPath, '_saveAndRepair'),
+    () => '绿=段内入口存在 + 工具栏入口已删 / 故障=段内入口丢了 或 工具栏入口又回来了',
+  );
+
   // ── 4 · 文案（P9.3 的教训：漏登记不报错，只显示英文） ──────────────────
 
   /// 扫出 [relPath] 里**未登记 zh_CN** 的 `.tl` / `.tlParams` 字面量。
@@ -540,4 +705,56 @@ Future<void> runP5Checks(
       '故障路径=${red ? '仍绿(装饰品)' : '变红'}${err.isEmpty ? '' : ' | $err'}',
     );
   }
+}
+
+// ── 「保存不得顺带出图」的判据工具（2026-10-09） ───────────────────────────
+//
+// 🔴 为什么要单独抽成函数：这条断言的**难点不在语义**（`_save` 里不该出现
+// `_regenerateResults`），而在**方法体边界怎么切**。第一版把边界正则写成
+// `\n  (Future|void|Widget|String|bool) ` —— 而下一行是
+// `  Future<void> _saveAndRepair()`，`Future` 后面紧跟 `<` 而**不是空格**，
+// 于是正则匹配不到，边界退化成"整个文件末尾"，`_saveAndRepair` 里的那一句
+// 被算进了 `_save`，绿路径直接判 FALSE。
+//
+// 教训值得单独记：那条断言把"判据写错了"和"行为没改"报成**同一个失败**，
+// 于是我第一反应是去改代码而不是改判据 —— 而真因在判据。
+//⇒ 这里的正则必须能匹配泛型返回类型。
+
+/// `_ComicPageState` 下一个成员的行首（成员一律缩进 **2 空格**）。
+///
+/// 泛型返回类型要显式处理：`  Future<void> ` 里 `Future` 之后是 `<`。
+final RegExp _memberStart = RegExp(
+  r'\n  (Future<|Future |void |Widget |String |bool |int |Set<|List<|Map<)',
+);
+
+/// `studio_page.dart` 里 [`_save`](...) 的**方法体**原文（含签名行）。
+///
+/// 返回 null 表示文件里找不到 `_save` —— 断言据此判 FAIL（"空结果判 FAIL"，
+/// `A02 §7.1`）：找不到方法不等于"保存很干净"。
+String? _saveBodyText(Directory packageRoot) {
+  final file = File('${packageRoot.path}/$_studioPath');
+  if (!file.existsSync()) return null;
+  final source = file.readAsStringSync();
+  final start = source.indexOf('Future<bool> _save(');
+  if (start < 0) return null;
+  final rest = source.substring(start);
+  final end = rest.indexOf(_memberStart, 1);
+  return end < 0 ? rest : rest.substring(0, end);
+}
+
+/// 绿路径 = 真实现：`_save` 里**不该**出现 `_regenerateResults`。
+///
+/// ⚠️ 找不到 `_save` 返回 false（不是 true）—— 否则把方法整个删掉反而"通过"。
+bool _saveBodySpansRegenerateResults(Directory packageRoot) {
+  final body = _saveBodyText(packageRoot);
+  if (body == null) return false;
+  return !body.contains('_regenerateResults');
+}
+
+/// 故障路径 = 修复前那一版：`_save` 末尾挂着
+/// `unawaited(_regenerateResults(dirtyPages: dirtyPages, run: run))`。
+bool _saveBodyCallsRegenerateResults(Directory packageRoot) {
+  final body = _saveBodyText(packageRoot);
+  if (body == null) return false;
+  return body.contains('_regenerateResults');
 }

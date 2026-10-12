@@ -35,6 +35,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/log.dart';
+import 'package:mangrove/network/proxy.dart';
 
 class ComixClient {
   static const _baseUrl = "https://comix.to";
@@ -96,6 +97,7 @@ class ComixClient {
         if (state == 'complete') break;
       }
       // 挑战可能还在自动跑：页面 complete 但内容仍是挑战页，再等几轮。
+      String? lastHtml;
       for (var attempt = 0; attempt < 3; attempt++) {
         final html = unwrapEvalString(
           await controller.evaluateJavascript(
@@ -103,6 +105,7 @@ class ComixClient {
                 "(document.documentElement && document.documentElement.outerHTML) || ''",
           ),
         );
+        lastHtml = html;
         if (html != null && html.isNotEmpty && !looksLikeChallengePage(html)) {
           Log.info(
             "ComixClient",
@@ -111,6 +114,19 @@ class ComixClient {
           return html;
         }
         await Future.delayed(const Duration(milliseconds: 2500));
+      }
+      // P41：硬封禁页（Cloudflare 403 "Attention Required"）与"挑战还在跑"
+      // 对用户是完全不同的问题：前者是**出口 IP 被封**，等待无意义，必须换
+      // 节点/换网络。抛稳定错误码 COMIX_IP_BLOCKED，由 comix_to.js 翻译为
+      // 可操作提示（实测 2026-10-11：美国/印度节点与南京家宽被封，港日新等
+      // 31 个节点正常）。
+      if (lastHtml != null && looksLikeChallengePage(lastHtml)) {
+        Log.warning(
+          "ComixClient",
+          "fetchPageHtml: hard Cloudflare block for $url "
+          "(${lastHtml.length} chars, current proxy/direct exit is banned)",
+        );
+        throw "COMIX_IP_BLOCKED: hard Cloudflare block page for $url";
       }
       throw "fetchPageHtml: no usable HTML for $url";
     }, timeout: const Duration(seconds: 60));
@@ -124,6 +140,11 @@ class ComixClient {
 
   /// 采集章节列表，返回 Mangrove versioned 格式。
   /// 优先 API 直采，失败回退 DOM 采集。
+  ///
+  /// 🔴 2026-10-11 加固（Mangrove P38）：comix.to 现已对大量标题的章节 API
+  /// 返回加密体 `{"e":"..."}`，且 headless worker 偶发停在空白页/坏状态，导致
+  /// DOM 探针整段抓不到（日志实证 `chapter section not ready: null`）。为空时
+  /// 重建 worker（全新 WebView 会话）重试一次，避免"永久空结果"卡死后续串行队列。
   Future<Map<String, List<Map<String, dynamic>>>> fetchChapters({
     required String hid,
     String slug = '',
@@ -131,6 +152,32 @@ class ComixClient {
     final url = slug.isNotEmpty
         ? "$_baseUrl/title/$hid-$slug"
         : "$_baseUrl/title/$hid";
+
+    Map<String, List<Map<String, dynamic>>> result;
+    try {
+      result = await _tryFetchChapters(hid, slug, url);
+    } catch (e) {
+      // P45：出口 IP 被封时立刻把 COMIX_IP_BLOCKED 抛给上层（JS 源翻成
+      // 双语切节点提示），禁止「空结果重启 worker 重试」白等第二遍。
+      if (_isIpBlocked(e)) rethrow;
+      result = {};
+    }
+    if (result.isEmpty) {
+      Log.warning(
+        "ComixClient",
+        "fetchChapters(hid=$hid) empty — restarting worker and retrying once",
+      );
+      await _worker.restart();
+      result = await _tryFetchChapters(hid, slug, url);
+    }
+    return result;
+  }
+
+  Future<Map<String, List<Map<String, dynamic>>>> _tryFetchChapters(
+    String hid,
+    String slug,
+    String url,
+  ) async {
     Log.info("ComixClient", "fetchChapters(hid=$hid) via headless worker");
 
     Map<String, List<Map<String, dynamic>>> result = {};
@@ -140,6 +187,7 @@ class ComixClient {
         timeout: const Duration(seconds: 60),
       );
     } catch (e, s) {
+      if (_isIpBlocked(e)) rethrow; // P45：被封不降级、不空等，直接提示换节点
       Log.error("ComixClient", "API path failed: $e\n$s");
     }
     if (result.isNotEmpty) {
@@ -157,6 +205,7 @@ class ComixClient {
         timeout: const Duration(seconds: 120),
       );
     } catch (e, s) {
+      if (_isIpBlocked(e)) rethrow; // P45：被封不降级、不空等，直接提示换节点
       Log.error("ComixClient", "DOM path failed: $e\n$s");
     }
     Log.info(
@@ -168,8 +217,32 @@ class ComixClient {
 
   /// 采集某章节的图片 URL 列表。
   /// [chapterUrl] 是章节 key（comix.to 章节页完整 URL）。
+  ///
+  /// 🔴 2026-10-11 加固（Mangrove P38）：与 `fetchChapters` 同源的"坏 worker
+  /// 永久空结果"问题，空结果时重建 worker 重试一次。
   Future<List<String>> fetchImageUrls({required String chapterUrl}) async {
     Log.info("ComixClient", "fetchImageUrls($chapterUrl) via headless worker");
+    List<String> urls;
+    try {
+      urls = await _tryFetchImageUrls(chapterUrl);
+    } catch (e) {
+      // P45：出口 IP 被封 —— 立刻把 COMIX_IP_BLOCKED 抛给 JS 源（双语切节点
+      // 提示），禁止「空结果重启 worker 重试」把 45s 等待翻倍成 90s。
+      if (_isIpBlocked(e)) rethrow;
+      urls = const [];
+    }
+    if (urls.isEmpty) {
+      Log.warning(
+        "ComixClient",
+        "fetchImageUrls empty — restarting worker and retrying once",
+      );
+      await _worker.restart();
+      urls = await _tryFetchImageUrls(chapterUrl);
+    }
+    return urls;
+  }
+
+  Future<List<String>> _tryFetchImageUrls(String chapterUrl) async {
     List<String> urls = [];
     try {
       urls = await _worker.enqueue(
@@ -177,6 +250,7 @@ class ComixClient {
         timeout: const Duration(seconds: 90),
       );
     } catch (e, s) {
+      if (_isIpBlocked(e)) rethrow; // P45：被封不降级、不空等，直接提示换节点
       Log.error("ComixClient", "pages API path failed: $e\n$s");
     }
     if (urls.isNotEmpty) return urls;
@@ -191,6 +265,7 @@ class ComixClient {
         timeout: const Duration(seconds: 120),
       );
     } catch (e, s) {
+      if (_isIpBlocked(e)) rethrow; // P45：被封不降级、不空等，直接提示换节点
       Log.error("ComixClient", "pages DOM path failed: $e\n$s");
     }
     Log.info("ComixClient", "fetchImageUrls returned ${urls.length} images");
@@ -212,13 +287,41 @@ class ComixClient {
     int page = 1,
   }) async {
     Log.info("ComixClient", "browseManga($urlQuery, page=$page)");
+    // page/limit 直接放进 browse URL，SPA 会透传到 API 请求。
+    final query = Map<String, String>.from(urlQuery);
+    query['page'] = '$page';
+    query['limit'] = '28';
+    final params = query.entries
+        .map(
+          (e) =>
+              '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}',
+        )
+        .join('&');
+    final url = params.isEmpty ? "$_baseUrl/browse" : "$_baseUrl/browse?$params";
+
+    var result = await _route(() => _browseViaApi(url), const Duration(seconds: 90));
+    final apiItems = result['items'];
+    if (apiItems is List && apiItems.isNotEmpty) return result;
+
+    // 🔴 2026-10-11 (Mangrove P42)：列表 API 的响应被站方加密（截获不到明文），
+    // 旧实现直接返回空 ⇒ 搜索"转圈后无结果"。改为读 SPA 渲染出的卡片 DOM。
+    Log.warning("ComixClient", "browse API empty — falling back to DOM scraping");
+    final dom = await _route(() => _browseByDom(url), const Duration(seconds: 120));
+    final domItems = dom['items'];
+    if (domItems is List && domItems.isNotEmpty) return dom;
+    return result;
+  }
+
+  /// worker 队列 + 异常归一化：失败时返回空结果而不是把异常抛给调用方。
+  Future<Map<String, dynamic>> _route(
+    Future<Map<String, dynamic>> Function() task,
+    Duration timeout,
+  ) async {
     try {
-      return await _worker.enqueue(
-        () => _browseViaApi(urlQuery, page),
-        timeout: const Duration(seconds: 90),
-      );
+      return await _worker.enqueue(task, timeout: timeout);
     } catch (e, s) {
-      Log.error("ComixClient", "browse failed: $e\n$s");
+      if (_isIpBlocked(e)) rethrow; // P45：被封时搜索也立刻提示换节点
+      Log.error("ComixClient", "browse route failed: $e\n$s");
       return {'items': <dynamic>[], 'lastPage': 0};
     }
   }
@@ -231,26 +334,10 @@ class ComixClient {
     return browseManga(urlQuery: {'q': keyword}, page: page);
   }
 
-  Future<Map<String, dynamic>> _browseViaApi(
-    Map<String, String> urlQuery,
-    int page,
-  ) async {
+  Future<Map<String, dynamic>> _browseViaApi(String url) async {
     final controller = await _worker.ensure();
     await _drainCaptures(controller);
 
-    // page/limit 直接放进 browse URL，SPA 会透传到 API 请求。
-    final query = Map<String, String>.from(urlQuery);
-    query['page'] = '$page';
-    query['limit'] = '28';
-    final params = query.entries
-        .map(
-          (e) =>
-              '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}',
-        )
-        .join('&');
-    final url = params.isEmpty
-        ? "$_baseUrl/browse"
-        : "$_baseUrl/browse?$params";
     await _navigate(controller, url);
 
     // 双通道取数据：fetch/XHR 截获（明文）+ JSON.parse 载荷（应对加密响应）。
@@ -281,6 +368,59 @@ class ComixClient {
       "browse: ${items.length} items, lastPage=$lastPage",
     );
     return {'items': items, 'lastPage': lastPage};
+  }
+
+  /// 浏览/搜索卡片的 DOM 探测。
+  ///
+  /// 选择器取自站点 bundle 的卡片组件（`sl(...)` 渲染的
+  /// `a.card > .card__poster-wrap img` + `.card__title`），
+  /// 与 BT 用 DOM 采章节同一思路——读站点自己渲染出来的结果。
+  static const _browseProbeJs = r"""
+(function(){
+  var cards = Array.from(document.querySelectorAll('a.card'));
+  var rows = cards.map(function(a){
+    var t = a.querySelector('.card__title');
+    var img = a.querySelector('.card__poster-wrap img') || a.querySelector('img');
+    return {
+      href: a.getAttribute('href'),
+      title: t ? (t.textContent || '').trim() : (a.getAttribute('title') || ''),
+      cover: img ? (img.getAttribute('src') || img.getAttribute('data-src') || '') : ''
+    };
+  }).filter(function(r){ return r.href && r.href.indexOf('/title/') >= 0; });
+  return JSON.stringify({ ready: rows.length > 0, rows: rows, url: location.href });
+})()
+""";
+
+  /// 浏览/搜索的 DOM 兜底：列表 API 拿不到明文时，读 SPA 渲染出的卡片。
+  /// 字段与 API 路径对齐（`url`/`title`/`poster`），供 JS 源的 `_comixMapComic` 复用。
+  Future<Map<String, dynamic>> _browseByDom(String url) async {
+    final controller = await _worker.ensure();
+    await _navigate(controller, url);
+
+    final snap = await _evalWithRetry(
+      controller,
+      _browseProbeJs,
+      timeoutMs: 30000,
+    );
+    if (snap == null || snap['ready'] != true) {
+      Log.warning("ComixClient", "browse DOM: no cards rendered");
+      return {'items': <dynamic>[], 'lastPage': 0};
+    }
+    final rows = List<Map<String, dynamic>>.from(snap['rows'] ?? []);
+    final items = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final r in rows) {
+      final href = r['href']?.toString() ?? '';
+      if (href.isEmpty || !href.contains('/title/')) continue;
+      if (!seen.add(href)) continue;
+      items.add({
+        'url': href,
+        'title': r['title']?.toString() ?? '',
+        'poster': r['cover']?.toString() ?? '',
+      });
+    }
+    Log.info("ComixClient", "browse DOM: ${items.length} cards");
+    return {'items': items, 'lastPage': 1};
   }
 
   // ---- API 直采路径 ----
@@ -319,7 +459,10 @@ class ComixClient {
     );
     firstBody ??= await _payloadOfTag(controller, 'chapters');
     if (firstBody == null) {
-      Log.warning("ComixClient", "no chapters API capture within 30s");
+      Log.warning(
+        "ComixClient",
+        "no usable chapters API capture (encrypted/empty) — DOM fallback next",
+      );
       return {};
     }
 
@@ -390,6 +533,20 @@ class ComixClient {
     return jsonEncode(item);
   }
 
+  /// 加密响应体标记：comix.to 对部分 `/api/v1/*` 响应返回 `{"e":"<base64>"}`
+  /// （只有 SPA 自己的解密逻辑能还原成明文）。
+  static final _encryptedBodyRe = RegExp(r'^\s*\{\s*"e"\s*:');
+
+  /// 截获到加密体后，额外留给 `JSON.parse` 明文通道的宽限时长。
+  ///
+  /// 🔴 2026-10-11 (Mangrove P42)：旧实现在"确认是加密体"后仍空等到
+  /// timeout（30/60s）——用户看到的就是"搜索转圈卡住"、"详情卡住不出章节"。
+  /// 现在只等这一个短窗口，拿不到明文就立刻返回 null，让上层快速走 DOM 兜底。
+  static const _encryptedGrace = Duration(milliseconds: 2000);
+
+  bool _looksEncrypted(String bodyText) =>
+      _encryptedBodyRe.hasMatch(bodyText.trim());
+
   /// 等一条匹配的截获（fetch/XHR 钩子）或 JSON.parse 载荷（解密后的明文）。
   /// 两条通道互为备份：站方对部分响应做了加密（原始 body 是 `{"e":"..."}`），
   /// 只有 JSON.parse 通道能看到明文。
@@ -401,6 +558,7 @@ class ComixClient {
     required String what,
   }) async {
     final deadline = DateTime.now().add(timeout);
+    DateTime? encryptedAt;
     while (DateTime.now().isBefore(deadline)) {
       final captures = await _drainCaptures(controller);
       for (final capture in captures) {
@@ -417,10 +575,18 @@ class ComixClient {
         );
         final body = _decodeApiBody(bodyText);
         if (body != null && _bodyLooksUseful(body)) return body;
-        Log.warning(
-          "ComixClient",
-          "$what: captured body unusable, preview=${bodyText.substring(0, bodyText.length.clamp(0, 160))}",
-        );
+        if (_looksEncrypted(bodyText)) {
+          encryptedAt ??= DateTime.now();
+          Log.info(
+            "ComixClient",
+            "$what: encrypted payload — waiting ${_encryptedGrace.inMilliseconds}ms for plaintext hook",
+          );
+        } else {
+          Log.warning(
+            "ComixClient",
+            "$what: captured body unusable, preview=${bodyText.substring(0, bodyText.length.clamp(0, 160))}",
+          );
+        }
       }
       final payloads = await _drainPayloads(controller);
       for (final p in payloads) {
@@ -437,6 +603,15 @@ class ComixClient {
           }
           return map;
         }
+      }
+      if (encryptedAt != null &&
+          DateTime.now().difference(encryptedAt) >= _encryptedGrace) {
+        await _logHookDiagnostics(controller, what);
+        Log.warning(
+          "ComixClient",
+          "$what: response is encrypted and no plaintext channel fired — bailing out to fallback",
+        );
+        return null;
       }
       await Future.delayed(const Duration(milliseconds: 300));
     }
@@ -689,6 +864,25 @@ class ComixClient {
 })()
 """;
 
+  /// 点“下一页”控件（数字按钮窗口滚动 / 只剩 Next 时的兜底）。
+  /// 找 aria-label / title / 文本里含 "next" 的按钮或链接。
+  static const _clickNextPageJs = r"""
+(function(){
+  const sec = document.querySelector('SECTION.mpage__chapters');
+  if (!sec) return JSON.stringify({ok:false, reason:'no-section'});
+  const cands = Array.from(sec.querySelectorAll('button, a'));
+  const btn = cands.find(el => {
+    const s = ((el.getAttribute('aria-label') || '') + ' ' +
+               (el.getAttribute('title') || '') + ' ' +
+               (el.textContent || '')).toLowerCase();
+    return s.indexOf('next') >= 0;
+  });
+  if (!btn) return JSON.stringify({ok:false, reason:'no-next'});
+  btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+  return JSON.stringify({ok:true, how:'next'});
+})()
+""";
+
   /// 翻页后验证：看 active 按钮和第一行 href 是否变了。
   static const _pageVerifyJs = r"""
 (function(){
@@ -726,6 +920,107 @@ class ComixClient {
 })()
 """;
 
+  /// 阅读页 **React fiber 挖取**：拿整章全量图片 URL。
+  ///
+  /// 🔴 为什么需要它（2026-10-11 P43 取证，reader chunk
+  /// `tmq6ux-CARftgsC2.js` 实证）：
+  /// 阅读器是 Swiper **虚拟化**——同屏只挂 3 张 `<img class="rpage-page__img">`，
+  /// 滚动也不补加载，所以 `<img>` 探针永远只拿到 3~5 张。但站方把**整章页数组**
+  /// 留在 React 内存里（fiber 的 props），数组元素就是页对象。
+  /// 站方 `<img src>` = `builder(页对象, 页序, 重试次数)`，**重试计数 <= 0 时
+  /// 原样返回页对象里的完整 URL 字段**（`?r=` 子域轮换只在重试时才拼）。
+  /// 所以从任一页 `<img>` 沿 fiber 向上、或从根容器向下扫描，即可一次性拿回
+  /// 全部页 URL，与站点虚拟化无关。
+  ///
+  /// 🔴 **字段名随站方构建漂移**（压缩名，非稳定契约）：
+  /// - 2026-10-11（reader chunk `tmq6ux-*`）：URL = `bZ`、页序 = `q2`；
+  /// - 2026-10-12 线上再逆（reader chunk `tmqy0z-DcHRFp8b2.js`，`rpage`×252 /
+  ///   `swiper`×6 同签名）：URL = **`B0`**、页序 = **`ka`**、高/宽 = `Rh`/`MO`、
+  ///   域名数组 = `lk`、备用域 = `NX`、整章页数组 = query 数据的 **`hs`**。
+  /// ⇒ 因此 [urlOf] **先认已知名、再退到通用判据**（页对象里任一直接字符串
+  ///   属性以 `http` 开头即认，并排除 `/title/`、`/chapter` 导航链接），
+  ///   下次改名仍能命中。
+  static const _pagesByReactJs = r"""
+(function(){
+  function fiberOf(el){
+    if(!el) return null;
+    for(var k in el){
+      if(k.indexOf('__reactFiber$')===0 || k.indexOf('__reactInternalInstance$')===0) return el[k];
+    }
+    return null;
+  }
+  function urlOf(o){
+    if(!o || typeof o!=='object') return null;
+    var v = o.B0;                                   // 2026-10-12 线上构建：URL = B0
+    if(typeof v==='string' && v.indexOf('http')===0) return v;
+    v = o.bZ;                                       // 2026-10-11 构建：URL = bZ
+    if(typeof v==='string' && v.indexOf('http')===0) return v;
+    // 字段名随站方构建漂移（压缩名，会变）：页对象里**任一直接字符串属性**
+    // 以 http 开头即认，并排除站点导航链接（/title/、/chapter），避免把章节
+    // 列表 / 关联漫画数组误当页数组（harvest 取最长，撞上就全错了）。
+    var ks = Object.keys(o);
+    for(var i=0;i<ks.length;i++){
+      var t = o[ks[i]];
+      if(typeof t==='string' && t.indexOf('http')===0 &&
+         t.indexOf('/title/')<0 && t.indexOf('/chapter')<0) return t;
+    }
+    return null;
+  }
+  function pushFrom(el, out){
+    if(!el || typeof el!=='object') return;
+    var u = urlOf(el);
+    if(u){ out.push(u); return; }
+    if(el.props && el.props.page){ u = urlOf(el.props.page); if(u){ out.push(u); return; } }
+    if(el.page){ u = urlOf(el.page); if(u){ out.push(u); return; } }
+    if(Array.isArray(el.lj)){
+      for(var i=0;i<el.lj.length;i++){ var uu=urlOf(el.lj[i]); if(uu) out.push(uu); }
+    }
+  }
+  var best = null;
+  var visited = new Set();
+  function harvest(arr){
+    if(!arr || arr.length<2) return;
+    var urls = [];
+    for(var i=0;i<arr.length;i++) pushFrom(arr[i], urls);
+    if(urls.length>=2 && (!best || urls.length>best.length)) best = urls;
+  }
+  function scan(v, d){
+    if(!v || typeof v!=='object' || d>7) return;
+    if(visited.has(v)) return;
+    visited.add(v);
+    if(Array.isArray(v)){
+      harvest(v);
+      if(v.length<=600){ for(var i=0;i<v.length;i++) scan(v[i], d+1); }
+      return;
+    }
+    var ks = Object.keys(v);
+    for(var i=0;i<ks.length;i++){
+      var k = ks[i];
+      if(k==='return'||k==='child'||k==='sibling'||k==='stateNode'||k==='alternate'||k==='_owner') continue;
+      scan(v[k], d+1);
+    }
+  }
+  var seeds = [];
+  var img = document.querySelector('img.rpage-page__img, .rpage-page img, .rpage-view img');
+  if(img) seeds.push(img);
+  var extra = document.querySelectorAll('.rpage-main, #root, #__next, main, section');
+  for(var e=0;e<extra.length && e<8;e++) seeds.push(extra[e]);
+  for(var s=0;s<seeds.length && !best;s++){
+    var node = fiberOf(seeds[s]);
+    var depth = 0;
+    while(node && depth<150 && !best){
+      scan(node.memoizedProps, 0);
+      if(!best) scan(node.memoizedState, 0);
+      node = node.return; depth++;
+    }
+  }
+  var urls = best || [];
+  var seen = {}; var uniq = [];
+  for(var j=0;j<urls.length;j++){ if(!seen[urls[j]]){ seen[urls[j]]=1; uniq.push(urls[j]); } }
+  return JSON.stringify({ ok: uniq.length>=2, count: uniq.length, urls: uniq });
+})()
+""";
+
   Future<Map<String, List<Map<String, dynamic>>>> _fetchChaptersByDom(
     String hid,
     String slug,
@@ -753,34 +1048,68 @@ class ComixClient {
 
     final allRows = <Map<String, dynamic>>[];
     allRows.addAll(List<Map<String, dynamic>>.from(firstSnap['rows'] ?? []));
-    final pagesHint = (firstSnap['pages'] ?? 1) as int;
-
     var consecutiveEmpty = 0;
-    String? prevFirstHref;
-    for (var p = 2; p <= pagesHint && p <= 40; p++) {
+    // 🔴 基准必须是**首页首行的 href**，不能是 null：站方分页控件常是
+    //    "数字窗口(1-8) + Next/Last"（见 P4 交接文档），第一跳若拿 null 当基准，
+    //    轮询第一拍就会"以为改了"直接收（读到的还是首页）→ 新增为 0 → 立刻 break，
+    //    章节仍只采到一页。
+    String? prevFirstHref =
+        (firstSnap['rows'] as List?)?.isNotEmpty == true
+            ? (firstSnap['rows'] as List).first['href'] as String?
+            : null;
+    // 整个翻页总预算（enqueue timeout 是 120s，留出余量）。
+    final chapterDeadline = DateTime.now().add(const Duration(seconds: 100));
+    // 🔴 上界给大：`pages` 只是**可见数字按钮的最大值**、不是总页数
+    //    （Next-only 时它=1，旧代码 `p <= pagesHint` 循环根本不进 → 只采一页）。
+    //    真正终止靠下面四条：控件消失 / 首行不再变化 / 本轮新增为 0 / 预算耗尽。
+    for (var p = 2; p <= 200; p++) {
+      if (DateTime.now().isAfter(chapterDeadline)) {
+        Log.info("ComixClient", "DOM: chapter paging budget exhausted at page $p");
+        break;
+      }
       try {
         await controller.evaluateJavascript(source: _adSweepJs);
       } catch (_) {}
       final clickJs = _clickPageJs.replaceFirst('__PAGE__', '$p');
-      final clickMap = _parseEvalMap(
+      var clickMap = _parseEvalMap(
         await controller.evaluateJavascript(source: clickJs),
       );
-      if (clickMap?['ok'] != true) break;
+      if (clickMap?['ok'] != true) {
+        // 数字按钮缺失（分页窗口滚动 / 只剩 Next）→ 退而点“下一页”。
+        clickMap = _parseEvalMap(
+          await controller.evaluateJavascript(source: _clickNextPageJs),
+        );
+        if (clickMap?['ok'] != true) {
+          Log.info("ComixClient", "DOM: no pager control for page $p, stop");
+          break;
+        }
+      }
 
-      // 等 SPA 渲染新页
-      await Future.delayed(const Duration(milliseconds: 1200));
-
-      final verifyMap = _parseEvalMap(
-        await controller.evaluateJavascript(source: _pageVerifyJs),
-      );
-      final newFirstHref = verifyMap?['firstHref'] as String?;
-      if (prevFirstHref != null &&
-          newFirstHref != null &&
-          newFirstHref == prevFirstHref) {
-        Log.info("ComixClient", "DOM: page $p not effective, stopping");
+      // 等 SPA 渲染新页：轮询到首行变化（最多 ~8s）。
+      // 🔴 旧实现只等固定 1.2s——站方对章节接口做了加密，SPA 要先解密再渲染，
+      //    1.2s 常读到的还是上一页（线上日志实证 `page 4 not effective`），
+      //    于是提前 break，章节只采到一页的量。
+      String? newFirstHref;
+      final waitUntil = DateTime.now().add(const Duration(seconds: 8));
+      while (DateTime.now().isBefore(waitUntil)) {
+        final verifyMap = _parseEvalMap(
+          await controller.evaluateJavascript(source: _pageVerifyJs),
+        );
+        final fh = verifyMap?['firstHref'] as String?;
+        if (fh != null && fh != prevFirstHref) {
+          newFirstHref = fh;
+          break;
+        }
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+      if (newFirstHref == null) {
+        Log.info(
+          "ComixClient",
+          "DOM: page $p not effective after wait, stopping",
+        );
         break;
       }
-      if (newFirstHref != null) prevFirstHref = newFirstHref;
+      prevFirstHref = newFirstHref;
 
       final snap = await _evalWithRetry(
         controller,
@@ -812,17 +1141,28 @@ class ComixClient {
     return _buildVersionedMapFromRows(allRows);
   }
 
-  /// 阅读页 DOM 兜底。
+  /// 阅读页兜底：**React fiber 优先**，`<img>` 探针次之。
   ///
   /// ⚠️ 阅读器是 **Swiper slides 虚拟化**（同时只渲染 3~5 张 slide），不是
-  /// 简单的懒加载——所以"一有图就返回"只能拿到 4 张。这里改成轮询到
-  /// **数量连续 3 次不变** 再收，同时把 img 的 loading 强制改成 eager，
-  /// 尽可能把已进入 DOM 的图全部触发加载。
+  /// 简单的懒加载——`<img>` 探针永远只拿到 3~5 张（旧实现"一有图就返回"
+  /// 只能拿到 4 张）。所以先用 fiber 挖 React 内存里的**整章页数组**
+  /// （见 [_pagesByReactJs]），拿不到才退回 `<img>` 轮询。
   /// 它只是最后兜底：主路径是 API 截获（一章一次响应就有全部页）。
   Future<List<String>> _fetchPagesByDom(String chapterUrl) async {
     final controller = await _worker.ensure();
     await _navigate(controller, chapterUrl);
 
+    // 1) React fiber：整章全量页（首选）。
+    final viaReact = await _pagesViaReact(controller);
+    if (viaReact.length >= 2) {
+      Log.info(
+        "ComixClient",
+        "DOM: React fiber recovered ${viaReact.length} image(s) from reader state",
+      );
+      return viaReact;
+    }
+
+    // 2) `<img>` DOM 探针（旧兜底，虚拟化下通常只有 3~5 张）。
     final deadline = DateTime.now().add(const Duration(seconds: 25));
     var lastCount = -1;
     var stable = 0;
@@ -856,6 +1196,46 @@ class ComixClient {
         "DOM fallback collected ${best.length} image(s) (virtualised reader, "
             "count may be far below the real page count)",
       );
+    }
+    return best;
+  }
+
+  /// 轮询 React fiber 挖取阅读页全量图片 URL（见 [_pagesByReactJs]）。
+  ///
+  /// 站方的章节图片接口是加密的（明文通道抓不到），页数组只在 SPA 解密后
+  /// 落到 React 内存；SPA 渲染需要时间，所以轮询到"数量连续 3 次不变"
+  /// 再收，避免拿到半成品。
+  Future<List<String>> _pagesViaReact(
+    InAppWebViewController controller,
+  ) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    var lastCount = -1;
+    var stable = 0;
+    List<String> best = const [];
+    while (DateTime.now().isBefore(deadline)) {
+      Map<String, dynamic>? snap;
+      try {
+        snap = _parseEvalMap(
+          await controller.evaluateJavascript(source: _pagesByReactJs),
+        );
+      } catch (e) {
+        Log.warning("ComixClient", "React fiber probe error: $e");
+      }
+      if (snap != null && snap['ok'] == true) {
+        final urls = (snap['urls'] as List? ?? [])
+            .map((u) => u.toString())
+            .where((u) => u.startsWith('http'))
+            .toList();
+        if (urls.length > best.length) best = urls;
+        if (urls.length == lastCount) {
+          stable++;
+          if (stable >= 3 && best.length >= 2) break;
+        } else {
+          stable = 0;
+          lastCount = urls.length;
+        }
+      }
+      await Future.delayed(const Duration(milliseconds: 700));
     }
     return best;
   }
@@ -905,13 +1285,95 @@ class ComixClient {
     }
   }
 
+  /// 诊断：明文通道没命中时，把钩子状态、各 sink 调用计数、未识别的原始
+  /// 载荷头 dump 出来，判定站方解密到底走的是哪个落点（P43 排查用）。
+  Future<void> _logHookDiagnostics(
+    InAppWebViewController controller,
+    String what,
+  ) async {
+    try {
+      final raw = await controller.evaluateJavascript(
+        source: r"""
+(function(){
+  return JSON.stringify({
+    installed: !!window.__comixHookInstalled,
+    parsePatched: String(JSON.parse).indexOf('native code') < 0,
+    sinks: window.__comixSinks || {},
+    payloads: (window.__comixPayloads || []).length,
+    raw: (window.__comixRaw || []).slice(-6)
+  });
+})()
+""",
+      );
+      Log.info("ComixClient", "hook diagnostics ($what): ${_parseEvalMap(raw)}");
+    } catch (e) {
+      Log.warning("ComixClient", "hook diagnostics error: $e");
+    }
+  }
+
   Future<void> _navigate(InAppWebViewController controller, String url) async {
     Log.info("ComixClient", "navigate → $url");
     try {
       await controller.stopLoading();
     } catch (_) {}
     await controller.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+    await _throwIfOnChallenge(controller, url);
   }
+
+  /// 导航后快速识别「落在 WAF 挑战页」。
+  ///
+  /// 🔴 2026-10-12 (P45)：被封出口 IP 上，**任何**导航都被服务端直接重定向到
+  /// `/@waf/challenge?return=...`（HTTP 200、9.4KB 滑块页，实测导航后 < 0.7s
+  /// 就位）。旧代码在这条路上要白等 fiber 20s + `<img>` 探针 25s（章节翻页
+  /// 更是 100s 预算），P38 的「空结果重建 worker 再来一遍」再翻倍 ⇒ 用户看到的
+  /// 「卡在获取图片列表 30~60s」。这里在全部 6 条采集路径的共同咽喉
+  /// [_navigate] 采两个样本（约 700ms / 1600ms）：
+  /// - 命中挑战 → 立刻抛 `COMIX_IP_BLOCKED`（上层**不再降级、不重启重试**，
+  ///   直接给用户「请切换节点」的可操作提示）；
+  /// - 正文已渲染出 >20KB ⇒ 真页，提前返回；
+  /// - 其余（SPA bootstrap 小壳）⇒ 交给各路径既有的轮询，不拖慢正常流程。
+  Future<void> _throwIfOnChallenge(
+    InAppWebViewController controller,
+    String url,
+  ) async {
+    for (var sample = 0; sample < 2; sample++) {
+      await Future.delayed(Duration(milliseconds: sample == 0 ? 700 : 900));
+      String? href;
+      String? html;
+      try {
+        href = unwrapEvalString(
+          await controller.evaluateJavascript(source: 'location.href'),
+        );
+        html = unwrapEvalString(
+          await controller.evaluateJavascript(
+            source:
+                "(document.documentElement && document.documentElement.outerHTML) || ''",
+          ),
+        );
+      } catch (_) {
+        continue;
+      }
+      final onChallenge =
+          (href ?? '').contains('/@waf/challenge') ||
+          (html != null && looksLikeChallengePage(html));
+      if (onChallenge) {
+        Log.warning(
+          "ComixClient",
+          "navigate → WAF challenge for $url (href=$href, "
+          "${html?.length} chars); exit IP banned, failing fast with "
+          "COMIX_IP_BLOCKED instead of polling 20~100s",
+        );
+        throw "COMIX_IP_BLOCKED: WAF challenge page after navigating to $url";
+      }
+      if ((html?.length ?? 0) > 20000) return;
+    }
+  }
+
+  /// P38 的「空结果重建 worker 重试」绝不能用在 IP 被封上 —— 被封时重试
+  /// 只是把等待翻倍。统一用本判据让 `COMIX_IP_BLOCKED` 一路抛到 JS 源，
+  /// 由 `comix_to.js` 翻成中英双语切节点提示。
+  static bool _isIpBlocked(Object error) =>
+      error.toString().contains('COMIX_IP_BLOCKED');
 
   /// 带超时轮询的 evaluateJavascript（DOM 探测用）。
   Future<Map<String, dynamic>?> _evalWithRetry(
@@ -1264,6 +1726,16 @@ class _ComixWorker {
         .whenComplete(() => completer.complete());
   }
 
+  /// 强制释放当前 WebView，下次 `ensure()` 会重建全新会话。
+  /// 用于"headless worker 停在空白页/坏状态导致永久空结果"时的自愈重试
+  /// （见 `fetchChapters` 的空结果重建分支）。
+  Future<void> restart() async {
+    try {
+      await _webview?.dispose();
+    } catch (_) {}
+    _webview = null;
+  }
+
   /// 确保 worker 就绪，返回控制器。
   Future<InAppWebViewController> ensure() async {
     if (_isAlive) {
@@ -1308,6 +1780,8 @@ class _ComixWorker {
   window.__comixHookInstalled = true;
   window.__comixApiLog = [];
   window.__comixPayloads = [];
+  window.__comixRaw = [];
+  window.__comixSinks = {jsonParse: 0, atob: 0, textDecode: 0, evalRun: 0};
   function record(url, body, status) {
     try {
       if (!url || String(url).indexOf('/api/') === -1) return;
@@ -1348,17 +1822,29 @@ class _ComixWorker {
     });
     return oSend.apply(this, arguments);
   };
-  // ---- 明文载荷通道 ----
-  // 站方对部分 API 响应做了加密（原始 body 形如 {"e":"..."}），只有 SPA
-  // 解密后再 JSON.parse 得到的才是明文。这里包一层 JSON.parse，把带
-  // pages / items 的结果原样留档，作为 fetch 截获通道的备份。
-  // 与 BallonsTranslator 的 scraper/comix_client.py 同一思路（那边抓的是
-  // JSON.parse 解密负载）。
-  var op = JSON.parse;
-  JSON.parse = function(text, reviver) {
-    var v = op(text, reviver);
+  // ---- 明文载荷通道（多点截获） ----
+  // 站方对部分 API 响应做了加密（原始 body 形如 {"e":"..."}，实测高熵密文，
+  // 非 base64 明文），只有 SPA 自己的解密逻辑能还原。解密模块被 VMP 混淆、
+  // 模块作用域，注入脚本拿不到 ⇒ 只能"借站方运行时"：把明文落点全包住。
+  // 已知/可能的落点：JSON.parse（BallonsTranslator 用这个）、atob 输出、
+  // TextDecoder.decode 输出、eval 源码。凡产出 pages/items/chapters 形状的
+  // 一律留档到 window.__comixPayloads；形状不认识的原样留 __comixRaw 供诊断。
+  var nativeParse = JSON.parse;
+  function ingest(sink, text) {
     try {
-      if (v && typeof v === 'object' && !Array.isArray(v)) {
+      if (typeof text !== 'string' || text.length < 16) return;
+      if (text.indexOf('"pages"') < 0 && text.indexOf('"items"') < 0 &&
+          text.indexOf('"chapters"') < 0 && text.indexOf('"result"') < 0) return;
+      var v = null;
+      try { v = nativeParse(text); } catch (e) {
+        var a = text.indexOf('{'), b = text.lastIndexOf('}');
+        if (a >= 0 && b > a) {
+          try { v = nativeParse(text.slice(a, b + 1)); } catch (e2) {}
+        }
+      }
+      if (!v || typeof v !== 'object' || Array.isArray(v)) {
+        window.__comixRaw.push({sink: sink, tag: 'none', head: text.slice(0, 240)});
+      } else {
         var r = (v.result && typeof v.result === 'object') ? v.result : v;
         var tag = null;
         if (r.pages && !Array.isArray(r.pages) && Array.isArray(r.pages.items)) {
@@ -1369,13 +1855,55 @@ class _ComixWorker {
           tag = (i0.number !== undefined || i0.volume !== undefined) ? 'chapters' : 'list';
         }
         if (tag) {
-          window.__comixPayloads.push({tag: tag, payload: v});
-          if (window.__comixPayloads.length > 12) window.__comixPayloads.shift();
+          window.__comixPayloads.push({tag: tag, payload: v, via: sink});
+        } else {
+          window.__comixRaw.push({sink: sink, tag: 'unknown', head: text.slice(0, 240)});
         }
       }
+      if (window.__comixPayloads.length > 16) window.__comixPayloads.shift();
+      if (window.__comixRaw.length > 12) window.__comixRaw.shift();
+    } catch (e) {}
+  }
+  JSON.parse = function(text, reviver) {
+    var v = nativeParse(text, reviver);
+    try {
+      window.__comixSinks.jsonParse++;
+      if (typeof text === 'string') ingest('json.parse', text);
     } catch (e) {}
     return v;
   };
+  try {
+    var oAtob = window.atob;
+    if (oAtob) {
+      window.atob = function(s) {
+        var r = oAtob(s);
+        try { window.__comixSinks.atob++; ingest('atob', r); } catch (e) {}
+        return r;
+      };
+    }
+  } catch (e) {}
+  try {
+    if (window.TextDecoder && TextDecoder.prototype && TextDecoder.prototype.decode) {
+      var oDecode = TextDecoder.prototype.decode;
+      TextDecoder.prototype.decode = function() {
+        var r = oDecode.apply(this, arguments);
+        try { window.__comixSinks.textDecode++; ingest('TextDecoder', r); } catch (e) {}
+        return r;
+      };
+    }
+  } catch (e) {}
+  try {
+    var oEval = window.eval;
+    if (oEval) {
+      window.eval = function(src) {
+        try {
+          window.__comixSinks.evalRun++;
+          if (typeof src === 'string') ingest('eval', src);
+        } catch (e) {}
+        return oEval.apply(this, arguments);
+      };
+    }
+  } catch (e) {}
 })();
 """;
 }
@@ -2147,16 +2675,38 @@ String? unwrapEvalString(dynamic raw) {
   return null;
 }
 
-/// HTML 是否还在 CF / 挑战页上（用于决定要不要再等一轮）。
+/// HTML 是否还在 CF / 挑战页**或封禁页**上（用于决定要不要再等一轮，
+/// 以及不要把封禁页当正常内容返回）。
+///
+/// 🔴 P39：之前只认「挑战中」关键字，漏了 CF 的**硬封禁页**
+/// （`Attention Required! | Cloudflare` / `cf-error-details` /
+/// `blocked_why_headline`）——于是 `fetchPageHtml` 把 403 封禁页当正常 HTML
+/// 返回，上层拿 `no initial-data in page` 这种误导性报错。
 bool looksLikeChallengePage(String html) {
   final lower = html.toLowerCase();
   return lower.contains('cf-challenge') ||
-      lower.contains('challenge-platform') ||
+      // 🔴 2026-10-12 (P45)：**不能**只认 `challenge-platform` —— CF 的 jsd
+      // 探针（`/cdn-cgi/challenge-platform/scripts/jsd/main.js`）**全站注入**，
+      // 正常 SSR 页（实测 27,513 字符真页）也含此串 ⇒ 会把好页面误判成挑战页。
+      // 真·CF 托管挑战走 `/cdn-cgi/challenge-platform/h/...`，用带 `/h/` 的形式。
+      lower.contains('challenge-platform/h/') ||
       lower.contains('just a moment') ||
       lower.contains('__cf_chl_opt') ||
       lower.contains('cf-browser-verification') ||
       lower.contains('checking your browser') ||
-      lower.contains('__gatekeeper_challenge');
+      lower.contains('__gatekeeper_challenge') ||
+      // 🔴 2026-10-12 (P45)：comix 自家 WAF 挑战页（非 CF 标准页）——
+      // HTTP **200**、`<title>Security check</title>`、9.4KB 滑块页，
+      // 导航落到 `/@waf/challenge?return=...`。被封出口 IP（随时间漂移：
+      // 美国/印度 → 法国/澳大利亚/香港Y01 先后被封）任何导航都落这里。
+      lower.contains('@waf/challenge') ||
+      lower.contains('<title>security check') ||
+      // 硬封禁页（403 / error 1020）：
+      lower.contains('attention required') ||
+      lower.contains('cf-error-details') ||
+      lower.contains('blocked_why_headline') ||
+      lower.contains('you have been blocked') ||
+      lower.contains('error 1020');
 }
 
 /// 给离屏 WebView 应用 App 的代理设置。
@@ -2193,9 +2743,33 @@ Future<WebViewEnvironment>? _sharedEnvCreate;
 
 Future<WebViewEnvironment> _getSharedWebViewEnvironment() {
   return _sharedEnvCreate ??= () async {
+    // 代理透传（P41 修订）：给共享 WebView2 传与系统/App 设置等价的
+    // --proxy-server，使离屏 WebView 与 dio 走向一致。P39 曾在此把 comix
+    // 全域加入 --proxy-bypass-list 强制直连，但 P41 实测家宽 IP 也已被
+    // Cloudflare 封、港日等代理节点可用（34 节点逐个实测 31 个 200），
+    // kDirectProxyHostSuffixes 默认已清空；白名单非空时仍拼 bypass，
+    // 为空则只保留 <local>。代理解析不到（direct/无代理）时不加参数。
+    String? extraArgs;
+    try {
+      final proxy = await getProxy();
+      if (proxy != null && proxy.isNotEmpty) {
+        final server = proxy.contains('://') ? proxy : 'http://$proxy';
+        final suffixRules = buildProxyBypassList();
+        final bypass = suffixRules.isEmpty
+            ? '<local>'
+            : '$suffixRules;<local>';
+        extraArgs =
+            '--proxy-server=$server --proxy-bypass-list=$bypass';
+        Log.info("ComixClient", "webview proxy: $server bypass=$bypass");
+      }
+    } catch (e) {
+      Log.warning("ComixClient", "webview proxy args failed: $e");
+    }
+
     _sharedWebViewEnvironment ??= await WebViewEnvironment.create(
       settings: WebViewEnvironmentSettings(
         userDataFolder: "${App.dataPath}\\webview",
+        additionalBrowserArguments: extraArgs,
       ),
     );
     return _sharedWebViewEnvironment!;

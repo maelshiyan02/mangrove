@@ -1,6 +1,7 @@
 import 'dart:async' show Future;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/utils/io.dart';
 import 'base_image_provider.dart';
@@ -17,6 +18,25 @@ class LocalComicImageProvider
 
   @override
   Future<Uint8List> load(chunkEvents, checkStop) async {
+    // 🔴 `bt_` 工程卡片的封面**不能**走下面的 `comic.coverFile` 兜底。
+    //
+    // 工程 json 的 `directory` 指向 `<工程根>/source/`（原图副本），而封面
+    // `cover.<ext>` 落在**工程根**（与 json 同级）。`comic.coverFile` 只会拼
+    // `directory/cover.<ext>` = `source/cover.<ext>` ⇒ 永远 miss，然后回落到
+    // "扫 `source/` 里的第一张图" ⇒ 工程卡片一直拿**章节第一页**当封面
+    // （实测：AsuraScans 的版权页，而不是漫画封面）。
+    //
+    // 封面规则只有一个 owner（`BtProjectManager.coverPathFor`：先 `source/`
+    // 再工程根，都没有才回落 `pageOrder` 第一页）。这里直接问它，别自己再拼
+    // 一条路径 —— 两处各拼一次，下一次改封面落点就会漏掉一处。
+    if (BtProjectManager.isBtComic(comic.id)) {
+      final cover = await BtProjectManager().loadCover(comic.id);
+      if (cover != null && cover.bytes.isNotEmpty) {
+        checkStop();
+        return cover.bytes;
+      }
+    }
+
     // A placeholder for a queued download task (merged into the local comics
     // grid before it is scheduled) has no directory yet. Its `baseDir` would
     // resolve to the downloads root, and the fallback scan below would then

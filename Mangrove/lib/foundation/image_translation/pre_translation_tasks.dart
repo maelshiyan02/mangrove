@@ -368,6 +368,23 @@ class PreTranslationTaskManager with ChangeNotifier {
   static final PreTranslationTaskManager instance =
       PreTranslationTaskManager._();
 
+  /// 🔴 旧引擎那条翻译管线是否还能跑。**2026-10-09 起默认 false。**
+  ///
+  /// 用户的原话是"暂时不要清理老的管线的功能，只需要在软件中暂时让老的管线
+  /// 失效，后续再按需求改进" ⇒ 这是一个**开关**而不是一次删除：
+  ///
+  /// * 开关在 `_run` 的**唯一分叉点**读（见那里的注释），所以不存在"某个角落
+  ///   还在按旧的跑"；
+  /// * 关掉时任务立刻 failed + 写日志，**不静默 no-op**；
+  /// * 恢复只需把它改回 true，不必从 git 历史里考古 —— 这条路的重试/暂停/断点
+  ///   逻辑调了几个版本，将来要复用其中一半时能省掉一轮返工。
+  ///
+  /// 🔴 为什么不给 UI 开关：用户要的是"在软件中失效"，而不是"能自己打开又关上"。
+  /// 给开关就得配文案、配设置项、配"改回 true 之后旧数据的读侧判据对不对"
+  /// （`storedPageCount` 那套还在，但已经不再被写）—— 而这些正是他现在不要的。
+  /// 真要恢复，改一行常量即可，代价是有意识地改一行代码。
+  static const bool legacyPipelineEnabled = false;
+
   final currentTasks = <PreTranslationTask>[];
   final historyTasks = <PreTranslationTask>[];
   final _canceledIds = <String>{};
@@ -729,10 +746,28 @@ class PreTranslationTaskManager with ChangeNotifier {
     _activities[task.id] = PreTranslationActivity();
     _refreshKeepAlive(task);
     try {
-      // 🔴 这条分叉是**唯一**一处"这条任务怎么跑"。旧路的循环与重试原样保留在
-      // else 里，一行没动 —— S9.5-b 只是把工作室那一条接进来，不是替换旧路。
+      // 🔴 这条分叉是**唯一**一处"这条任务怎么跑"。
       if (task.studio) {
         await _runStudio(task);
+      } else if (legacyPipelineEnabled) {
+        // 🔴 旧引擎那条路，2026-10-09 起**默认关闭**（用户要求）。
+        //
+        // 为什么不删代码：用户明确说过"暂时不要清理老的管线的功能，只需要在软件
+        // 中暂时让老的管线失效，后续再按需求改进"。于是这里做成一个**开关**
+        // 而不是删分支 —— 删了要恢复就得从 git 里翻，而这条路的重试/暂停/断点
+        // 逻辑（`_retryFailedPasses` / `_waitWhilePaused`）是花了几个版本调出来
+        // 的，将来若要复用其中一半，从开关恢复比从历史里考古便宜。
+        //
+        // 🔴 关掉时**不是**静默什么都不做：任务立刻标 failed 并写一行日志。
+        // 静默的 no-op 会让"我点了预翻译但什么都没发生"变成一件查不到的事，
+        // 而这类沉默正是本项目最忌讳的失败形态。
+        Log.warning(
+          'Pre-translation',
+          'legacy pipeline disabled: task ${task.id} '
+          '(${task.chapters.length} chapters) was NOT run. '
+          'Enable legacyPipelineEnabled to restore the old path.',
+        );
+        task.status = PreTranslationTaskStatus.failed;
       } else {
         for (var chapter in task.chapters) {
           if (_canceledIds.contains(task.id)) break;

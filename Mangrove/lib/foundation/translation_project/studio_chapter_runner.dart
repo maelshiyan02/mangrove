@@ -160,7 +160,13 @@ abstract final class StudioChapterRunner {
     String label = 'run1',
     CancellationToken? cancel,
     bool keepBackup = true,
-    bool fullArtifacts = true,
+    /// 🔴 是否出 `inpainted/` + `result/`。**默认改成了 false**（2026-10-09）。
+    ///
+    /// 此前这个参数声明在签名里却**从来没有被读过**（死参数）—— 于是阅读页
+    /// 入队跑整章时每一次都连带重画一遍产物，而用户看不到也关不掉这个行为。
+    /// 抹字不可逆，而"人工核对文字块范围"这一步在阅读页根本不存在 ⇒ 不该由
+    /// 这条路代替用户做决定。工作室那条路显式传 `true`。
+    bool fullArtifacts = false,
     void Function(StudioChapterPageRun page, int index, int total)? onPage,
   }) async {
     final run = StudioChapterRun(label);
@@ -220,10 +226,43 @@ abstract final class StudioChapterRunner {
 
     // ---- 出图（两阶段，与 `studio_page._regenerateResults` 同一条） ----
     //
-    // 🔴 顺序不可交换：`result/` 以 `inpainted/` 为**输入位图**，而
-    // `writeArtifacts` 内部是并发 worker —— 放进同一次调用会读到还没写出来的
-    // 底图。全量（不走脏页 filter），因为这正是"同样的输入是否给出同样的字节"
-    // 要跑的那条路。
+    // 🔴 **仅当 [fullArtifacts] 为真**（2026-10-09 用户修订）。
+    //
+    // 用户要求"自动化管线之后不要莫名其妙地再生成一次产物" —— 这个方法此前
+    // **无条件**出图，而 [fullArtifacts] 这个开关早就声明在签名里、却**从来没有
+    // 被读过**（一个死参数：看起来可控，实际上改不动）。所以阅读页入队跑整章时
+    // 每一次都会连带把 `inpainted/` + `result/` 重画一遍，而用户看不到任何
+    // 开关能关掉它。
+    //
+    // 🔴 而且抹字**不可逆**：`inpainted/` 一旦写出，原图上的字已被算法抹掉。
+    // 用户要求在**人工核对文字块范围之后**才修图 —— 阅读页的入队没有这一步，
+    // 凭什么替用户画？
+    //
+    // ⇒ 默认改为 `false`。工作室那条路显式传 `true`（用户在那里看过块了，
+    // 或者走的是 [StudioRunStages.repair] 那一段）。
+    if (fullArtifacts) {
+      // 🔴 顺序不可交换：`result/` 以 `inpainted/` 为**输入位图**，而
+      // `writeArtifacts` 内部是并发 worker —— 放进同一次调用会读到还没写出来的
+      // 底图。全量（不走脏页 filter），因为这正是"同样的输入是否给出同样的字节"
+      // 要跑的那条路。
+      await _writeAllArtifacts(project, run);
+    } else {
+      // 不出图时**不写**对账表的产物段：盘上确实没有产物，写上会让
+      // 「78 页有 inpainted 没有 mask」这类缺口凭空多出一批假条目。
+      Log.info(
+        'Studio Runner',
+        'artifacts skipped (fullArtifacts=false): '
+        'json=${run.jsonPath} bytes=${run.jsonBytes}',
+      );
+    }
+    return run;
+  }
+
+  /// 出图（`mask` 由工作室侧负责，这里只出 `inpainted` + `result` 两层）。
+  static Future<void> _writeAllArtifacts(
+    TranslationProject project,
+    StudioChapterRun run,
+  ) async {
     final (baseReport, artifactReport) = await ProjectWriter.inLayeredOrder(
       () => ProjectWriter.writeArtifacts(
         root: project.workspace,
@@ -275,7 +314,6 @@ abstract final class StudioChapterRunner {
     for (final (artifact, error) in artifactReport.failed) {
       Log.error('Studio Chapter', 'result ${artifact.path}: $error');
     }
-    return run;
   }
 
   static Future<void> _runPage({

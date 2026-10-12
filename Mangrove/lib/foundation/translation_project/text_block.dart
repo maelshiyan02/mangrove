@@ -264,10 +264,9 @@ class FontFormat {
       'frgb': <int>[0, 0, 0],
       'underline': false,
       'italic': false,
-      // 🔴 FT's own default is centred (`TextAlignment.center == 1`), **not**
-      // left. `defaultAlignment` below is the studio's block-panel default and
-      // disagrees; a created block follows FT so that opening the project in FT
-      // shows what the studio showed.
+      // P32：与 FT 自身默认一致（`TextAlignment.center == 1`）。块内译文要
+      // 落在气泡中心（上下左右居中），建出的块天然居中；缺键回读也走同一个
+      // 默认（见 [defaultAlignment]）。
       'alignment': FtTextAlignment.center,
       'vertical': false,
       'standard_vertical_roman_alignment': true,
@@ -326,7 +325,8 @@ class FontFormat {
 
   static const String defaultFontFamily = 'Microsoft YaHei UI';
   static const double defaultFontSize = 24.0;
-  static const int defaultAlignment = FtTextAlignment.left;
+  // P32：缺键回读也按居中（= FT 自身默认 = 块面板高亮 = 双端绘制规则）。
+  static const int defaultAlignment = FtTextAlignment.center;
   static const int defaultFontWeight = FtFontWeight.normal;
   static const double defaultLineSpacing = 1.2;
   static const double defaultLetterSpacing = 1.15;
@@ -736,7 +736,12 @@ class TextBlock {
 
     final format = result.fontFormat!;
     final foreground = _argbToFtRgb(block.textColor);
-    if (foreground != null) format.raw['frgb'] = foreground;
+    if (foreground != null) {
+      format.raw['frgb'] = foreground;
+      // P33 ⑦b：颜色来自原图取样 ⇒ 标成"自动"，以后重新识别可以覆盖它。
+      // 用户一旦在面板里手动改色，这个键被删掉，自动路径就再也不碰它。
+      result.colorIsAuto = true;
+    }
     final background = _argbToFtRgb(block.backgroundColor);
     if (background != null) format.raw['srgb'] = background;
 
@@ -857,6 +862,27 @@ class TextBlock {
   double get detectedFontSize =>
       (raw['_detected_font_size'] as num?)?.toDouble() ?? 0.0;
 
+  /// P33 ⑦b：译文颜色是不是**从原图自动取的**（`fontformat.frgb`）。
+  ///
+  /// 🔴 这是**下划线自有键**（Mangrove 专用，FT 不读、原样保留），不动 FT 的
+  /// 契约：颜色本体仍然只写在 `frgb` 里，这里记的只是"这个值是谁定的"。
+  /// `false` 一律**删键**（"不存在即手动"），于是旧工程、以及从未取过色的块
+  /// 落盘时**一个字节都不多** —— 零字节 diff 不受影响。
+  ///
+  /// 语义：
+  /// - `true` —— 识别/取色时可以**覆盖** `frgb`；
+  /// - `false`（缺键）—— 用户手动调过（或压根没取过色），**任何自动路径都不
+  ///   许动它**。这是"旧工程行为不变"的落点。
+  bool get colorIsAuto => raw['_color_auto'] == true;
+
+  set colorIsAuto(bool value) {
+    if (value) {
+      raw['_color_auto'] = true;
+    } else {
+      raw.remove('_color_auto');
+    }
+  }
+
   bool get sourceIsVertical => raw['src_is_vertical'] == true;
 
   /// Block rotation in degrees (FT's `angle` key), 0 when absent.
@@ -955,6 +981,13 @@ class TextBlock {
       fontStyle: format == null ? null : _regionFontStyle(format),
     );
   }
+
+  /// 这一块要抹字的矩形集合（优先 FT 的逐行 `erase_rects`，缺失时回落整块
+  /// 外框）。单块修图按它构造掩膜，与整页修图读的是同一份判据。
+  ///
+  /// 只接受**至少 2×2 px** 的矩形：更小的框擦不出任何笔画，却会白白让
+  /// `TextInpainter` 多跑一轮搜索窗口。
+  List<IntRect> get eraseRects => _eraseRectsOrDefault(rect);
 
   /// 逐行擦除矩形：优先读 `erase_rects`，缺失 / 损坏时回落到整块外框。
   ///

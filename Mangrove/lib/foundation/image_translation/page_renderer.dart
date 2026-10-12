@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/painting.dart';
 import 'package:mangrove/foundation/bundled_fonts.dart';
+import 'package:mangrove/foundation/image_translation/font_fit.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
 
 /// Renders the translated page: draws [decoded] as the base, then lays each
@@ -245,9 +246,20 @@ void _drawText(
         maxWidth,
         style,
       );
+      // P32：与画布预览共用 [placeTextInBox] —— 垂直恒居中，水平按 FT 对齐
+      // 码（默认 center；left/right 离框边留 2px 历史内缩）。旧代码无视对齐
+      // 恒取居中，单行短句选 left/right 时出图与设置不符。
+      final strokePlace = placeTextInBox(
+        boxWidth: rect.width,
+        boxHeight: rect.height,
+        textWidth: strokePainter.width,
+        textHeight: strokePainter.height,
+        alignment: style?.alignment ?? 1,
+        inset: 2,
+      );
       var strokeOffset = ui.Offset(
-        rect.left + (rect.width - strokePainter.width) / 2,
-        rect.top + (rect.height - strokePainter.height) / 2,
+        rect.left + strokePlace.dx,
+        rect.top + strokePlace.dy,
       );
       strokePainter.paint(canvas, strokeOffset);
       strokePainter.dispose();
@@ -259,9 +271,17 @@ void _drawText(
       maxWidth,
       style,
     );
+    final place = placeTextInBox(
+      boxWidth: rect.width,
+      boxHeight: rect.height,
+      textWidth: painter.width,
+      textHeight: painter.height,
+      alignment: style?.alignment ?? 1,
+      inset: 2,
+    );
     var offset = ui.Offset(
-      rect.left + (rect.width - painter.width) / 2,
-      rect.top + (rect.height - painter.height) / 2,
+      rect.left + place.dx,
+      rect.top + place.dy,
     );
     painter.paint(canvas, offset);
     painter.dispose();
@@ -315,8 +335,8 @@ TextStyle _fillStyle(ui.Color color, double fontSize, [RegionFontStyle? style]) 
     color: color.withValues(alpha: _alphaOf(style.opacity)),
     fontSize: fontSize,
     // FT's `line_spacing` is a multiplier, same unit as Flutter's `height`.
-    height: style.lineSpacing,
-    fontWeight: _fontWeightOf(style.fontWeight),
+    height: lineSpacingOf(style.lineSpacing),
+    fontWeight: FontWeight(fontWeightIndex(style.fontWeight)),
     // 🔴 P1-4: FT's `font_family` goes through [resolveFamily] rather than
     // straight into `TextStyle`. Passing it raw is what produced the "set a
     // font, nothing happens" symptom — `Microsoft YaHei UI` (FT's own default,
@@ -327,11 +347,13 @@ TextStyle _fillStyle(ui.Color color, double fontSize, [RegionFontStyle? style]) 
     fontFamilyFallback: bundledFamilyFallbacks(style.fontFamily),
     fontStyle: style.italic ? ui.FontStyle.italic : ui.FontStyle.normal,
     // 🔴 FT's `letter_spacing` is a multiplier on the font's natural spacing,
-    // so it becomes `(v - 1) em`. Passing the raw 1.15 as a pixel value would
-    // squash every CJK glyph — the conversion has to be done here.
-    letterSpacing: style.letterSpacing == null
-        ? null
-        : (style.letterSpacing! - 1.0),
+    // so it becomes `(v - 1) em` — and Flutter's `letterSpacing` is in logical
+    // pixels, so `em` still has to be multiplied by the font size. It used to
+    // stop at `(v - 1.0)`, i.e. 0.15 *logical pixels* for FT's default 1.15:
+    // invisible on the exported page and therefore a real bug (the spacing
+    // slider did nothing in `result/` while the canvas honoured it). Shared
+    // with the canvas via [letterSpacingPx].
+    letterSpacing: letterSpacingPx(style.letterSpacing, fontSize),
     decoration: style.underline ? TextDecoration.underline : TextDecoration.none,
     shadows: _shadowsOf(style, fontSize),
   );
@@ -374,19 +396,12 @@ TextStyle _strokeStyle(ui.Color outline, double fontSize, [RegionFontStyle? styl
   );
 }
 
-/// FT weights are 100..900 in steps of 100 (the same scale as CSS), so the
-/// mapping is a lookup rather than the threshold ladder the canvas uses.
-FontWeight _fontWeightOf(int value) => switch (value) {
-  <= 150 => FontWeight.w100,
-  <= 250 => FontWeight.w200,
-  <= 350 => FontWeight.w300,
-  <= 450 => FontWeight.w400,
-  <= 550 => FontWeight.w500,
-  <= 650 => FontWeight.w600,
-  <= 750 => FontWeight.w700,
-  <= 850 => FontWeight.w800,
-  _ => FontWeight.w900,
-};
+/// FT weights are 100..900 in steps of 100 (the same scale as CSS).
+///
+/// 🔴 The table itself now lives in `font_fit.fontWeightIndex` and the canvas
+/// uses the very same one — this wrapper only adapts it to `FontWeight`, which
+/// is a Flutter type and therefore cannot appear in the Flutter-free helper.
+FontWeight _fontWeightOf(int value) => FontWeight(fontWeightIndex(value));
 
 /// `overall_opacity` applied to the fill's alpha, clamped because a corrupt
 /// value would otherwise throw inside the paint.
@@ -612,14 +627,14 @@ double _fitFontSize(
   double? maxFontSize,
   RegionFontStyle? style,
 }) {
-  var cap = 42.0;
-  if (lineHeight > 0) {
-    cap = math.min(cap, math.max(10.0, lineHeight * 0.9));
-  }
-  // The tighter of "the source lettering" and "what the user asked for" wins.
-  if (maxFontSize != null && maxFontSize > 0) {
-    cap = math.min(cap, maxFontSize);
-  }
+  // 🔴 The cap rule lives in `font_fit.dart` so this path and the canvas mirror
+  // cannot drift apart. It used to be `min(42, lineHeight*0.9, maxFontSize)`
+  // right here — three `min`s that made a user's size request unreachable (the
+  // measured lettering, or the hard 42, always won). See that file for the why.
+  final cap = fitFontSizeCap(
+    requested: maxFontSize,
+    measured: lineHeight.toDouble(),
+  );
   var upper = math.max(10.0, math.min(cap, maxHeight * 0.8));
   var layoutWidth = math.max(_minLayoutWidth, maxWidth);
   var size = upper;

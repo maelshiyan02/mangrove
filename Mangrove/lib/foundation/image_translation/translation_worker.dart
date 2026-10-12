@@ -4,7 +4,9 @@ import 'dart:math' as math;
 
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/image_translation/hf_tokenizer.dart';
+import 'package:mangrove/foundation/image_translation/luma.dart';
 import 'package:mangrove/foundation/image_translation/ort_ffi.dart';
+import 'package:mangrove/foundation/image_translation/text_color.dart';
 import 'package:mangrove/foundation/image_translation/translation_engines.dart';
 import 'package:mangrove/foundation/image_translation/translation_models.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
@@ -1410,16 +1412,27 @@ Float32List _cropNormalized(RgbaImage image, IntRect rect, int outW, int outH) {
 /// Estimates (backgroundColor, textColor) for a region by separating the two
 /// dominant colour classes inside it.
 ///
-/// The block's pixels split into a background class (bubble fill, the larger
-/// share) and a text class (the strokes). An Otsu luminance threshold labels
-/// each pixel, then the mean colour of each class is taken — so the text colour
-/// is the *actual* ink (a coloured SFX, a grey caption) rather than a flat
-/// dark/light guess, and the background is the *actual* fill sampled from the
-/// non-stroke pixels rather than a ring outside the box that may fall on
-/// artwork. A ring sample still seeds the background when the split is
-/// degenerate (near-uniform crop), and the returned text colour is nudged to
-/// keep a minimum contrast against the background so it stays legible.
+/// 🔴 P33 ⑦b：正常路径已改用 `text_color.estimateTextColor` —— 那是 BT
+/// `textrgb_calculator` 的口径（**先腐蚀掉抗锯齿边缘，再取笔画像素的均值**）。
+/// 旧实现直接对 Otsu 分出的两类取均值，掩膜里混着笔画边缘的过渡像素，取到的
+/// 是"文字色与背景色的加权平均"：黑字在白底上会取成深灰（约 60 而非 0），
+/// 画上去立刻比原字淡一截 —— 这正是"译文与原图观感不一致"的来源。
+///
+/// 本函数只保留**退化兜底**：`estimateTextColor` 返回 null（区域纯色、笔画太
+/// 细吃不住腐蚀、文字占比不合理）时，退回 ring median + 高对比中性色。
+/// ⚠️ 注意兜底路径才有 `_ensureContrast`（强制对比度 ≥60）；正常路径**不**
+/// 再强制 —— 用户要的就是"与原图一致"，灰字在灰底上就该是灰字，该不该加
+/// 描边交给用户决定。
 (int, int) _sampleColors(RgbaImage image, IntRect rect) {
+  final estimate = estimateTextColor(image, rect);
+  if (estimate != null) {
+    return (estimate.backgroundArgb, estimate.textArgb);
+  }
+  return _fallbackColors(image, rect);
+}
+
+/// [estimateTextColor] 取不出可信结果时的兜底（原 `_sampleColors` 的全部内容）。
+(int, int) _fallbackColors(RgbaImage image, IntRect rect) {
   var w = image.width;
   var left = rect.left.clamp(0, w - 1);
   var top = rect.top.clamp(0, image.height - 1);
@@ -1480,7 +1493,7 @@ Float32List _cropNormalized(RgbaImage image, IntRect rect, int outW, int outH) {
     return (bg, bgLum < 128 ? 0xFFF5F5F5 : 0xFF202020);
   }
 
-  var threshold = _otsuOf(lum);
+  var threshold = otsuThreshold(lum);
   var loSumR = 0, loSumG = 0, loSumB = 0, loN = 0;
   var hiSumR = 0, hiSumG = 0, hiSumB = 0, hiN = 0;
   for (var i = 0; i < lum.length; i++) {
@@ -1527,38 +1540,8 @@ Float32List _cropNormalized(RgbaImage image, IntRect rect, int outW, int outH) {
   return (bgColor, textColor);
 }
 
-/// Otsu threshold over a luminance sample list (worker-side twin of the one in
-/// inpaint.dart, which takes a Uint8List).
-int _otsuOf(List<int> lum) {
-  var hist = Int32List(256);
-  for (var l in lum) {
-    hist[l]++;
-  }
-  var total = lum.length;
-  var sum = 0.0;
-  for (var t = 0; t < 256; t++) {
-    sum += t * hist[t];
-  }
-  var sumB = 0.0;
-  var wB = 0;
-  var maxVar = -1.0;
-  var threshold = 127;
-  for (var t = 0; t < 256; t++) {
-    wB += hist[t];
-    if (wB == 0) continue;
-    var wF = total - wB;
-    if (wF == 0) break;
-    sumB += t * hist[t];
-    var mB = sumB / wB;
-    var mF = (sum - sumB) / wF;
-    var between = wB * wF * (mB - mF) * (mB - mF);
-    if (between > maxVar) {
-      maxVar = between;
-      threshold = t;
-    }
-  }
-  return threshold;
-}
+// P33：Otsu 的实现已收敛到 `luma.otsuThreshold`（此前 inpaint 与本文件各有
+// 一份逐行相同的副本，第三份即将出现在取色里）。本文件不再自带。
 
 /// Nudges [text] away from [bg] when their luminance is too close, so the drawn
 /// text stays readable. Keeps [text]'s hue, only pushing it darker or lighter.
