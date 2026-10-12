@@ -22,6 +22,29 @@
 ⚠️ 同理，`imgtrans_*.json` 这个**文件名前缀是 FT 契约**（`project.dart:128` 的 `projName`），
 与产品名无关 ⇒ **改名切割时绝对不能改它**，改了已有工程全部打不开。
 
+🔴 **`imgtrans_<名>.artifacts.json` 不是工程** —— 它是产物**对账表**
+（`ArtifactReconciliation.pathFor`），与工程 json **同级**、同样 `imgtrans_` 开头 `.json` 结尾。
+⇒ 扫描器的名字判据**必须**排除它（`BtProjectManager.isProjectJsonFileName`：
+`!name.endsWith(ArtifactReconciliation.fileSuffix)`），否则**保存一次就多一张零页幽灵卡片**
+（2026-10-09 实测；见 P16）。
+
+🔴 **译文只有一处是"真的"：工程的 `result/` + 工程 json 里的译文块。**
+S9.5-b 之后工作室管线**一行都不写**旧的 `TranslationStore`（`image_translation.db`）
+—— 只写工程 json 与 `result/`。⇒ **凡是问"这一章翻过没有"的地方，只读
+`TranslationStore` 一定得到错误答案**（症状与"翻译没生效"一样，但译文就在
+`result/` 里）。判据与接线见 `chapter_translation_state.dart` 与 P17：
+
+| 问的东西 | 正确数据源 | 错在哪 |
+|---|---|---|
+| 这一章翻过没有 | 绑定表 + 工程产物（并集） | 只读 `TranslationStore` ⇒ 工作室翻的章**永远显示未翻译** |
+| 徽标页数 | 两侧**相加** | 取 max 会吞掉一侧的页 |
+| 「删除译文」清什么 | 两侧**都清** | 只清旧库 ⇒ **点了没反应** |
+| 「重译」清什么 | 两侧都清**再入队** | 旧块还在 ⇒ 去重（`overlapsExistingBlock`）把新译文**整章丢弃** |
+
+🔴 判据取**并集**而非替换：旧库里躺着 S9.5-b 之前翻的、WebDAV 同步来的章，
+只认工程会让那些章的标记/菜单/页签**全部消失**（从"能看见"变成"看不见"，
+是更糟的回归）。
+
 ## 1. 磁盘布局（三个根）
 
 ```

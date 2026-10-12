@@ -33,7 +33,30 @@
 - 包子漫画（baozimh）的 **PoW 约需 2 分钟**，且难度已上调（`difficultyBits: 12` / `computeMs: 120000`）
   ⇒ **headless 验证的 deadline 必须 ≥ 200s**。
 
-## 5. 相关文件
+## 5. 🔴 WAF 按**出口 IP** 封禁，挑战页指纹与节点实测（P41/P43/P45，2026-10-12）
+
+- 封禁形态：HTTP **200**，但页面是挑战页（不是 403）。两种指纹都要认：
+  - **comix 自家滑块页**（P45 实锤，9,394 B）：URL 落 **`/@waf/challenge?return=`**、
+    `<title>Security check</title>`、无 initial-data；
+  - CF 硬封页：`attention required` / `blocked_why_headline` / `cf-error-details` /
+    `challenge-platform/h/`（托管挑战路径）。
+- 🔴 **CF jsd 探针 `/cdn-cgi/challenge-platform/scripts/jsd/main.js` 在真 SSR 页也全站注入**
+  ⇒ **裸 `challenge-platform` 不能当判据**（会误判好页）；真页 >20KB、挑战页 <10KB。
+- **名单按 IP 打地鼠、随时间漂移**（香港Y01 一天内 200→封；美国Y01 前后结论也翻过）
+  ⇒ 任何"某节点可用"的结论必须带日期，症状复现时**当场实测**：
+  `curl -x 127.0.0.1:7890 -sL "<标题页>" -o NUL -w "%{url_effective} %{http_code} %{size_download}"`
+  落 `@waf/challenge` 或 <20KB = 被封。
+- **2026-10-12 12:00 实测**（Clash for Windows，`127.0.0.1:7890`）：
+  最快且通 = **🇭🇰香港 IEPL Y05/Y02/Y09/Y11（0.54~0.60s）**、日 Y01/Y03、新Y02、德/英/加；
+  被封 = 法/澳/港Y01/日Y05·Y06「下载专用 x0.01」/韩/美/印（后两者为前几日结论）。
+  **Clash 延迟测试判不了封禁**（挑战页也 200）；url-test/fallback 帮不上，只能人工轮换。
+- 切节点 API：`PUT http://127.0.0.1:8445/proxies/%F0%9F%94%B0%20%E9%80%89%E6%8B%A9%E8%8A%82%E7%82%B9`
+  body `{"name":"🇭🇰 香港Y05 | IEPL"}` —— 🔴 body 必须按 **UTF-8 字节**发，
+  PowerShell 5 默认 Latin-1 会静默切换失败。
+- App 侧行为（P45 起）：导航后 ~1s 双采样识别挑战页 → 抛 `COMIX_IP_BLOCKED`，
+  搜索/章节/图片/下载**全链路直通双语切节点提示，不重试不空等**（旧路径最坏 ~90s）。
+
+## 6. 相关文件
 
 - 源脚本：`assets/comix_to.js` —— **不进 flutter_assets**；
   运行时读 `%APPDATA%\io.github.maelshiyan02\mangrove\comic_source\*.js` → **改后必须手动同步**。
