@@ -45,9 +45,14 @@ docs
 # ---- 4. 工具链安装包与一次性探针输出 ----
 tools/rustup-init.exe
 tools/probe_out/
+tools/forensics_out/
 tools/spike/
+tools/s6_harness/
 tools/__pycache__/
 tools/build_out.txt
+tools/analyze_out.txt
+# 根目录曾误放一份 copy_aes.js（真身 tools/copy_aes.js），防止再被加回来
+/copy_aes.js
 __pycache__/
 *.pyc
 
@@ -64,6 +69,8 @@ run_plan_check.json
 migrate_sources.json
 pipeline_check.json
 script_check.json
+bootstrap_check.json
+download_check.json
 tools/headless_once.bat
 
 # ---- 6. 本机数据与备份 ----
