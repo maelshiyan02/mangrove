@@ -321,12 +321,40 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
   @override
   Widget build(BuildContext context) {
     final isOnChapterCommentsPage = context.reader.isOnChapterCommentsPage;
+    final reader = context.reader;
+    // R4-2 / R4-3：两个新滤镜都读漫画级 → 设备级 → 全局三级回落，与其余
+    // 阅读设置保持一致。
+    final greyscale = readerGreyscaleEnabled(
+      appdata.settings.getReaderSetting(
+        reader.cid,
+        reader.type.sourceKey,
+        'readerGreyscale',
+      ),
+    );
+    final dim = readerDimStrength(
+      appdata.settings.getReaderSetting(
+        reader.cid,
+        reader.type.sourceKey,
+        'readerDimStrength',
+      ),
+    );
     return Stack(
       children: [
         Positioned.fill(
           child: AbsorbPointer(
             absorbing: context.reader.isPageAnimating,
-            child: widget.child,
+            // R4-2 一键灰度。滤镜挂在"图片区"这一层而不是逐张图片上：
+            // gallery 的单图走 `imageProvider` 路径（PhotoView 内部自己建
+            // Image，没有可以插入的 child 包装点），硬改会牵动初值缩放与
+            // maxScale 的语义；挂在整层则两种模式、所有页一视同仁。
+            // 已知取舍：章尾导航卡与章末评论页同属这一层，开启灰度时也会
+            // 一并去色（文字仍可读，只是饱和度归零）。
+            child: greyscale
+                ? ColorFiltered(
+                    colorFilter: kReaderGreyscaleFilter,
+                    child: widget.child,
+                  )
+                : widget.child,
           ),
         ),
         // Translucent: the hover is reported to this region *and* still reaches
@@ -354,6 +382,15 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
                       .clamp(0.1, 0.85),
                 ),
               ),
+            ),
+          ),
+        // R4-3 压暗。与上面的夜间遮罩是两套东西：夜间遮罩换的是色相（暖/黑/
+        // 暗红），压暗只降亮度不换色，所以它可以单独开、也可以叠加在夜间遮罩
+        // 之上。UI 上两者归到同一分组，是为了让"护眼"相关的档位挨在一起。
+        if (dim > 0)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: ColoredBox(color: Colors.black.toOpacity(dim)),
             ),
           ),
         if (appdata.settings['showPageNumberInReader'] == true &&
@@ -430,6 +467,54 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
     );
   }
 
+  /// 顶栏标题区：开启章节胶囊且窗口够宽时用紧凑胶囊，否则维持双行书名/话名。
+  ///
+  /// 窄窗退回双行不是妥协而是必要 —— 顶栏右侧还有翻译控件、更多菜单、设置
+  /// 三个按钮组，把它们挤掉换一颗胶囊是净损失。
+  Widget _buildTopTitle(String? epName) {
+    final reader = context.reader;
+    final capsuleOn = readerChapterCapsuleEnabled(
+      appdata.settings.getReaderSetting(
+        reader.cid,
+        reader.type.sourceKey,
+        'readerChapterCapsule',
+      ),
+    );
+    if (capsuleOn &&
+        reader.widget.chapters != null &&
+        context.width >= kChapterCapsuleMinWidth) {
+      return const Align(
+        alignment: Alignment.centerLeft,
+        child: ChapterCapsule(),
+      );
+    }
+    return epName == null
+        ? Text(
+            reader.widget.name,
+            style: ts.s18,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                reader.widget.name,
+                style: ts.s16,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              Text(
+                epName,
+                style: ts.s12,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          );
+  }
+
   Widget buildTop() {
     final epName = context.reader.widget.chapters?.titles.elementAtOrNull(
       context.reader.chapter - 1,
@@ -454,33 +539,7 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
               const SizedBox(width: 8),
               const BackButton(),
               const SizedBox(width: 8),
-              Expanded(
-                child: epName == null
-                    ? Text(
-                        context.reader.widget.name,
-                        style: ts.s18,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      )
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            context.reader.widget.name,
-                            style: ts.s16,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          Text(
-                            epName,
-                            style: ts.s12,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-              ),
+              Expanded(child: _buildTopTitle(epName)),
               const SizedBox(width: 8),
               if (shouldShowChapterComments())
                 Tooltip(
@@ -915,14 +974,12 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
       Tooltip(
         message: "Auto Page Turning".tl,
         child: IconButton(
-          icon: context.reader.autoPageTurningTimer != null
+          // R4-5：按页计时与匀速滚动共用一个按钮，图标只反映"是否在播"。
+          icon: context.reader.isAutoPlaying
               ? const Icon(Icons.timer)
               : const Icon(Icons.timer_sharp),
           onPressed: () {
-            context.reader.autoPageTurning(
-              context.reader.cid,
-              context.reader.type,
-            );
+            context.reader.toggleAutoPlay();
             update();
           },
         ),

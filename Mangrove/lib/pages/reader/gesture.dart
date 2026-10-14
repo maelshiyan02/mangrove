@@ -220,6 +220,24 @@ class _ReaderGestureDetectorState
     'enableDoubleTapToZoom',
   );
 
+  /// R4-4：顶/底栏显隐的触发手势。
+  ReaderChromeHideTrigger get _chromeHideTrigger =>
+      resolveReaderChromeHideTrigger(
+        appdata.settings.getReaderSetting(
+          reader.cid,
+          reader.type.sourceKey,
+          'readerChromeHideTrigger',
+        ),
+      );
+
+  /// 双击检测是否要开着。
+  ///
+  /// `doubleTap` 触发模式下，即便用户把"双击缩放"关了也必须继续检测双击 ——
+  /// 否则这个模式永远收不到它的触发手势（onTapUp 会直接走单击分支）。
+  bool get _detectDoubleTap =>
+      _enableDoubleTapToZoom ||
+      _chromeHideTrigger == ReaderChromeHideTrigger.doubleTap;
+
   void onTapUp(TapUpDetails event) {
     if (event.globalPosition == Offset.zero &&
         event.localPosition == Offset.zero) {
@@ -233,7 +251,7 @@ class _ReaderGestureDetectorState
       return;
     }
     final location = event.globalPosition;
-    if (!_enableDoubleTapToZoom) {
+    if (!_detectDoubleTap) {
       onTap(location);
       return;
     }
@@ -258,13 +276,27 @@ class _ReaderGestureDetectorState
   }
 
   void onTap(Offset location) {
+    // R4-4：单击要不要负责切换显隐，由触发策略说了算。`doubleTap` 模式下这里
+    // 恒为 no-op，单击于是只剩下翻页一个职责。
+    void toggleChrome() {
+      if (readerSingleTapTogglesChrome(_chromeHideTrigger)) {
+        context.readerScaffold.openOrClose();
+      }
+    }
+
     if (reader._imageViewController!.handleOnTap(location)) {
       return;
     } else if (context.readerScaffold.isOpen) {
-      context.readerScaffold.openOrClose();
+      toggleChrome();
     } else {
       // Don't open toolbar on chapter comments page
       if (reader.isOnChapterCommentsPage) {
+        return;
+      }
+      // `singleTapAnywhere` 模式下单击被显隐独占，直接跳过整段热区判定 ——
+      // 否则"任意位置"会被"边缘区翻页"抢走一大半。
+      if (!readerSingleTapTurnsPage(_chromeHideTrigger)) {
+        toggleChrome();
         return;
       }
       if (appdata.settings.getReaderSetting(
@@ -374,11 +406,17 @@ class _ReaderGestureDetectorState
           return;
         }
       }
-      context.readerScaffold.openOrClose();
+      toggleChrome();
     }
   }
 
   void onDoubleTap(Offset location) {
+    // R4-4：`doubleTap` 触发模式下双击被显隐独占，不再缩放/收藏 —— 二者共用
+    // 同一个手势，只能二选一（设置项副标题里写明了这点）。
+    if (readerDoubleTapTogglesChrome(_chromeHideTrigger)) {
+      context.readerScaffold.openOrClose();
+      return;
+    }
     context.reader._imageViewController?.handleDoubleTap(location);
   }
 

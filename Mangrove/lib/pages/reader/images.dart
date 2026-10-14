@@ -670,6 +670,12 @@ class _GalleryModeState extends State<_GalleryMode>
   }
 
   @override
+  bool get supportsPixelScrolling => false; // gallery 页码离散，无像素偏移可插值
+
+  @override
+  bool scrollBy(double delta) => false;
+
+  @override
   PhotoViewController? get zoomController => photoViewControllers[reader.page];
 
   @override
@@ -1026,6 +1032,33 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
   @override
   bool get isImageZoomed => (photoViewController.scale ?? 1.0) > 1.01;
+
+  @override
+  bool get supportsPixelScrolling => true;
+
+  /// R4-5 匀速滚动的一步。
+  ///
+  /// 用 `jumpTo` 而不是 `animateTo`：自动滚动本身就是每 100ms 给一个小增量，
+  /// 再套一层动画会在每次 tick 上叠加新动画、互相打断，实际速度反而不可控。
+  /// 同理不走 `smoothTo` —— 它带 `readerScrollSpeed` 倍率和 Shift 抑制，是给
+  /// 手动滚轮用的。
+  @override
+  bool scrollBy(double delta) {
+    if (!_scrollController.hasClients) return false;
+    final position = _scrollController.position;
+    final target = (position.pixels + delta).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    if (target == position.pixels) {
+      // 到底了：尝试续到下一话。换章会重建滚动控制器，下一 tick 的
+      // `hasClients` 会是 false 从而自然收尾 —— 自动滚动不跨章续播，这是刻意的
+      // 保守行为，避免和"滑到边缘才加载下一话"的无缝逻辑抢方向。
+      return delta > 0 ? reader.toNextChapter() : true;
+    }
+    _scrollController.jumpTo(target);
+    return true;
+  }
 
   @override
   PhotoViewController? get zoomController => photoViewController;

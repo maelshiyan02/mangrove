@@ -80,6 +80,8 @@ part 'page_rail.dart';
 part 'zoom_bar.dart';
 part 'chapter_end_nav.dart';
 part 'help_dialog.dart';
+part 'reader_filters.dart';
+part 'chapter_capsule.dart';
 
 @visibleForTesting
 SystemUiMode resolveReaderSystemUiMode(bool showSystemStatusBar) {
@@ -416,6 +418,7 @@ class _ReaderState extends State<Reader>
       unawaited(HistoryManager().addHistoryAsync(history!));
     }
     autoPageTurningTimer?.cancel();
+    autoScrollTimer?.cancel();
     focusNode.dispose();
     ImageTranslationService.instance.removeListener(_onPageTranslated);
     ImageTranslationService.instance.clearQueue();
@@ -1080,6 +1083,57 @@ abstract mixin class _ReaderLocation {
       });
     }
   }
+
+  /// R4-5 匀速滚动的驱动器。与 [autoPageTurningTimer] 互斥：任何时候最多只有
+  /// 一个在跑，切换模式时先把另一个停掉。
+  Timer? autoScrollTimer;
+
+  bool get isAutoPlaying =>
+      autoPageTurningTimer != null || autoScrollTimer != null;
+
+  /// 底栏"自动播放"按钮的统一入口：按 `readerAutoPlayMode` 分流到按页计时或
+  /// 匀速滚动。匀速滚动只在 continuous 下成立（gallery 的页码是离散的，没有
+  /// 可插值的像素偏移），此时静默退回按页计时而不是给用户一个死按钮。
+  void toggleAutoPlay() {
+    final mode = resolveReaderAutoPlayMode(
+      appdata.settings.getReaderSetting(
+        cid,
+        type.sourceKey,
+        'readerAutoPlayMode',
+      ),
+    );
+    final canScroll =
+        mode == ReaderAutoPlayMode.scroll &&
+        // 只有 continuous 的控制器能按像素推进（gallery 的页码是离散的）；
+        // 拿不到就把请求退回按页计时，而不是给用户一个按了没反应的按钮。
+        (_imageViewController?.supportsPixelScrolling ?? false);
+    if (!canScroll) {
+      autoScrollTimer?.cancel();
+      autoScrollTimer = null;
+      autoPageTurning(cid, type);
+      return;
+    }
+    autoPageTurningTimer?.cancel();
+    autoPageTurningTimer = null;
+    if (autoScrollTimer != null) {
+      autoScrollTimer!.cancel();
+      autoScrollTimer = null;
+      return;
+    }
+    final speed = readerAutoScrollSpeed(
+      appdata.settings.getReaderSetting(cid, type.sourceKey, 'autoScrollSpeed'),
+    );
+    final step = speed * (kReaderAutoScrollTick.inMilliseconds / 1000.0);
+    autoScrollTimer = Timer.periodic(kReaderAutoScrollTick, (_) {
+      // `scrollBy` 返回 false 表示到底且跨不了章（或控制器已随换章重建），
+      // 两种情况都停下来，让按钮回到未播放态，而不是空转计时器。
+      if (_imageViewController?.scrollBy(step) != true) {
+        autoScrollTimer?.cancel();
+        autoScrollTimer = null;
+        update();
+      }
+    });
+  }
 }
 
 mixin class _ReaderWindow {
@@ -1204,6 +1258,14 @@ abstract interface class _ImageViewController {
 
   /// Back to the fit scale, pan included.
   void resetZoom();
+
+  /// R4-5：这个模式能否做像素级匀速滚动。gallery 的页码是离散的，没有可插值
+  /// 的像素偏移，所以只有 continuous 实现为真。
+  bool get supportsPixelScrolling;
+
+  /// R4-5：按像素推进滚动位置，返回 false 表示"推进不了了"（到底且跨不了章、
+  /// 或者滚动控制器还没挂上）。调用方据此停止自动滚动。
+  bool scrollBy(double delta);
 
   Future<Uint8List?> getImageByOffset(Offset offset);
 

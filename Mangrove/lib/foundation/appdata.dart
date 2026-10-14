@@ -547,6 +547,18 @@ class Settings with ChangeNotifier {
     'readerShowChapterEndNav': true,
     // 阅读进度条位置：bottom = 底栏滑条（默认，原行为）；left = 左缘页轨（仅桌面）。
     'readerProgressBarPosition': 'bottom',
+    // P47 R4：顶栏紧凑章节胶囊（默认关，保留双行书名/话名）。
+    'readerChapterCapsule': false,
+    // P47 R4：一键灰度。
+    'readerGreyscale': false,
+    // P47 R4：压暗强度（0 - 0.4）。只降亮度不换色，与夜间遮罩是两回事。
+    'readerDimStrength': 0.0,
+    // P47 R4：控件显隐触发策略 tapCenter / singleTapAnywhere / doubleTap。
+    'readerChromeHideTrigger': 'tapCenter',
+    // P47 R4：自动播放模式 page = 按页计时（原行为）；scroll = 匀速滚动（仅连续）。
+    'readerAutoPlayMode': 'page',
+    // P47 R4：匀速滚动速度（px/s），仅 continuous + mode=scroll 生效。
+    'autoScrollSpeed': 150.0,
     'localFavoritesFirst': true,
     'autoCloseFavoritePanel': false,
     'showChapterComments': true, // show chapter comments in reader

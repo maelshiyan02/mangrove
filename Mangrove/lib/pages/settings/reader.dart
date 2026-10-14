@@ -654,6 +654,39 @@ class _ReaderSettingsState extends State<ReaderSettings> {
                     : null,
                 useDeviceSettings: useDeviceSpecificSettings,
               ),
+            SelectSetting(
+              title: "Auto play mode".tl,
+              settingKey: "readerAutoPlayMode",
+              optionTranslation: {
+                "page": "By page timer".tl,
+                "scroll": "Smooth scrolling".tl,
+              },
+              help: "Smooth scrolling only works in continuous modes".tl,
+              onChanged: () {
+                setState(() {});
+                widget.onChanged?.call("readerAutoPlayMode");
+              },
+              comicId: isEnabledSpecificSettings ? widget.comicId : null,
+              comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
+              useDeviceSettings: useDeviceSpecificSettings,
+            ),
+            if ((_effectiveSetting('readerAutoPlayMode') as String?) == 'scroll')
+              _SliderSetting(
+                title: "Auto scroll speed".tl,
+                settingsIndex: "autoScrollSpeed",
+                interval: 10,
+                min: 20,
+                max: 1200,
+                onChanged: () {
+                  setState(() {});
+                  widget.onChanged?.call("autoScrollSpeed");
+                },
+                comicId: isEnabledSpecificSettings ? widget.comicId : null,
+                comicSource: isEnabledSpecificSettings
+                    ? widget.comicSource
+                    : null,
+                useDeviceSettings: useDeviceSpecificSettings,
+              ),
             _SliderSetting(
               title: "Auto page turning interval".tl,
               settingsIndex: "autoPageTurningInterval",
@@ -1078,6 +1111,60 @@ class _ReaderSettingsState extends State<ReaderSettings> {
                   widget.onChanged?.call("readerNightModeIntensity");
                 },
               ),
+            _SwitchSetting(
+              title: "Chapter capsule".tl,
+              subtitle: "Compact chapter switcher in the top bar".tl,
+              settingKey: "readerChapterCapsule",
+              onChanged: () {
+                widget.onChanged?.call("readerChapterCapsule");
+              },
+              comicId: isEnabledSpecificSettings ? widget.comicId : null,
+              comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
+              useDeviceSettings: useDeviceSpecificSettings,
+            ),
+            _SwitchSetting(
+              title: "Greyscale".tl,
+              subtitle: "Render pages in black and white".tl,
+              settingKey: "readerGreyscale",
+              onChanged: () {
+                widget.onChanged?.call("readerGreyscale");
+              },
+              comicId: isEnabledSpecificSettings ? widget.comicId : null,
+              comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
+              useDeviceSettings: useDeviceSpecificSettings,
+            ),
+            _SliderSetting(
+              title: "Dim".tl,
+              settingsIndex: "readerDimStrength",
+              interval: 0.05,
+              min: 0,
+              max: 0.4,
+              onChanged: () {
+                setState(() {});
+                widget.onChanged?.call("readerDimStrength");
+              },
+              comicId: isEnabledSpecificSettings ? widget.comicId : null,
+              comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
+              useDeviceSettings: useDeviceSpecificSettings,
+            ),
+            SelectSetting(
+              title: "Show / hide the bars with".tl,
+              settingKey: "readerChromeHideTrigger",
+              optionTranslation: {
+                "tapCenter": "Tap the centre".tl,
+                "singleTapAnywhere": "Tap anywhere".tl,
+                "doubleTap": "Double tap".tl,
+              },
+              help: "Tapping anywhere / double tapping replaces double-tap zoom"
+                  .tl,
+              onChanged: () {
+                setState(() {});
+                widget.onChanged?.call("readerChromeHideTrigger");
+              },
+              comicId: isEnabledSpecificSettings ? widget.comicId : null,
+              comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
+              useDeviceSettings: useDeviceSpecificSettings,
+            ),
             _SwitchSetting(
               title: "Display time & battery info in reader".tl,
               settingKey: "enableClockAndBatteryInfoInReader",
