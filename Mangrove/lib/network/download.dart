@@ -42,6 +42,11 @@ abstract class DownloadTask with ChangeNotifier {
 
   void pause();
 
+  /// Cleanly stop a running download for app-shutdown, persisting
+  /// `wasRunning = true` so it auto-resumes next launch (see the per-subclass
+  /// implementations and [suspendShutdown]).
+  Future<void> suspendForShutdown();
+
   void resume();
 
   String get title;
@@ -61,6 +66,13 @@ abstract class DownloadTask with ChangeNotifier {
   /// Lets the queue auto-resume genuinely-interrupted downloads on restart
   /// without reviving tasks the user had manually paused.
   bool wasRunning = false;
+
+  /// Transient flag set only while [suspendForShutdown] is persisting task
+  /// state at app-quit time. It forces `wasRunning` to be written as `true`
+  /// (so the task auto-resumes next launch) even though the loop has just been
+  /// stopped — a manual [pause] writes `false` and stays paused across
+  /// restarts. Never read outside the persistence path.
+  bool suspendShutdown = false;
 
   /// How many times the queue has auto-retried this task after it errored.
   /// Bounded by [LocalManager] so a permanently-failing task eventually stops
@@ -218,6 +230,35 @@ class ImagesDownloadTask extends DownloadTask with _TransferSpeedMixin {
     // Persist the paused state (wasRunning=false) so a manual pause is not
     // auto-resumed on next launch.
     LocalManager().saveCurrentDownloadingTasks();
+  }
+
+  /// Cleanly stop a running download in preparation for app shutdown.
+  ///
+  /// Like [pause] it cancels in-flight image writes, but it persists
+  /// `wasRunning = true` (via [suspendShutdown]) so the queue auto-resumes the
+  /// task on next launch instead of leaving it paused. In-flight pages that were
+  /// writing at the moment of the call are abandoned as `.dl` temp files, never
+  /// as half-written final pages — see the atomic write in
+  /// [_ImageDownloadWrapper]. This is the safe-suspend protection for closing
+  /// the app mid-download.
+  ///
+  /// The [suspendShutdown] flag is left `true` after the await and only cleared
+  /// in [resume]: resetting it before the (async) save could let the single-
+  /// flight writer snapshot it as `false`, silently dropping the auto-resume.
+  @override
+  Future<void> suspendForShutdown() async {
+    if (isPaused) return;
+    _isRunning = false;
+    for (final entry in tasks.entries) {
+      if (!entry.value.isComplete) entry.value.cancel();
+    }
+    tasks.clear();
+    stopRecorder();
+    _message = "Paused".tl;
+    _currentSpeed = 0;
+    notifyListeners();
+    suspendShutdown = true;
+    await LocalManager().saveCurrentDownloadingTasks();
   }
 
   @override
@@ -553,6 +594,13 @@ class ImagesDownloadTask extends DownloadTask with _TransferSpeedMixin {
       for (final entity in dir.listSync()) {
         if (entity is! File) continue;
         final name = entity.uri.pathSegments.last;
+        final lower = name.toLowerCase();
+        // 跳过下载中产生的临时文件（`.dl` / `.tmp`）。这些文件不是完整的页，
+        // 一旦被算进"已完成索引"，缺页就会被永久固化、无法续传修复。
+        if (lower.endsWith('.dl') || lower.endsWith('.tmp')) continue;
+        // 0 字节文件是"写盘被中途打断"最典型的残骸（进程被杀时最常见）。
+        // 它虽存在却不是有效页，必须当作缺失、让续传/修复重新拉取。
+        if (entity.lengthSync() == 0) continue;
         final dot = name.indexOf('.');
         if (dot <= 0) continue;
         final idx = int.tryParse(name.substring(0, dot));
@@ -717,6 +765,8 @@ class ImagesDownloadTask extends DownloadTask with _TransferSpeedMixin {
     _isError = false;
     _message = "Resuming...".tl;
     _isRunning = true;
+    // 清除安全暂停标记：此后正常的暂停/完成落盘不应再带 wasRunning=true。
+    suspendShutdown = false;
     notifyListeners();
     runRecorder();
     // Persist wasRunning=true promptly so an interrupted download auto-resumes
@@ -1147,7 +1197,7 @@ class ImagesDownloadTask extends DownloadTask with _TransferSpeedMixin {
       "totalChapters": _totalChapters,
       "index": _index,
       "chapter": _chapter,
-      "wasRunning": _isRunning,
+      "wasRunning": _isRunning || suspendShutdown,
       "userPaused": userPaused,
       // Missing pages live in `missing_pages.json`; this copy keeps the count
       // visible in the download list right after a restart.
@@ -1366,8 +1416,19 @@ class _ImageDownloadWrapper {
             throw "Invalid image data (${p.imageBytes!.length} bytes, "
                 "${fileType.mime})";
           }
-          var file = saveTo.joinFile("$index${fileType.ext}");
-          await file.writeAsBytes(p.imageBytes!);
+          final finalFile = saveTo.joinFile("$index${fileType.ext}");
+          // 原子写：先写 `.dl` 临时文件再 rename。这样即便写盘瞬间被退出/崩溃
+          // 打断，落盘的是未完成的 `.dl` 临时文件（被 _existingPageIndexes 忽略），
+          // 绝不会留下半截的最终文件被误判为"已下载完成"→ 章节缺页。
+          final tmpFile = saveTo.joinFile("$index${fileType.ext}.dl");
+          await tmpFile.writeAsBytes(p.imageBytes!);
+          try {
+            await tmpFile.rename(finalFile.path);
+          } catch (_) {
+            // 个别平台/底层目录不支持 rename（如 SAF），退化成直接写最终文件。
+            if (finalFile.existsSync()) finalFile.deleteSync();
+            await finalFile.writeAsBytes(p.imageBytes!);
+          }
           isComplete = true;
           task._onImageSucceeded(this);
           _notifyWaiters();
@@ -1563,6 +1624,24 @@ class ArchiveDownloadTask extends DownloadTask {
     LocalManager().saveCurrentDownloadingTasks();
   }
 
+  /// Cleanly stop the archive download at app shutdown, persisting
+  /// `wasRunning = true` (via [suspendShutdown]) so it auto-resumes next launch.
+  /// [FileDownloader] keeps its partial archive + resume status file, so the
+  /// next run continues from where it left off rather than restarting.
+  ///
+  /// [suspendShutdown] is left `true` and cleared in [resume] (see
+  /// [ImagesDownloadTask.suspendForShutdown] for the rationale).
+  @override
+  Future<void> suspendForShutdown() async {
+    if (isPaused) return;
+    _isRunning = false;
+    _message = "Paused".tl;
+    _downloader?.stop();
+    notifyListeners();
+    suspendShutdown = true;
+    await LocalManager().saveCurrentDownloadingTasks();
+  }
+
   @override
   double get progress =>
       _expectedBytes == 0 ? 0 : _currentBytes / _expectedBytes;
@@ -1582,6 +1661,7 @@ class ArchiveDownloadTask extends DownloadTask {
     }
     _isError = false;
     _isRunning = true;
+    suspendShutdown = false;
     notifyListeners();
     _message = "Downloading...".tl;
     LocalManager().saveCurrentDownloadingTasks();
@@ -1678,7 +1758,7 @@ class ArchiveDownloadTask extends DownloadTask {
       "archiveUrl": archiveUrl,
       "comic": comic.toJson(),
       "path": path,
-      "wasRunning": _isRunning,
+      "wasRunning": _isRunning || suspendShutdown,
       "userPaused": userPaused,
     };
   }

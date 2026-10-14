@@ -121,11 +121,33 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
     unawaited(LocalManager().saveCurrentDownloadingTasks());
   }
 
+  /// Cleanly stop the repair run at app shutdown, persisting `wasRunning = true`
+  /// (via [suspendShutdown]) so it auto-resumes next launch and keeps filling
+  /// the missing pages it was working on.
+  ///
+  /// [suspendShutdown] is left `true` and cleared in [resume].
+  @override
+  Future<void> suspendForShutdown() async {
+    if (isPaused) return;
+    _isRunning = false;
+    _message = "Paused".tl;
+    _currentSpeed = 0;
+    for (final t in _tasks.values) {
+      if (!t.isFinished) t.cancel();
+    }
+    _tasks.clear();
+    stopRecorder();
+    notifyListeners();
+    suspendShutdown = true;
+    await LocalManager().saveCurrentDownloadingTasks();
+  }
+
   @override
   void resume() async {
     if (_isRunning) return;
     _isError = false;
     _isRunning = true;
+    suspendShutdown = false;
     _started = _done;
     _message = "Repairing @a pages".tlParams({"a": _total});
     notifyListeners();
@@ -384,7 +406,7 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
     "comicCover": comicCover,
     "path": path,
     "targets": targets.map((e) => e.toJson()).toList(),
-    "wasRunning": _isRunning,
+    "wasRunning": _isRunning || suspendShutdown,
     "userPaused": userPaused,
   };
 
@@ -532,8 +554,17 @@ class _RepairImageWrapper {
             throw "Invalid image data (${p.imageBytes!.length} bytes, "
                 "${fileType.mime})";
           }
-          final file = saveTo.joinFile("${entry.index}${fileType.ext}");
-          await file.writeAsBytes(p.imageBytes!);
+          final finalFile = saveTo.joinFile("${entry.index}${fileType.ext}");
+          // 原子写：先写 `.dl` 临时文件再 rename，避免修复途中退出留下半截文件
+          // 被当成已修复页（见 ImagesDownloadTask 同款处理）。
+          final tmpFile = saveTo.joinFile("${entry.index}${fileType.ext}.dl");
+          await tmpFile.writeAsBytes(p.imageBytes!);
+          try {
+            await tmpFile.rename(finalFile.path);
+          } catch (_) {
+            if (finalFile.existsSync()) finalFile.deleteSync();
+            await finalFile.writeAsBytes(p.imageBytes!);
+          }
           isComplete = true;
           _notify();
           return;

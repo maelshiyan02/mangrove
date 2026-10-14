@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/launcher_icon.dart';
 import 'package:mangrove/foundation/leave_guard.dart';
+import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/utils/translations.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -149,6 +151,38 @@ class TrayController with TrayListener, WindowListener {
         !await LeaveGuardRegistry.requestLeave()) {
       // 守卫拒绝（用户选了"留下"）：什么都不做，窗口还在。
       return;
+    }
+    // 🔴 关闭保护：有下载在跑时，先安全暂停（标记 wasRunning=true，
+    // 下次启动自动续传），再让用户确认是否退出。否则进程被直接杀掉，
+    // 在途图片只写了一半 → 章节永久缺页（用户反馈的"关软件导致缺页"根因）。
+    if (LocalManager().hasRunningDownloads) {
+      final context = App.rootNavigatorKey.currentContext;
+      if (context != null) {
+        final confirm = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: Text("下载进行中".tl),
+            content: Text(
+              "有漫画正在下载。直接退出可能留下半截图片，导致章节缺页。\n"
+              "是否先暂停下载（下次启动会自动续传）再退出？".tl,
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: Text("取消".tl),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: Text("暂停并退出".tl),
+              ),
+            ],
+          ),
+        );
+        // 用户取消（或对话框异常）：中止退出，窗口保持。
+        if (confirm != true) return;
+      }
+      await LocalManager().suspendAllRunningDownloads();
     }
     exit(0);
   }

@@ -17,6 +17,7 @@ import 'package:mangrove/foundation/favorites.dart';
 import 'package:mangrove/foundation/history.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/missing_pages.dart';
+import 'package:mangrove/foundation/path_roots.dart';
 import 'package:mangrove/foundation/sqlite_connection.dart';
 import 'package:mangrove/network/download.dart';
 import 'package:mangrove/pages/reader/reader.dart';
@@ -443,13 +444,47 @@ class LocalManager with ChangeNotifier {
   Future<void> init() async {
     _db = DatabaseGateway.instance.openManaged(_dbPath);
     _ensureSchema();
-    if (File(FilePath.join(App.dataPath, 'local_path')).existsSync()) {
-      path = File(FilePath.join(App.dataPath, 'local_path')).readAsStringSync();
-      if (!directory.existsSync()) {
-        path = await findDefaultPath();
+    final savedPathFile = File(FilePath.join(App.dataPath, 'local_path'));
+    final savedPath = savedPathFile.existsSync()
+        ? savedPathFile.readAsStringSync().trim()
+        : '';
+    // 库根解析（PathRoots 处理"整个项目目录搬家后绝对路径失效"）：
+    //   绝对路径仍存在      → 用户显式选择，原样使用；
+    //   相对便携根的相对形式 → 按当前便携根重放；
+    //   旧绝对路径失效       → 在便携布局（exe 祖先下的 ComicLibrary/downloads）
+    //                          中自动找回，并回写**相对形式**，让下次搬家零自愈；
+    //   都没有               → 平台默认目录（旧行为）。
+    final resolution = PathRoots.resolveLibraryPath(
+      savedPath.isEmpty ? null : savedPath,
+    );
+    if (resolution.path != null) {
+      path = resolution.path!;
+      if (resolution.healed && resolution.relativeStored != null) {
+        try {
+          await savedPathFile.writeAsString(resolution.relativeStored!);
+          Log.info(
+            "LocalManager",
+            'Library root moved ("$savedPath" no longer exists); '
+            'rebased to "$path" and stored as portable-relative '
+            '"${resolution.relativeStored}".',
+          );
+        } catch (e, s) {
+          Log.error(
+            "LocalManager",
+            "Failed to persist healed library root: $e",
+            s,
+          );
+        }
       }
     } else {
       path = await findDefaultPath();
+      if (savedPath.isNotEmpty) {
+        Log.error(
+          "LocalManager",
+          'Saved library path "$savedPath" is gone and no portable '
+          'ComicLibrary/downloads was found; using default "$path".',
+        );
+      }
     }
     try {
       if (!directory.existsSync()) {
@@ -460,6 +495,9 @@ class LocalManager with ChangeNotifier {
     }
     _checkPathValidation();
     _checkNoMedia();
+    // 注册当前 downloads 根：工程 json 的 directory 重基以此为锚
+    // （必须在任何 BT 工程扫描之前就位）。
+    PathRoots.currentDownloadsRoot = path;
     isInitialized = true;
     // 章节目录"带组改名"迁移：必须在恢复下载任务之前跑，否则任务会拿
     // 旧目录名去补页。内部自带 try/catch 与一次性标记。
@@ -537,6 +575,32 @@ class LocalManager with ChangeNotifier {
     }
     if (started > 0) {
       DownloadKeepAlive.instance.refresh();
+    }
+  }
+
+  /// True when at least one download task is actively running (not paused, not
+  /// errored). Used by the window-close guard to decide whether to offer a
+  /// safe-suspend before quitting.
+  bool get hasRunningDownloads =>
+      downloadingTasks.any((t) => !t.isPaused && !t.isError);
+
+  /// Cleanly stop every running download in preparation for app shutdown.
+  ///
+  /// Each task's [DownloadTask.suspendForShutdown] cancels in-flight writes
+  /// (so they never land a half-written final file) and persists
+  /// `wasRunning = true`, so the queue auto-resumes them on next launch. This is
+  /// the safe-suspend protection for closing the app mid-download — see
+  /// [TrayController._quitThroughGuards].
+  Future<void> suspendAllRunningDownloads() async {
+    var any = false;
+    for (final t in downloadingTasks) {
+      if (!t.isPaused && !t.isError) {
+        await t.suspendForShutdown();
+        any = true;
+      }
+    }
+    if (any) {
+      await saveCurrentDownloadingTasks();
     }
   }
 
