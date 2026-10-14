@@ -510,6 +510,8 @@ class Settings with ChangeNotifier {
     'readerCenterPageOnTurn': false,
     // 连续模式相邻图片之间的间隙（逻辑像素，0 = 紧贴）。
     'readerPageSpacing': 0.0, // 0 - 50
+    // 阅读进度条位置：bottom = 底栏滑条（默认，原行为）；left = 左缘页轨（仅桌面）。
+    'readerProgressBarPosition': 'bottom',
     'localFavoritesFirst': true,
     'autoCloseFavoritePanel': false,
     'showChapterComments': true, // show chapter comments in reader

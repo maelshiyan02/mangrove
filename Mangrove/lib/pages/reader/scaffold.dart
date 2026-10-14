@@ -269,6 +269,12 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
 
   double get bottomBarHeight => compactBars ? 56.0 : kBottomBarHeight;
 
+  /// The edge page rail replaces the bottom slider. Desktop-only: on a phone
+  /// the left edge belongs to the system back gesture.
+  bool get pageRailEnabled =>
+      App.isDesktop &&
+      appdata.settings['readerProgressBarPosition'] == 'left';
+
   void toggleReadingOrientation() {
     setState(() {
       rotation = nextReadingOrientation(rotation);
@@ -363,6 +369,18 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
             child: RepaintBoundary(child: buildBottom()),
           ),
         ),
+        if (pageRailEnabled)
+          AnimatedPositioned(
+            duration: _readerChromeAnimationDuration,
+            left: 0,
+            // The rail spans the page area only: it stops above the bottom bar
+            // while the chrome is on and fills the full height once it hides,
+            // so it never covers a bar button or fights the tap-to-turn layer.
+            top: _isOpen ? topBarHeight + context.padding.top : 0,
+            bottom: _isOpen ? bottomBarHeight + context.padding.bottom : 0,
+            width: kPageRailWidth,
+            child: const RepaintBoundary(child: ReaderPageRail()),
+          ),
       ],
     );
   }
@@ -924,7 +942,9 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
           children: [
             const SizedBox(width: 8),
             prevChapterButton,
-            Expanded(child: buildSlider()),
+            // With the edge rail on, the slider's job moves out of the bar;
+            // the chapter buttons and the page indicator stay put.
+            if (pageRailEnabled) const Spacer() else Expanded(child: buildSlider()),
             pageIndicator,
             nextChapterButton,
             const SizedBox(width: 8),
@@ -969,7 +989,10 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
                         children: [
                           const SizedBox(width: 4),
                           prevChapterButton,
-                          Expanded(child: buildSlider()),
+                          if (pageRailEnabled)
+                            const Spacer()
+                          else
+                            Expanded(child: buildSlider()),
                           pageIndicator,
                           nextChapterButton,
                           ...buttons,

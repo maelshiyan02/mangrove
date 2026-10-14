@@ -1,5 +1,9 @@
 {
   "zh_CN": {
+    "Progress bar position": "进度条位置",
+    "Show a page rail along the left edge": "在左缘显示页轨",
+    "Bottom": "底部",
+    "Left edge": "左侧",
     "Could not sample a colour from this box.": "这个框里取不出可信的颜色。",
     "Re-sample": "重新取色",
     "manual — kept across re-recognition": "手动 — 重新识别时保留",
@@ -1722,6 +1726,10 @@
     "Block operation failed: @a": "块操作失败：@a"
   },
   "zh_TW": {
+    "Progress bar position": "進度條位置",
+    "Show a page rail along the left edge": "在左緣顯示頁軌",
+    "Bottom": "底部",
+    "Left edge": "左側",
     "Could not sample a colour from this box.": "這個框裡取不出可信的顏色。",
     "Re-sample": "重新取色",
     "manual — kept across re-recognition": "手動 — 重新識別時保留",

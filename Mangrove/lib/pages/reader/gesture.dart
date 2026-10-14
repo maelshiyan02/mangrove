@@ -277,7 +277,14 @@ class _ReaderGestureDetectorState
         final height = context.height;
         final x = location.dx;
         final y = location.dy;
-        if (x < width * _kTapToTurnPagePercent) {
+        // The edge page rail owns the leftmost strip when it's enabled: the
+        // tap-to-turn layer must not claim it too, or a click meant to jump to
+        // a page would also turn the page. Both the default 30% zone and the
+        // custom zone path read `isLeft`, so the inset covers them together.
+        final railInset = context.readerScaffold.pageRailEnabled
+            ? kPageRailWidth
+            : 0.0;
+        if (x >= railInset && x < width * _kTapToTurnPagePercent) {
           isLeft = true;
         } else if (x > width * (1 - _kTapToTurnPagePercent)) {
           isRight = true;

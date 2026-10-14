@@ -479,6 +479,27 @@ class _ReaderSettingsState extends State<ReaderSettings> {
                   : null,
               useDeviceSettings: useDeviceSpecificSettings,
             ),
+            // Desktop only: the left edge belongs to the system back gesture
+            // on phones, so the rail is not offered there.
+            if (App.isDesktop)
+              SelectSetting(
+                title: "Progress bar position".tl,
+                help: "Show a page rail along the left edge".tl,
+                settingKey: "readerProgressBarPosition",
+                optionTranslation: {
+                  "bottom": "Bottom".tl,
+                  "left": "Left edge".tl,
+                },
+                onChanged: () {
+                  setState(() {});
+                  widget.onChanged?.call("readerProgressBarPosition");
+                },
+                comicId: isEnabledSpecificSettings ? widget.comicId : null,
+                comicSource: isEnabledSpecificSettings
+                    ? widget.comicSource
+                    : null,
+                useDeviceSettings: useDeviceSpecificSettings,
+              ),
             SelectSetting(
               title: "Reading mode".tl,
               settingKey: "readerMode",

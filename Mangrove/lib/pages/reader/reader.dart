@@ -76,6 +76,8 @@ part 'chapters.dart';
 
 part 'chapter_comments.dart';
 
+part 'page_rail.dart';
+
 @visibleForTesting
 SystemUiMode resolveReaderSystemUiMode(bool showSystemStatusBar) {
   return showSystemStatusBar ? SystemUiMode.edgeToEdge : SystemUiMode.immersive;
