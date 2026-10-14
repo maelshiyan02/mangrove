@@ -1,10 +1,11 @@
 import 'dart:async';
 import 'package:desktop_webview_window/desktop_webview_window.dart';
 import 'package:dynamic_color/dynamic_color.dart';
-import 'package:flex_seed_scheme/flex_seed_scheme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:mangrove/foundation/app_theme.dart';
+import 'package:mangrove/foundation/color_scheme_preset.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/pages/auth_page.dart';
 import 'package:mangrove/pages/disclaimer.dart';
@@ -185,18 +186,19 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     setState(() {});
   }
 
+  /// The seed colour for the current `colorSchemePreset`.
+  ///
+  /// Replaces the pre-P47 switch over the legacy `color` key. `system` still
+  /// means "let the platform decide", which the caller handles with the
+  /// [DynamicColorBuilder] colours.
   Color translateColorSetting() {
-    return switch (appdata.settings['color']) {
-      'red' => Colors.red,
-      'pink' => Colors.pink,
-      'purple' => Colors.purple,
-      'green' => Colors.green,
-      'orange' => Colors.orange,
-      'blue' => Colors.blue,
-      'yellow' => Colors.yellow,
-      'cyan' => Colors.cyan,
-      _ => Colors.blue,
-    };
+    return seedColorForPreset(
+          appdata.settings['colorSchemePreset'] as String?,
+          customSeed: parseHexColor(
+            appdata.settings['customSeedColor'] as String?,
+          ),
+        ) ??
+        kDefaultSeedColor;
   }
 
   ThemeData getTheme(
@@ -205,49 +207,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     Color? tertiary,
     Brightness brightness,
   ) {
-    String? font;
-    List<String>? fallback;
-    if (App.isLinux || App.isWindows) {
-      font = 'Noto Sans CJK';
-      fallback = [
-        'Segoe UI',
-        'Noto Sans SC',
-        'Noto Sans TC',
-        'Noto Sans',
-        'Microsoft YaHei',
-        'PingFang SC',
-        'Arial',
-        'sans-serif',
-      ];
-    }
-    return ThemeData(
-      colorScheme: SeedColorScheme.fromSeeds(
-        primaryKey: primary,
-        secondaryKey: secondary,
-        tertiaryKey: tertiary,
-        brightness: brightness,
-        tones: FlexTones.vividBackground(brightness),
-      ),
-      fontFamily: font,
-      fontFamilyFallback: fallback,
-      // ExpansionTile shows top/bottom divider lines when expanded by default.
-      // Override globally with borderless shapes so no expandable tile (task
-      // cards, reader settings groups, source dialogs, etc.) renders stray
-      // lines at its top and bottom.
-      expansionTileTheme: const ExpansionTileThemeData(
-        shape: Border(),
-        collapsedShape: Border(),
-      ),
-      // Covers the routes that aren't AppPageRoute (they read the same setting
-      // themselves) so the back gesture behaves the same everywhere (#194).
-      pageTransitionsTheme:
-          App.isAndroid && appdata.settings['enablePredictiveBack'] == false
-          ? const PageTransitionsTheme(
-              builders: {
-                TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
-              },
-            )
-          : null,
+    return buildAppTheme(
+      primary: primary,
+      secondary: secondary,
+      tertiary: tertiary,
+      brightness: brightness,
     );
   }
 
@@ -271,7 +235,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     return DynamicColorBuilder(
       builder: (light, dark) {
         Color? primary, secondary, tertiary;
-        if (appdata.settings['color'] != 'system' ||
+        if (appdata.settings['colorSchemePreset'] != kPresetSystem ||
             light == null ||
             dark == null) {
           primary = translateColorSetting();

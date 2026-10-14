@@ -17,6 +17,17 @@ class _AppSettingsState extends State<AppSettings> {
     };
   }
 
+  /// Shows which preset is active so the row isn't a dead end: the gallery
+  /// lives one tap deeper and this page is the only other place the choice is
+  /// visible.
+  String _themeColorSummary() {
+    final preset = appdata.settings['colorSchemePreset'] as String?;
+    if (preset == kPresetCustom) {
+      return "${"Custom".tl} · ${appdata.settings['customSeedColor']}";
+    }
+    return colorSchemePresetLabel(preset);
+  }
+
   @override
   Widget build(BuildContext context) {
     return SmoothCustomScrollView(
@@ -41,21 +52,14 @@ class _AppSettingsState extends State<AppSettings> {
                 App.forceRebuild();
               },
             ),
-            SelectSetting(
-              title: "Theme Color".tl,
-              settingKey: "color",
-              optionTranslation: {
-                "system": "System".tl,
-                "red": "Red".tl,
-                "pink": "Pink".tl,
-                "purple": "Purple".tl,
-                "green": "Green".tl,
-                "orange": "Orange".tl,
-                "blue": "Blue".tl,
-              },
-              onChanged: () async {
-                await App.init();
-                App.forceRebuild();
+            ListTile(
+              title: Text("Theme Color".tl),
+              subtitle: Text(_themeColorSummary()),
+              leading: const Icon(Icons.palette_outlined),
+              trailing: const Icon(Icons.arrow_right),
+              onTap: () async {
+                await context.to(() => const AppColorSchemeSettings());
+                if (mounted) setState(() {});
               },
             ),
             if (App.isAndroid)

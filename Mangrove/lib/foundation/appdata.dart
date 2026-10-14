@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import 'package:mangrove/foundation/app.dart';
+import 'package:mangrove/foundation/color_scheme_preset.dart';
 import 'package:mangrove/foundation/follow_update_scope.dart';
 import 'package:mangrove/foundation/image_translation/llm_translator.dart';
 import 'package:mangrove/foundation/log.dart';
@@ -180,6 +181,10 @@ class Appdata with Init {
     // BallonsTranslator workspace root: a machine-specific path that would
     // point at nothing (or the wrong tree) on another device.
     "btProjectRoot",
+    // One-shot migration flags are bookkeeping, not preferences: a device that
+    // has already upgraded must not have its preset overwritten by a peer that
+    // hasn't (and vice versa).
+    "colorSchemePresetMigrated",
   ];
 
   /// [customFields] are the user's `disableSyncFields` entries; category
@@ -350,6 +355,7 @@ class Appdata with Init {
     _initSourceTypeRegistry();
     LlmProviderStore.migrateLegacyIfNeeded();
     FollowUpdateScope.migrateLegacyIfNeeded();
+    _migrateColorSchemePresetIfNeeded();
     // The 'ai' erase mode was removed; coerce any persisted value back to the
     // default so the settings dropdown doesn't show a blank (unmatched) option.
     if (settings['imageTranslationInpaintMode'] == 'ai') {
@@ -362,6 +368,24 @@ class Appdata with Init {
     // the restored value over to it.
     Log.syncVerboseNetwork(settings['verboseNetworkLog'] == true);
   }
+
+  /// Upgrades the legacy `color` setting to `colorSchemePreset` (P47).
+  ///
+  /// Guarded by `colorSchemePresetMigrated` so it runs exactly once per install
+  /// and can never overwrite a preset the user picked afterwards — the preset
+  /// default is a legal value (`system`), so "key absent" is not a usable
+  /// signal here.
+  ///
+  /// The old `color` key is left untouched on purpose: if this build has to be
+  /// rolled back, the old code path still finds the user's choice.
+  @visibleForTesting
+  void migrateColorSchemePresetIfNeeded() => _migrateColorSchemePresetIfNeeded();
+
+  void _migrateColorSchemePresetIfNeeded() {
+    if (settings['colorSchemePresetMigrated'] == true) return;
+    settings['colorSchemePreset'] = migrateLegacyColorPreset(settings['color']);
+    settings['colorSchemePresetMigrated'] = true;
+  }
 }
 
 final appdata = Appdata._create();
@@ -372,7 +396,14 @@ class Settings with ChangeNotifier {
   final _data = <String, dynamic>{
     'comicDisplayMode': 'detailed', // detailed, brief
     'comicTileScale': 1.00, // 0.75-1.25
+    // Legacy single-hue theme colour. Kept as the rollback path for P47; the
+    // live setting is `colorSchemePreset` (+ `customSeedColor`).
     'color': 'system', // red, pink, purple, green, orange, blue
+    'colorSchemePreset': 'system', // see [kColorSchemePresetIds]
+    'customSeedColor': '#2196F3', // used when the preset is `custom`
+    // One-shot upgrade flag: `color` -> `colorSchemePreset`. Device-local, so
+    // it is also listed in [_disableSync].
+    'colorSchemePresetMigrated': false,
     'theme_mode': 'system', // light, dark, system
     'newFavoriteAddTo': 'end', // start, end
     'moveFavoriteAfterRead': 'none', // none, end, start
