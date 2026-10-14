@@ -235,6 +235,23 @@ class _GalleryModeState extends State<_GalleryMode>
     return showChapterCommentsAtEnd && pageIndex == totalImagePages + 1;
   }
 
+  bool get _chapterEndNavEnabled => readerChapterEndNavEnabled(
+    mode: reader.mode,
+    cid: reader.cid,
+    sourceKey: reader.type.sourceKey,
+  );
+
+  /// The prev/next cards get a page of their own only when the comments page
+  /// isn't already occupying the end; otherwise they stack on top of it.
+  /// The extra page is folded into `reader.totalPages`, so it is the last
+  /// index rather than an index past the end.
+  bool isChapterEndNavPage(int pageIndex) {
+    return _chapterEndNavEnabled &&
+        !showChapterCommentsAtEnd &&
+        totalPages > totalImagePages &&
+        pageIndex == totalPages;
+  }
+
   var imageStates = <State<ComicImage>>{};
 
   bool isLongPressing = false;
@@ -348,7 +365,8 @@ class _GalleryModeState extends State<_GalleryMode>
       if (i == startPage ||
           i <= 0 ||
           i > totalPages ||
-          isChapterCommentsPage(i)) {
+          isChapterCommentsPage(i) ||
+          isChapterEndNavPage(i)) {
         continue;
       }
       final shouldPreCache =
@@ -358,7 +376,7 @@ class _GalleryModeState extends State<_GalleryMode>
   }
 
   void _cachePage(int page, bool shouldPreCache) {
-    if (isChapterCommentsPage(page)) return;
+    if (isChapterCommentsPage(page) || isChapterEndNavPage(page)) return;
     var (startIndex, endIndex) = getPageImagesRange(page);
     for (int i = startIndex; i < endIndex; i++) {
       shouldPreCache
@@ -372,12 +390,25 @@ class _GalleryModeState extends State<_GalleryMode>
     var chapters = reader.widget.chapters;
     if (source == null || chapters == null) return const SizedBox();
     var chapterIndex = reader.chapter - 1;
-    return _EmbeddedChapterCommentsPage(
+    var comments = _EmbeddedChapterCommentsPage(
       comicId: reader.cid,
       epId: chapters.ids.elementAt(chapterIndex),
       source: source,
       comicTitle: reader.widget.name,
       chapterTitle: chapters.titles.elementAt(chapterIndex),
+    );
+    if (!_chapterEndNavEnabled) return comments;
+    // Cards first, comments below: reaching the end of a chapter is exactly
+    // when "what's next" matters, and the comment list can be very long.
+    return Column(
+      children: [const ChapterEndNavCards(), Expanded(child: comments)],
+    );
+  }
+
+  /// The chapter-end page when there is no comments page to host the cards.
+  Widget _buildChapterEndNavPage() {
+    return Center(
+      child: SingleChildScrollView(child: const ChapterEndNavCards()),
     );
   }
 
@@ -422,6 +453,12 @@ class _GalleryModeState extends State<_GalleryMode>
             return PhotoViewGalleryPageOptions.customChild(
               child: _buildChapterCommentsPage(),
               // 评论页是普通可滚动列表，关闭 PhotoView 手势，避免被双指缩放整页放大
+              disableGestures: true,
+            );
+          } else if (isChapterEndNavPage(index)) {
+            return PhotoViewGalleryPageOptions.customChild(
+              child: _buildChapterEndNavPage(),
+              // Buttons, not an image: gestures would only fight the taps.
               disableGestures: true,
             );
           } else {
@@ -630,6 +667,21 @@ class _GalleryModeState extends State<_GalleryMode>
     // 静止态就大于 1 也不误判为放大。
     final initial = controller!.getInitialScale?.call() ?? 1.0;
     return scale > initial * 1.01;
+  }
+
+  @override
+  PhotoViewController? get zoomController => photoViewControllers[reader.page];
+
+  @override
+  void setZoomScale(double target) {
+    // Per-page controllers: the current page is whatever the reader is on, so
+    // the cluster never has to track page changes itself.
+    photoViewControllers[reader.page]?.animateScale?.call(target);
+  }
+
+  @override
+  void resetZoom() {
+    photoViewControllers[reader.page]?.reset();
   }
 
   @override
@@ -974,6 +1026,23 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
   @override
   bool get isImageZoomed => (photoViewController.scale ?? 1.0) > 1.01;
+
+  @override
+  PhotoViewController? get zoomController => photoViewController;
+
+  @override
+  void setZoomScale(double target) {
+    photoViewController.animateScale?.call(target);
+    // Continuous keeps its own "zoomed" flag to stand the swipe-to-favourite
+    // gesture down; a scale set from the cluster must update it too.
+    onScaleUpdate(target);
+  }
+
+  @override
+  void resetZoom() {
+    photoViewController.reset();
+    onScaleUpdate(1.0);
+  }
 
   @override
   void initState() {

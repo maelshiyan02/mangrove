@@ -104,6 +104,8 @@ const syncSkipCategories = <SyncSkipCategory>[
       "commentsFontSize",
       "showChapterCommentsAtEnd",
       "readerProgressBarPosition",
+      "readerShowZoomBar",
+      "readerShowChapterEndNav",
       "comicSpecificSettings",
       "deviceSpecificSettings",
     ],

@@ -541,6 +541,10 @@ class Settings with ChangeNotifier {
     'readerCenterPageOnTurn': false,
     // 连续模式相邻图片之间的间隙（逻辑像素，0 = 紧贴）。
     'readerPageSpacing': 0.0, // 0 - 50
+    // 右下角缩放簇：桌面端可选，默认关（手势/Ctrl+滚轮用户不受影响）。
+    'readerShowZoomBar': false,
+    // gallery 章尾「上一话 / 下一话」大卡，默认开。
+    'readerShowChapterEndNav': true,
     // 阅读进度条位置：bottom = 底栏滑条（默认，原行为）；left = 左缘页轨（仅桌面）。
     'readerProgressBarPosition': 'bottom',
     'localFavoritesFirst': true,

@@ -49,6 +49,28 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
 
   _DragListener? _imageFavoriteDragListener;
 
+  /// The zoom cluster is opt-in (`readerShowZoomBar`) and desktop-only: it
+  /// exists for mouse users and must never appear on touch layouts.
+  bool get zoomBarEnabled =>
+      App.isDesktop && appdata.settings['readerShowZoomBar'] == true;
+
+  bool _zoomBarVisible = false;
+
+  Timer? _zoomBarTimer;
+
+  /// Called on any pointer activity over the page: the cluster fades in and
+  /// disappears again after 2s of stillness, so it never competes with the art.
+  void pokeZoomBar() {
+    if (!zoomBarEnabled) return;
+    _zoomBarTimer?.cancel();
+    _zoomBarTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      setState(() => _zoomBarVisible = false);
+    });
+    if (_zoomBarVisible) return;
+    setState(() => _zoomBarVisible = true);
+  }
+
   void addDragListener() async {
     if (!mounted) return;
 
@@ -134,6 +156,7 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
 
   @override
   void dispose() {
+    _zoomBarTimer?.cancel();
     ImageTranslationService.instance.removeListener(
       _onTranslationStatusChanged,
     );
@@ -306,6 +329,20 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
             child: widget.child,
           ),
         ),
+        // Translucent: the hover is reported to this region *and* still reaches
+        // the reader underneath, so the zoom cluster wakes on any mouse
+        // movement without stealing a single gesture.
+        if (zoomBarEnabled)
+          Positioned.fill(
+            child: MouseRegion(
+              // Not opaque: the hover is reported here *and* the event still
+              // reaches the reader underneath, so the cluster wakes on any
+              // mouse movement without stealing a gesture.
+              opaque: false,
+              onHover: (_) => pokeZoomBar(),
+              child: const SizedBox.expand(),
+            ),
+          ),
         if (appdata.settings['readerNightMode'] == true)
           Positioned.fill(
             child: IgnorePointer(
@@ -338,6 +375,14 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
             ),
           ),
         ),
+        // Sits above the chapter-change button (bottom: 36 + its 56dp) so the
+        // two never overlap when both are on screen.
+        if (zoomBarEnabled)
+          Positioned(
+            right: 16,
+            bottom: 100,
+            child: ReaderZoomBar(visible: _zoomBarVisible),
+          ),
         Positioned(
           top: 0,
           left: 0,

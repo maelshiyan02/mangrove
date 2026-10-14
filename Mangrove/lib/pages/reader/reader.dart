@@ -77,6 +77,9 @@ part 'chapters.dart';
 part 'chapter_comments.dart';
 
 part 'page_rail.dart';
+part 'zoom_bar.dart';
+part 'chapter_end_nav.dart';
+part 'help_dialog.dart';
 
 @visibleForTesting
 SystemUiMode resolveReaderSystemUiMode(bool showSystemStatusBar) {
@@ -195,9 +198,23 @@ class _ReaderState extends State<Reader>
   @override
   int get totalPages {
     var pages = maxPage;
-    if (_shouldShowChapterCommentsAtEnd) pages++;
+    if (_shouldShowChapterCommentsAtEnd) {
+      pages++;
+    } else if (_chapterEndNavPageEnabled) {
+      // The prev/next cards need a page of their own only when the comments
+      // page isn't already at the end; folding them into `totalPages` (rather
+      // than appending past it) keeps every existing page index valid, so
+      // `itemCount` and the swipe-past-the-end trigger stay untouched.
+      pages++;
+    }
     return pages;
   }
+
+  bool get _chapterEndNavPageEnabled => readerChapterEndNavEnabled(
+    mode: mode,
+    cid: cid,
+    sourceKey: type.sourceKey,
+  );
 
   /// Whether the current page is the chapter comments page.
   @override
@@ -519,6 +536,15 @@ class _ReaderState extends State<Reader>
   void onKeyEvent(KeyEvent event) {
     if (event.logicalKey == LogicalKeyboardKey.f12 && event is KeyUpEvent) {
       fullscreen();
+    }
+    // Checked before forwarding so `?` never reaches the page-turn handler.
+    if (event is KeyDownEvent &&
+        isReaderHelpKey(
+          logicalKey: event.logicalKey,
+          character: event.character,
+        )) {
+      showReaderHelpDialog(context);
+      return;
     }
     _imageViewController?.handleKeyEvent(event);
   }
@@ -1165,6 +1191,19 @@ abstract interface class _ImageViewController {
   /// scale). While zoomed, a single-finger drag pans the image, so the
   /// swipe-to-favorite gesture must stand down to avoid false triggers (#143).
   bool get isImageZoomed;
+
+  /// The PhotoViewController driving the image the reader is on, or null on
+  /// pages that have none (comments page, image still loading). Exposed for
+  /// the zoom cluster, which needs both the live scale and its change stream.
+  PhotoViewController? get zoomController;
+
+  /// Animates to an absolute [target] scale. Implementations own any extra
+  /// state the mode keeps about being zoomed (continuous tracks `isZoomedIn`
+  /// to stand gestures down).
+  void setZoomScale(double target);
+
+  /// Back to the fit scale, pan included.
+  void resetZoom();
 
   Future<Uint8List?> getImageByOffset(Offset offset);
 

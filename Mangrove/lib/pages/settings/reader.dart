@@ -500,6 +500,33 @@ class _ReaderSettingsState extends State<ReaderSettings> {
                     : null,
                 useDeviceSettings: useDeviceSpecificSettings,
               ),
+            // Desktop only: a mouse-sized control in the page corner has no
+            // place in a touch layout.
+            if (App.isDesktop)
+              _SwitchSetting(
+                title: "Zoom controls".tl,
+                subtitle: "Show a zoom cluster in the bottom-right corner".tl,
+                settingKey: "readerShowZoomBar",
+                onChanged: () {
+                  widget.onChanged?.call("readerShowZoomBar");
+                },
+                comicId: isEnabledSpecificSettings ? widget.comicId : null,
+                comicSource: isEnabledSpecificSettings
+                    ? widget.comicSource
+                    : null,
+                useDeviceSettings: useDeviceSpecificSettings,
+              ),
+            _SwitchSetting(
+              title: "Chapter end navigation".tl,
+              subtitle: "Show prev/next chapter cards at the end of a chapter".tl,
+              settingKey: "readerShowChapterEndNav",
+              onChanged: () {
+                widget.onChanged?.call("readerShowChapterEndNav");
+              },
+              comicId: isEnabledSpecificSettings ? widget.comicId : null,
+              comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
+              useDeviceSettings: useDeviceSpecificSettings,
+            ),
             SelectSetting(
               title: "Reading mode".tl,
               settingKey: "readerMode",
