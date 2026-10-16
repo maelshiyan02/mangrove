@@ -13,6 +13,7 @@ import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/comic_state_repository.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/download_keepalive.dart';
+import 'package:mangrove/foundation/download_manager_store.dart';
 import 'package:mangrove/foundation/favorites.dart';
 import 'package:mangrove/foundation/history.dart';
 import 'package:mangrove/foundation/log.dart';
@@ -1069,6 +1070,19 @@ class LocalManager with ChangeNotifier {
     if (stored != null) {
       unawaited(reconcileDiskState(stored));
     }
+    // 「过往任务」：整本下载完成 → 记入持久化历史（下载管理分区展示）。
+    DownloadHistoryStore.instance.record(
+      DownloadHistoryEntry(
+        comicId: task.id,
+        comicTypeValue: task.comicType.value,
+        title: finishedTitle,
+        cover: task.cover,
+        sourceKey: task.comicType.sourceKey,
+        time: DateTime.now(),
+        kind: 'download',
+        chapters: stored?.downloadedChapters.length,
+      ),
+    );
     notifyListeners();
     saveCurrentDownloadingTasks();
     // Notify when the whole queue has drained (nothing left, or only paused/

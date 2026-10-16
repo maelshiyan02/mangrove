@@ -2,7 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:mangrove/components/components.dart';
+import 'package:mangrove/components/download_wave_progress.dart';
 import 'package:mangrove/foundation/app.dart';
+import 'package:mangrove/foundation/download_manager_store.dart';
+import 'package:mangrove/network/download.dart';
+import 'package:mangrove/pages/download_manager_dialogs.dart';
+import 'package:mangrove/pages/download_manager_page.dart';
 import 'package:mangrove/foundation/background_keepalive.dart';
 import 'package:mangrove/foundation/battery_optimization.dart';
 import 'package:mangrove/foundation/comic_card_kind.dart';
@@ -223,6 +228,9 @@ class _HomePageState extends State<HomePage> {
         key: ValueKey('translatedComics'),
       ),
       'local' => const _Local(key: ValueKey('local')),
+      'downloadManager' => const _DownloadManagerSection(
+        key: ValueKey('downloadManager'),
+      ),
       'followUpdates' => const FollowUpdatesWidget(
         key: ValueKey('followUpdates'),
       ),
@@ -759,6 +767,212 @@ class _HistoryState extends State<_History> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 下载管理（主页常驻分区，用户需求 #1，2026-10-14）
+//
+// 这是「下载中」弹窗在主页的常驻拓展：一眼看到正在下载的任务（最多 2 行
+// 迷你预览）、问题数量徽标，并直接进入「统计缺页 / 修复缺页」二级弹窗。
+// 完整的四队列（当前/过往/问题/待命）视图在 [DownloadManagerPage]。
+// ---------------------------------------------------------------------------
+
+class _DownloadManagerSection extends StatefulWidget {
+  const _DownloadManagerSection({super.key});
+
+  @override
+  State<_DownloadManagerSection> createState() =>
+      _DownloadManagerSectionState();
+}
+
+class _DownloadManagerSectionState extends State<_DownloadManagerSection> {
+  List<DownloadTask> _current = const [];
+  List<DownloadTask> _errors = const [];
+  List<ComicMissingReport> _problems = const [];
+  int _historyCount = 0;
+
+  void _update() {
+    if (!LocalManager().isInitialized) return;
+    if (!mounted) return;
+    final tasks = LocalManager().downloadingTasks.toList();
+    final errors = tasks.where((t) => t.isError).toList();
+    // 有报错任务在队的漫画，任务卡已表达问题；缺页卡不重复出（与下载管理页同口径）。
+    final problems = DownloadProblemScanner.instance.reports
+        .where(
+          (r) => !errors.any(
+            (t) => t.id == r.comicId && t.comicType == r.comic.comicType,
+          ),
+        )
+        .toList();
+    setState(() {
+      _current = tasks
+          .where((t) => classifyDownloadTask(t) == DownloadTaskBucket.current)
+          .toList();
+      _errors = errors;
+      _problems = problems;
+      _historyCount = DownloadHistoryStore.instance.count;
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    LocalManager().addListener(_update);
+    DownloadProblemScanner.instance.addListener(_update);
+    DownloadHistoryStore.instance.addListener(_update);
+    // 进主页快扫已登记的缺页表，保证问题徽标即时可用（毫秒级）。
+    DownloadProblemScanner.instance.quickScan();
+    _update();
+  }
+
+  @override
+  void dispose() {
+    LocalManager().removeListener(_update);
+    DownloadProblemScanner.instance.removeListener(_update);
+    DownloadHistoryStore.instance.removeListener(_update);
+    super.dispose();
+  }
+
+  int get _problemCount => _errors.length + _problems.length;
+
+  @override
+  Widget build(BuildContext context) {
+    final problemCount = _problemCount;
+    return SliverToBoxAdapter(
+      child: _HomeSectionSurface(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            InkWell(
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(8),
+              ),
+              onTap: () => context.to(() => const DownloadManagerPage()),
+              child: SizedBox(
+                height: 56,
+                child: Row(
+                  children: [
+                    _homeSectionIcon(context, Icons.download_outlined),
+                    const SizedBox(width: 12),
+                    _HomeSectionTitle(
+                      title: 'Download Manager'.tl,
+                      count: problemCount == 0 ? null : problemCount,
+                    ),
+                    _homeChevron(context),
+                  ],
+                ).paddingHorizontal(16),
+              ),
+            ),
+            for (final t in _current.take(2)) _DownloadManagerMiniRow(task: t),
+            if (_current.isEmpty && problemCount == 0)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '@a downloaded'.tlParams({'a': _historyCount}),
+                    style: ts.s12.copyWith(color: context.colorScheme.outline),
+                  ),
+                ),
+              ),
+            Divider(
+              height: 1,
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () => showMissingStatsDialog(context),
+                      icon: const Icon(Icons.fact_check_outlined, size: 18),
+                      label: Text('Missing Pages Statistics'.tl),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.icon(
+                      style: problemCount > 0
+                          ? FilledButton.styleFrom(
+                              backgroundColor: context.colorScheme.errorContainer,
+                              foregroundColor: context.colorScheme.onErrorContainer,
+                            )
+                          : null,
+                      onPressed: problemCount == 0
+                          ? null
+                          : () => showMissingRepairDialog(context),
+                      icon: const Icon(Icons.auto_fix_high, size: 18),
+                      label: Text('Repair Missing Pages'.tl),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 主页分区里的单只当前任务迷你预览：标题 + 波浪进度 + 暂停/继续。
+class _DownloadManagerMiniRow extends StatelessWidget {
+  const _DownloadManagerMiniRow({required this.task});
+
+  final DownloadTask task;
+
+  @override
+  Widget build(BuildContext context) {
+    final running = !task.isPaused && !task.isError;
+    return SizedBox(
+      height: 64,
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    task.title,
+                    style: ts.s14,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: DownloadWaveProgress(
+                    progress: task.progress == 0 ? null : task.progress,
+                    running: running,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: Icon(
+              task.isPaused ? Icons.play_arrow : Icons.pause,
+              size: 20,
+            ),
+            tooltip: (task.isPaused ? 'Start' : 'Pause').tl,
+            onPressed: () {
+              if (task.isPaused) {
+                LocalManager().resumeTask(task);
+              } else {
+                LocalManager().pauseTask(task);
+              }
+            },
+          ),
+          const SizedBox(width: 4),
+        ],
       ),
     );
   }

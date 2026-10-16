@@ -27,6 +27,11 @@ const List<HomeSectionMeta> kHomeSections = [
   HomeSectionMeta('readLater', 'Read Later', Icons.watch_later_outlined),
   HomeSectionMeta('translatedComics', 'Translation Studio', Icons.translate),
   HomeSectionMeta('local', 'Local', Icons.local_library_outlined),
+  HomeSectionMeta(
+    'downloadManager',
+    'Download Manager',
+    Icons.download_outlined,
+  ),
   HomeSectionMeta('followUpdates', 'Follow Updates', Icons.dynamic_feed),
   HomeSectionMeta('comicSource', 'Comic Source', Icons.source_outlined),
   HomeSectionMeta('imageFavorites', 'Image Favorites', Icons.image_outlined),

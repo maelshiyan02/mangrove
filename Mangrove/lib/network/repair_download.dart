@@ -6,6 +6,7 @@ import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/comic_type.dart';
+import 'package:mangrove/foundation/download_manager_store.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/missing_pages.dart';
@@ -365,6 +366,20 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
             "b": _failed,
           });
     notifyListeners();
+    // 「过往任务」：修复收尾也记入历史（下载管理分区的过往队列展示）。
+    DownloadHistoryStore.instance.record(
+      DownloadHistoryEntry(
+        comicId: comicId,
+        comicTypeValue: comicType.value,
+        title: title,
+        cover: comicCover,
+        sourceKey: source.key,
+        time: DateTime.now(),
+        kind: 'repair',
+        repaired: _repaired,
+        failed: _failed,
+      ),
+    );
     // Remove from the queue and let the next runnable task start. Unlike
     // completeTask() we do NOT re-add the comic to the library: it is already
     // there, we only filled in missing pages.

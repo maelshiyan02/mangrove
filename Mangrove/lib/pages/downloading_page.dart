@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mangrove/components/components.dart';
+import 'package:mangrove/components/download_wave_progress.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/download_keepalive.dart';
 import 'package:mangrove/foundation/image_provider/cached_image.dart';
@@ -384,8 +385,11 @@ class _DownloadTaskTileState extends State<_DownloadTaskTile> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
-                LinearProgressIndicator(
-                  value: t.progress == 0 ? null : t.progress,
+                // 波浪进度：暂停即静止；启动阶段（progress==0，未知名进度）
+                // 允许缓慢漂移；正常传输克制波动（见组件内注释）。
+                DownloadWaveProgress(
+                  progress: t.progress == 0 ? null : t.progress,
+                  running: !t.isPaused && !t.isError,
                 ),
                 const SizedBox(height: 8),
               ],
