@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import '../path_roots.dart';
 import '../image_translation/translation_types.dart';
 import 'block_group.dart';
 import 'seam_review.dart';
@@ -134,12 +135,28 @@ class TranslationProject {
   String get jsonFileName => jsonFile.uri.pathSegments.last;
 
   /// Root of the source page images.
+  ///
+  /// Resolution order:
+  /// 1. the stored absolute path while it still exists;
+  /// 2. a **moved-folder rebased** path — when the stored root no longer
+  ///    exists (the whole project tree was relocated), its tail under the
+  ///    last `downloads` segment is replayed against the currently active
+  ///    downloads root ([PathRoots.currentDownloadsRoot]). The JSON itself is
+  ///    never rewritten by a read, preserving the zero-byte-diff contract;
+  /// 3. the JSON's own folder (legacy in-place FT projects).
   String get directory {
     final stored = _normalisePath(raw['directory']?.toString() ?? '');
-    if (stored.isEmpty || !Directory(stored).existsSync()) {
+    if (stored.isEmpty) {
       return jsonDirectory;
     }
-    return stored;
+    if (Directory(stored).existsSync()) {
+      return stored;
+    }
+    final rebased = PathRoots.rebaseAnchoredUnderDownloads(stored);
+    if (rebased != null) {
+      return rebased;
+    }
+    return jsonDirectory;
   }
 
   /// Root of FT's generated artifacts (`mask/`, `inpainted/`, `result/`).

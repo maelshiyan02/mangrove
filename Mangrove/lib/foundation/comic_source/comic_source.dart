@@ -15,6 +15,7 @@ import 'package:mangrove/foundation/comic_source/webdav_source.dart';
 import 'package:mangrove/foundation/webdav_library_store.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/history.dart';
+import 'package:mangrove/foundation/path_roots.dart';
 import 'package:mangrove/foundation/res.dart';
 import 'package:mangrove/foundation/source_platform.dart';
 import 'package:mangrove/pages/category_comics_page.dart';
@@ -235,22 +236,35 @@ class ComicSourceManager with ChangeNotifier, Init {
     final path = "${App.dataPath}/comic_source";
     if (!(await Directory(path).exists())) {
       await Directory(path).create(recursive: true);
-      _applyOrder();
-      return;
     }
-    await for (var entity in Directory(path).list()) {
-      if (entity is File && entity.path.endsWith(".js")) {
-        try {
-          var source = await ComicSourceParser().parse(
-            await entity.readAsString(),
-            entity.absolute.path,
-          );
-          _addParsedSource(source, entity.name);
-        } catch (e, s) {
-          if (e is ComicSourceParseException && e.isRecoverable) {
-            _logRecoverableParseWarning(entity.name, e);
-          } else {
-            Log.error("ComicSource", e, s);
+    // Script directories to merge, in priority order:
+    //   1. %APPDATA%/.../comic_source — writable, holds updates/login state;
+    //   2. <portable root>/comic_source — read-only, travels WITH the project
+    //      folder so sources survive a machine move / fresh checkout. A key
+    //      already registered from the appdata dir wins ([_addParsedSource]
+    //      de-duplicates by source.key), so a portable copy never shadows a
+    //      newer user-updated script.
+    final scriptDirs = <String>[path];
+    final portableSourceDir = PathRoots.portableComicSourceDir();
+    if (portableSourceDir != null &&
+        !scriptDirs.contains(portableSourceDir)) {
+      scriptDirs.add(portableSourceDir);
+    }
+    for (final dirPath in scriptDirs) {
+      await for (var entity in Directory(dirPath).list()) {
+        if (entity is File && entity.path.endsWith(".js")) {
+          try {
+            var source = await ComicSourceParser().parse(
+              await entity.readAsString(),
+              entity.absolute.path,
+            );
+            _addParsedSource(source, entity.name);
+          } catch (e, s) {
+            if (e is ComicSourceParseException && e.isRecoverable) {
+              _logRecoverableParseWarning(entity.name, e);
+            } else {
+              Log.error("ComicSource", e, s);
+            }
           }
         }
       }
@@ -615,6 +629,18 @@ class ComicSource {
 
   Future<void> loadData() async {
     var file = File("${App.dataPath}/comic_source/$key.data");
+    // Portable fallback: when the writable appdata copy is absent (project
+    // folder moved to a fresh machine), read the bundled .data that travels
+    // with <portable root>/comic_source. Saves still go to appdata.
+    if (!await file.exists()) {
+      final portableDir = PathRoots.portableComicSourceDir();
+      if (portableDir != null) {
+        final portableFile = File("$portableDir/$key.data");
+        if (await portableFile.exists()) {
+          file = portableFile;
+        }
+      }
+    }
     if (await file.exists()) {
       try {
         data = Map.from(jsonDecode(await file.readAsString()));

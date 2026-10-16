@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../image_translation/translation_types.dart';
+import '../path_roots.dart';
 import '../translation_project/project.dart';
 import '../translation_project/project_io.dart';
 
@@ -116,6 +117,11 @@ class BtProject {
     final jsonDir = jsonFile.parent.absolute.path.replaceAll('\\', '/');
 
     var directory = (json['directory'] as String?)?.replaceAll('\\', '/') ?? '';
+    if (directory.isNotEmpty && !Directory(directory).existsSync()) {
+      // Same moved-folder rebasing as TranslationProject.directory.
+      final rebased = PathRoots.rebaseAnchoredUnderDownloads(directory);
+      if (rebased != null) directory = rebased;
+    }
     if (directory.isEmpty || !Directory(directory).existsSync()) {
       directory = jsonDir;
     }

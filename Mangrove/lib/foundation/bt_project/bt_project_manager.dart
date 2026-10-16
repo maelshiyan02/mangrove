@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -13,7 +12,9 @@ import '../image_translation/page_renderer.dart';
 import '../image_translation/translation_types.dart';
 import '../local.dart';
 import '../log.dart';
+import '../path_roots.dart';
 import '../../utils/file_type.dart';
+import '../../utils/io.dart';
 import '../chapter_title_parser.dart';
 import 'bt_project.dart';
 import '../translation_project/artifact_reconciliation.dart';
@@ -65,17 +66,107 @@ class BtProjectManager extends ChangeNotifier {
 
   /// Every configured root. Semicolon-separated so the setting stays a plain
   /// string and an existing single-path value keeps working untouched.
+  ///
+  /// Each entry is resolved through [PathRoots] so a moved project folder
+  /// self-heals: absolute roots that still exist win; roots that disappeared
+  /// are rebased onto the portable root's `ComicLibrary/projects`; entries
+  /// stored in portable-relative form (`ComicLibrary/projects`) are replayed
+  /// against the current portable root. When the library lives in the portable
+  /// layout but the setting is empty, the sibling `projects` root is added
+  /// automatically so a fresh checkout needs zero configuration.
   static List<String> get roots {
     final raw = appdata.settings['btProjectRoot'];
-    if (raw is! String) return const [];
     final result = <String>[];
-    for (final part in raw.split(';')) {
-      final trimmed = part.trim();
-      if (trimmed.isNotEmpty && !result.contains(trimmed)) {
-        result.add(trimmed);
+    void addDistinct(String candidate) {
+      final norm = candidate.trim().replaceAll('\\', '/');
+      if (norm.isNotEmpty && !result.contains(norm)) {
+        result.add(norm);
       }
     }
+
+    final entries = <String>[];
+    if (raw is String) {
+      entries.addAll(
+        raw
+            .split(';')
+            .map((part) => part.trim())
+            .where((part) => part.isNotEmpty),
+      );
+    }
+    final portableRoot = PathRoots.portableRoot();
+    for (final entry in entries) {
+      if (!PathRoots.isAbsolute(entry)) {
+        // Portable-relative form: replay under the current portable root.
+        if (portableRoot != null) {
+          final candidate =
+              FilePath.join(portableRoot, entry).replaceAll('\\', '/');
+          if (Directory(candidate).existsSync()) {
+            addDistinct(candidate);
+            continue;
+          }
+        }
+        // No portable context and the relative path does not resolve against
+        // cwd — drop it from the scan view; persistPortableSelfHeal keeps the
+        // original text so it can recover later.
+        if (Directory(entry).existsSync()) addDistinct(entry);
+        continue;
+      }
+      if (Directory(entry).existsSync()) {
+        addDistinct(entry);
+        continue;
+      }
+      final rebased = PathRoots.rebaseProjectsRoot(entry);
+      if (rebased != null) addDistinct(rebased);
+    }
+    final portableProjects =
+        PathRoots.rebaseProjectsRoot(null, autoWhenEmpty: true);
+    if (portableProjects != null) addDistinct(portableProjects);
     return result;
+  }
+
+  /// Persists the portable self-heal result back into the setting **once per
+  /// launch** (called after all stores are initialized): surviving entries are
+  /// rewritten in portable-relative form so the next folder move needs no
+  /// resolution at all.
+  ///
+  /// Entries that vanished AND cannot be rebased (e.g. a detached external
+  /// drive holding a user-chosen root) are preserved verbatim — dropping them
+  /// would destroy configuration the moment a drive is unplugged.
+  static Future<void> persistPortableSelfHeal() async {
+    final raw = (appdata.settings['btProjectRoot'] as String? ?? '').trim();
+    final entries = raw
+        .split(';')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList();
+    final needsHeal = entries.any(
+          (entry) =>
+              PathRoots.isAbsolute(entry) && !Directory(entry).existsSync(),
+        ) ||
+        (entries.isEmpty && PathRoots.portableProjectsRoot() != null);
+    if (!needsHeal) return;
+
+    final effective = roots; // already resolved + de-duplicated
+    final persisted = <String>[...effective];
+    for (final entry in entries) {
+      final missing =
+          PathRoots.isAbsolute(entry) && !Directory(entry).existsSync();
+      final rebased = missing ? PathRoots.rebaseProjectsRoot(entry) : null;
+      if (missing && rebased == null && !persisted.contains(entry)) {
+        // Unresolved custom root (drive offline?) — keep the raw text.
+        persisted.add(entry);
+      }
+    }
+    final stored = persisted
+        .map((path) => PathRoots.relativeToPortable(path) ?? path)
+        .join(';');
+    if (stored == raw) return;
+    appdata.settings['btProjectRoot'] = stored;
+    await appdata.saveData(false);
+    Log.info(
+      'BT Project',
+      'btProjectRoot self-healed after folder move: "$raw" -> "$stored".',
+    );
   }
 
   static bool get isEnabled => roots.isNotEmpty;

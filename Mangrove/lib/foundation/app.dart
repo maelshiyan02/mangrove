@@ -12,6 +12,7 @@ import 'package:mangrove/foundation/image_translation/translation_store.dart';
 import 'package:mangrove/foundation/read_later.dart';
 
 import 'appdata.dart';
+import 'bt_project/bt_project_manager.dart';
 import 'domain_database.dart';
 import 'favorites.dart';
 import 'local.dart';
@@ -135,6 +136,14 @@ class _App {
     // Begin watching connectivity so "WiFi only" downloads pause on metered
     // networks. No-op while the setting is off (#15).
     DownloadNetworkGuard.instance.start();
+    // Persist the portable self-heal once stores are loaded: rewrites a
+    // btProjectRoot that pointed at the old folder location (or was empty in
+    // a fresh portable checkout) into the resolved/portable-relative form.
+    try {
+      await BtProjectManager.persistPortableSelfHeal();
+    } catch (e, s) {
+      Log.error("init", "btProjectRoot self-heal failed: $e\n$s");
+    }
   }
 
   Function? _forceRebuildHandler;

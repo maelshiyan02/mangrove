@@ -18,6 +18,9 @@ Ballonstranslator_store/
 Mangrove-portable/
 ComicLibrary/
 builds/
+# 便携漫画源目录（PathRoots：随项目文件夹一起迁移的运行时源脚本/登录态）。
+# 本地搬目录时它跟着走；属用户数据（自定义源/账号 .data），不进 git。
+/comic_source/
 
 # ---- 2. Mangrove 构建残留（约 2.2 GB，可由 flutter build 重新生成）----
 # 注意：Mangrove/.gitignore（Flutter 模板自带）已排除 /build/ 与 .dart_tool/，
@@ -71,6 +74,7 @@ pipeline_check.json
 script_check.json
 bootstrap_check.json
 download_check.json
+portable_paths_check.json
 tools/headless_once.bat
 
 # ---- 6. 本机数据与备份 ----

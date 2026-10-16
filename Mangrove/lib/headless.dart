@@ -28,6 +28,7 @@ import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/leave_guard.dart';
 import 'package:mangrove/foundation/missing_pages.dart';
+import 'package:mangrove/foundation/path_roots.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/network/cookie_jar.dart';
@@ -2233,6 +2234,245 @@ Future<void> runBootstrapCheck(List<String> args, int commandIndex) async {
   exit(passed ? 0 : 1);
 }
 
+/// `mangrove.exe --headless portable-paths-check [--json out.json]`
+///
+/// 搬家自愈（[PathRoots]）纯文件层自检：在系统临时目录里造"旧根已消失 +
+/// 便携根存在"的场景，验证便携根探测（隐式签名/显式标志/深度边界）、
+/// `local_path` 失效自愈与相对形式重放、`btProjectRoot` 重定位、工程 json
+/// `directory` 的 downloads 锚重基、便携源目录发现。不触碰真实库与设置。
+Future<void> runPortablePathsCheck(List<String> args, int commandIndex) async {
+  final jsonIndex = args.indexOf('--json');
+  final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
+      ? args[jsonIndex + 1]
+      : '${Directory.current.path}/portable_paths_check.json';
+
+  final checks = <Map<String, Object?>>[];
+  void check(String name, bool passed, String detail) =>
+      checks.add({'name': name, 'passed': passed, 'detail': detail});
+
+  Future<void> finish(bool passed, String message) async {
+    final report = {
+      'version': 1,
+      'command': 'portable-paths-check',
+      'passed': passed,
+      'checks': checks,
+    };
+    final output = File(outPath);
+    if (!output.parent.existsSync()) {
+      await output.parent.create(recursive: true);
+    }
+    await output.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(report),
+      encoding: utf8,
+    );
+    for (final entry in checks) {
+      cliPrint({'status': 'running', 'message': 'Check', 'data': entry});
+    }
+    cliPrint({
+      'status': passed ? 'success' : 'error',
+      'message': message,
+      'data': {'report': output.path},
+    });
+  }
+
+  var passed = false;
+  Directory? tempRoot;
+  try {
+    tempRoot = await Directory.systemTemp.createTemp('mangrove_portable');
+    final root = '${tempRoot.path}/project';
+    final downloads = '$root/ComicLibrary/downloads';
+    final projects = '$root/ComicLibrary/projects';
+    final sourceDir = '$root/comic_source';
+    await Directory(downloads).create(recursive: true);
+    await Directory(projects).create(recursive: true);
+    await Directory(sourceDir).create(recursive: true);
+    // 部署形态：<root>/builds/mangrove/mangrove.exe（上溯 2 级）。
+    final deployedExeDir = '$root/builds/mangrove';
+    await Directory(deployedExeDir).create(recursive: true);
+    // 开发形态：<root>/Mangrove/build/windows/x64/runner/Debug（上溯 5 级）。
+    final debugExeDir =
+        '$root/Mangrove/build/windows/x64/runner/Debug';
+    await Directory(debugExeDir).create(recursive: true);
+
+    // 1) 隐式签名探测（部署形态 + 开发形态）。
+    PathRoots.debugOverride(exeDir: deployedExeDir);
+    var found = PathRoots.portableRoot();
+    check(
+      'probe: implicit signature from deployed exe (2 levels up)',
+      found == root.replaceAll('\\', '/'),
+      'found=$found',
+    );
+    PathRoots.debugOverride(exeDir: debugExeDir);
+    found = PathRoots.portableRoot();
+    check(
+      'probe: implicit signature from debug exe (5 levels up)',
+      found == root.replaceAll('\\', '/'),
+      'found=$found',
+    );
+
+    // 2) 显式标志文件：没有 ComicLibrary 也命中。
+    final markerRoot = '${tempRoot.path}/flag';
+    await Directory('$markerRoot/bin').create(recursive: true);
+    await File('$markerRoot/mangrove.portable').writeAsString('');
+    PathRoots.debugOverride(exeDir: '$markerRoot/bin');
+    found = PathRoots.portableRoot();
+    check(
+      'probe: explicit mangrove.portable marker wins without ComicLibrary',
+      found == markerRoot.replaceAll('\\', '/'),
+      'found=$found',
+    );
+
+    // 3) 无签名链 → null（故障反证：普通目录不会被误判成便携根）。
+    final plainRoot = '${tempRoot.path}/plain/sub/deep';
+    await Directory(plainRoot).create(recursive: true);
+    PathRoots.debugOverride(exeDir: plainRoot);
+    found = PathRoots.portableRoot();
+    check('probe: unsigned ancestor chain resolves to null', found == null,
+        'found=$found');
+
+    // 4) 深度边界：maxAscent 之外不命中。
+    final tooDeep = '$root/a/b/c/d/e/f/g';
+    await Directory(tooDeep).create(recursive: true);
+    PathRoots.debugOverride(exeDir: tooDeep);
+    found = PathRoots.portableRoot();
+    check('probe: deeper than maxAscent (6) resolves to null', found == null,
+        'found=$found');
+
+    // 后续检查固定在部署形态的便携根上。
+    PathRoots.debugOverride(
+      exeDir: deployedExeDir,
+      downloadsRoot: downloads.replaceAll('\\', '/'),
+    );
+
+    // 5) 失效绝对库根 → 便携库根自愈，并给出相对回写形式。
+    final deadAbsolute =
+        '${tempRoot.path}/old_home/ComicLibrary/downloads';
+    var res = PathRoots.resolveLibraryPath(deadAbsolute);
+    check(
+      'library: dead absolute path self-heals to portable downloads',
+      res.path == downloads.replaceAll('\\', '/') &&
+          res.healed == true &&
+          res.relativeStored == 'ComicLibrary/downloads',
+      'path=${res.path} healed=${res.healed} rel=${res.relativeStored}',
+    );
+
+    // 6) 相对形式（上次自愈写入的值）按当前便携根重放。
+    res = PathRoots.resolveLibraryPath('ComicLibrary/downloads');
+    check(
+      'library: portable-relative stored value replays against current root',
+      res.path == downloads.replaceAll('\\', '/'),
+      'path=${res.path}',
+    );
+
+    // 7) 仍然存在的绝对路径（用户在设置里手动选的移动硬盘目录）原样保留。
+    final customDir = '${tempRoot.path}/external_drive/library';
+    await Directory(customDir).create(recursive: true);
+    res = PathRoots.resolveLibraryPath(customDir);
+    check(
+      'library: existing custom absolute path is untouched (no rewrite)',
+      res.path == customDir.replaceAll('\\', '/') &&
+          res.healed == false &&
+          res.relativeStored == null,
+      'path=${res.path} healed=${res.healed} rel=${res.relativeStored}',
+    );
+
+    // 8) 无便携根 + 失效路径 → 调用方回落默认（path=null）。
+    PathRoots.debugOverride(exeDir: plainRoot);
+    res = PathRoots.resolveLibraryPath(deadAbsolute);
+    check('library: no portable context -> null (platform default fallback)',
+        res.path == null && res.healed == true, 'path=${res.path}');
+    PathRoots.debugOverride(
+      exeDir: deployedExeDir,
+      downloadsRoot: downloads.replaceAll('\\', '/'),
+    );
+
+    // 9) btProjectRoot：失效旧 projects 根重定位；存在的根返回 null。
+    final deadProjects =
+        '${tempRoot.path}/old_home/ComicLibrary/projects';
+    var rebasedRoot = PathRoots.rebaseProjectsRoot(deadProjects);
+    check(
+      'btRoot: dead projects root rebases to portable projects',
+      rebasedRoot == projects.replaceAll('\\', '/'),
+      'rebased=$rebasedRoot',
+    );
+    rebasedRoot = PathRoots.rebaseProjectsRoot(projects);
+    check('btRoot: existing root is left alone', rebasedRoot == null,
+        'rebased=$rebasedRoot');
+    final emptyAuto = PathRoots.rebaseProjectsRoot(null, autoWhenEmpty: true);
+    check(
+      'btRoot: empty setting auto-enables portable projects root',
+      emptyAuto == projects.replaceAll('\\', '/'),
+      'auto=$emptyAuto',
+    );
+
+    // 10) 工程 json directory 的 downloads 锚重基（存在才采用）。
+    final comicDir = '$downloads/Some Comic';
+    await Directory('$comicDir/0').create(recursive: true);
+    await File('$comicDir/0/1.webp').writeAsBytes([1]);
+    final oldProjectDirectory =
+        'D:/Mangrove_Windows/ComicLibrary/downloads/Some Comic';
+    var rebasedDir = PathRoots.rebaseAnchoredUnderDownloads(
+      oldProjectDirectory,
+    );
+    check(
+      'project directory: dead absolute path rebases by downloads tail',
+      rebasedDir == comicDir.replaceAll('\\', '/'),
+      'rebased=$rebasedDir',
+    );
+    // 尾段在新根下不存在 → null，不得编造路径。
+    rebasedDir = PathRoots.rebaseAnchoredUnderDownloads(
+      'D:/Mangrove_Windows/ComicLibrary/downloads/Ghost Comic',
+    );
+    check(
+      'project directory: missing tail does NOT fabricate a path',
+      rebasedDir == null,
+      'rebased=$rebasedDir',
+    );
+    // 仍然存在的路径 → null（调用方原样使用）。
+    rebasedDir = PathRoots.rebaseAnchoredUnderDownloads(comicDir);
+    check('project directory: existing path needs no rebase',
+        rebasedDir == null, 'rebased=$rebasedDir');
+
+    // 11) 便携源目录发现 & 相对路径越界保护。
+    check(
+      'comic_source: portable directory is discovered',
+      PathRoots.portableComicSourceDir() ==
+          sourceDir.replaceAll('\\', '/'),
+      'dir=${PathRoots.portableComicSourceDir()}',
+    );
+    final outside = '${tempRoot.path}/elsewhere/file';
+    check(
+      'relativeToPortable: path outside the portable root maps to null',
+      PathRoots.relativeToPortable(outside) == null,
+      'rel=${PathRoots.relativeToPortable(outside)}',
+    );
+    check(
+      'relativeToPortable: path inside maps to relative form',
+      PathRoots.relativeToPortable(projects) == 'ComicLibrary/projects',
+      'rel=${PathRoots.relativeToPortable(projects)}',
+    );
+
+    passed = checks.every((c) => c['passed'] == true);
+    await finish(
+      passed,
+      'Portable paths check ${passed ? 'PASS' : 'FAIL'} '
+          '(${checks.where((c) => c['passed'] == true).length}/${checks.length})',
+    );
+  } catch (e, s) {
+    Log.error('PortablePathsCheck', 'portable-paths-check failed: $e\n$s');
+    check('exception', false, e.toString());
+    await finish(false, 'Portable paths check threw: $e');
+  } finally {
+    PathRoots.debugOverride();
+    if (tempRoot != null) {
+      try {
+        await tempRoot.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+  exit(passed ? 0 : 1);
+}
+
 /// `mangrove.exe --headless migrate-sources <project.json> [--json out] [--verify-only]`
 ///
 /// 把一个**已经存在**的工程从"引用 `downloads/` 原图"迁到"自带
@@ -2818,6 +3058,12 @@ Future<void> runHeadlessMode(List<String> args) async {
   // 「从下载创建工程」同样只是文件层的事（P6 §4.10.2 表 #3），也不需要启动。
   if (command == 'bootstrap-check') {
     await runBootstrapCheck(args, commandIndex);
+    return;
+  }
+
+  // 搬家自愈（便携根/库根/工程根/directory 重基）同样是纯文件层，不启动 App。
+  if (command == 'portable-paths-check') {
+    await runPortablePathsCheck(args, commandIndex);
     return;
   }
 
