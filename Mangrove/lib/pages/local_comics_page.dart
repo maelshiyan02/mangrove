@@ -767,7 +767,7 @@ class _LocalComicsPageState extends State<LocalComicsPage>
                 if (missing > 0) ...[
                   MenuEntry(
                     icon: Icons.auto_fix_high,
-                    text: "Repair missing (@a)".tlParams({"a": missing}),
+                    text: "Missing Page Repair (@a)".tlParams({"a": missing}),
                     // 2026-10-16：与漫画详细页同款升级 —— 打开二级确认
                     // 弹窗按章节选择性修复（每章一个独立任务），不再一键
                     // 全本并成一个浓缩任务。

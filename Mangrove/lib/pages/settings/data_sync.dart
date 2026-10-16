@@ -318,6 +318,24 @@ class _DataSyncSettingsState extends State<DataSyncSettings> {
             ),
           ],
         ).toSliver(),
+        // 「下载管理」（2026-10-16 从「数据与同步」拆出第三类）：目前只放
+        // 自动缺页修复开关，图标与主页下载管理分区统一。
+        _SettingsExpansionTile(
+          expansionKey: const PageStorageKey('dataSyncDownloadManagerGroup'),
+          initiallyExpanded: true,
+          icon: Icons.download_for_offline,
+          title: "Download Management".tl,
+          children: [
+            ListTile(
+              title: Text("Auto Repair Missing Pages".tl),
+              subtitle: Text(
+                "Automatically create per-chapter repair tasks when a download finishes with missing pages."
+                    .tl,
+              ),
+              trailing: const RepairModeDropdown(),
+            ),
+          ],
+        ).toSliver(),
         _SettingsExpansionTile(
           expansionKey: const PageStorageKey('dataSyncWebdavGroup'),
           initiallyExpanded: true,

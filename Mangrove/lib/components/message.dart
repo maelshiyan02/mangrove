@@ -362,6 +362,7 @@ class ContentDialog extends StatelessWidget {
     required this.content,
     this.dismissible = true,
     this.actions = const [],
+    this.titleTrailing, // 标题行后缀（如缺页修复弹窗的自动/手动模式切换）
   });
 
   final String? title;
@@ -371,6 +372,8 @@ class ContentDialog extends StatelessWidget {
   final List<Widget> actions;
 
   final bool dismissible;
+
+  final Widget? titleTrailing;
 
   @override
   Widget build(BuildContext context) {
@@ -385,7 +388,18 @@ class ContentDialog extends StatelessWidget {
               icon: const Icon(Icons.close),
               onPressed: dismissible ? context.pop : null,
             ),
-            title: Text(title!),
+            title: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(title!, overflow: TextOverflow.ellipsis),
+                ),
+                if (titleTrailing != null) ...[
+                  const SizedBox(width: 8),
+                  titleTrailing!,
+                ],
+              ],
+            ),
             backgroundColor: Colors.transparent,
           )
               : const SizedBox.shrink(),

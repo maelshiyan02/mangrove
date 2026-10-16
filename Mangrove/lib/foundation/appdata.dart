@@ -446,6 +446,10 @@ class Settings with ChangeNotifier {
     'language': 'system', // system, zh-CN, zh-TW, en-US
     'cacheSize': 2048, // in MB
     'downloadThreads': 5,
+    // 自动缺页修复（默认关，用户 2026-10-16）：下载任务完成后若该漫画
+    // 被问题队列检出缺页，自动按章生成修复任务入队，无需手动逐章选。
+    // 系统设置「下载管理」与缺页修复弹窗标题右侧均可切换 自动/手动。
+    'autoRepairMissingPages': false,
     // 章节任务并行数（每章一个任务，见 actions.dart）。默认 1——按用户定案：
     // 默认同时只下载 1 章（从上到下、已完成接未完成），安全且不放大 CDN 压力；
     // 仅在手动把设置滑块调到 2/3 时才并行（最多 3）。UI 滑块 min1/max3。

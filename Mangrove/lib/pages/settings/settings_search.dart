@@ -165,6 +165,16 @@ final _settingsSearchIndex = <_SettingsSearchEntry>[
   _SettingsSearchEntry("Click favorite", 2),
 
   // --- 3: Data & Sync ---
+  _SettingsSearchEntry(
+    "Download Management",
+    3,
+    keywords: ["download", "manager", "queue"],
+  ),
+  _SettingsSearchEntry(
+    "Auto Repair Missing Pages",
+    3,
+    keywords: ["repair", "missing", "auto"],
+  ),
   _SettingsSearchEntry("Storage Path for local comics", 3, keywords: ["path"]),
   _SettingsSearchEntry("Set New Storage Path", 3, keywords: ["path"]),
   _SettingsSearchEntry("Cache Size", 3, keywords: ["cache"]),

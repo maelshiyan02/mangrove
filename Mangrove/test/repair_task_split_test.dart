@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mangrove/foundation/appdata.dart';
+import 'package:mangrove/foundation/download_manager_store.dart';
 import 'package:mangrove/foundation/missing_pages.dart';
 import 'package:mangrove/network/repair_download.dart';
 
@@ -86,6 +88,17 @@ void main() {
     });
   });
 
+  group('auto repair mode setting', () {
+    test('defaults to off (manual) so behaviour is unchanged on upgrade', () {
+      // 2026-10-16: auto missing-page repair ships disabled. Users opt in
+      // via Settings > Download Management or the repair dialog dropdown.
+      // Reading the default map only — no disk IO (saveData writes to
+      // App.dataPath, unavailable in the test sandbox).
+      expect(autoRepairMissingPages, isFalse);
+      expect(appdata.settings['autoRepairMissingPages'], isFalse);
+    });
+  });
+
   group('download manager tab labels are localised', () {
     // The four queue tabs read English keys via .tl; zh_CN/zh_TW must carry
     // the Chinese labels or the UI shows raw English (user screenshot 1).
@@ -113,6 +126,28 @@ void main() {
       // must display 无缺页 inside the dialog.
       expect(tableFor('zh_CN')['No missing pages to repair'], '无缺页');
       expect(tableFor('zh_TW')['No missing pages to repair'], '無缺頁');
+    });
+
+    test('auto/manual mode switch labels are localised', () {
+      // The repair dialog title trailing + the settings "Download
+      // Management" group share this auto/manual dropdown (2026-10-16).
+      expect(tableFor('zh_CN')['Auto'], '自动');
+      expect(tableFor('zh_CN')['Manual'], '手动');
+      expect(tableFor('zh_TW')['Auto'], '自動');
+      expect(tableFor('zh_TW')['Manual'], '手動');
+    });
+
+    test('repair buttons share one name across every entry point', () {
+      // Detail page / local comics menu / manager header / home section all
+      // read the same key now (only the scope differs).
+      for (final lang in ['zh_CN', 'zh_TW']) {
+        final t = tableFor(lang);
+        expect(t['Missing Page Repair'], isNotNull);
+        expect(t['Missing Page Repair (@a)'], isNotNull);
+        expect(t['Download Management'], isNotNull);
+        expect(t['Auto Repair Missing Pages'], isNotNull);
+        expect(t['Auto-created @a repair task(s)'], isNotNull);
+      }
     });
   });
 }

@@ -220,7 +220,7 @@ class _DownloadManagerPageState extends State<DownloadManagerPage>
             onPressed: () => showMissingStatsDialog(context),
           ),
           IconButton(
-            tooltip: "Repair Missing Pages".tl,
+            tooltip: "Missing Page Repair".tl,
             icon: const Icon(Icons.auto_fix_high),
             onPressed: () => showMissingRepairDialog(context),
           ),

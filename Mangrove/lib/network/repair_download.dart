@@ -522,7 +522,22 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
       return 0;
     }
     final tasks = <RepairDownloadTask>[];
+    // 去重：同一本同一章已有修复任务在队时跳过——任务 id 是按章唯一的，
+    // 重复入队会让两个同 id 任务在队列/弹窗里互相覆盖（本轮修复的正是
+    // 这类 id 冲突；自动模式下下载完成后恰好容易撞上手动建的任务）。
+    final queued = LocalManager().downloadingTasks
+        .whereType<RepairDownloadTask>()
+        .map((t) => t.id)
+        .toSet();
     for (final group in groupRepairEntriesByChapter(entries).entries) {
+      final taskId = repairTaskId(comic.id, group.key);
+      if (queued.contains(taskId)) {
+        Log.info(
+          "Repair",
+          "Skip '$taskId': a repair task for this chapter is already queued",
+        );
+        continue;
+      }
       tasks.add(
         RepairDownloadTask(
           source: source,
@@ -536,6 +551,7 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
         )..path = comic.baseDir,
       );
     }
+    if (tasks.isEmpty) return 0;
     LocalManager().addTasks(tasks);
     if (!silent) {
       App.rootContext.showMessage(

@@ -30,7 +30,10 @@ const List<HomeSectionMeta> kHomeSections = [
   HomeSectionMeta(
     'downloadManager',
     'Download Manager',
-    Icons.download_outlined,
+    // 下载管理专用图标（2026-10-16）：原 Icons.download_outlined 与众多
+    // 下载按钮同款、缺乏辨识度；改为"下载到设备"意象，系统设置
+    // 「下载管理」分组与本主页分区统一使用。
+    Icons.download_for_offline,
   ),
   HomeSectionMeta('followUpdates', 'Follow Updates', Icons.dynamic_feed),
   HomeSectionMeta('comicSource', 'Comic Source', Icons.source_outlined),

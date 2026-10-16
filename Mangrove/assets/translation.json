@@ -1809,7 +1809,15 @@
     "Standby": "待命",
     "No missing pages to repair": "无缺页",
     "Created @a repair task(s)": "已创建 @a 个修复任务",
-    "Repairing...": "修复中..."
+    "Repairing...": "修复中...",
+    "Download Management": "下载管理",
+    "Auto Repair Missing Pages": "自动缺页修复",
+    "Automatically create per-chapter repair tasks when a download finishes with missing pages.": "下载任务完成后若检测到缺页，自动逐章创建修复任务并入队。",
+    "Auto": "自动",
+    "Manual": "手动",
+    "Missing Page Repair": "缺页修复",
+    "Missing Page Repair (@a)": "缺页修复（@a）",
+    "Auto-created @a repair task(s)": "已自动创建 @a 个缺页修复任务"
   },
   "zh_TW": {
     "Chapter capsule": "章節膠囊",
@@ -3621,6 +3629,14 @@
     "Standby": "待命",
     "No missing pages to repair": "無缺頁",
     "Created @a repair task(s)": "已建立 @a 個修復任務",
-    "Repairing...": "修復中..."
+    "Repairing...": "修復中...",
+    "Download Management": "下載管理",
+    "Auto Repair Missing Pages": "自動缺頁修復",
+    "Automatically create per-chapter repair tasks when a download finishes with missing pages.": "下載任務完成後若偵測到缺頁，自動逐章建立修復任務並排入佇列。",
+    "Auto": "自動",
+    "Manual": "手動",
+    "Missing Page Repair": "缺頁修復",
+    "Missing Page Repair (@a)": "缺頁修復（@a）",
+    "Auto-created @a repair task(s)": "已自動建立 @a 個缺頁修復任務"
   }
 }

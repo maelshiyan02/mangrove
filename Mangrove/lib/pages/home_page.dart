@@ -855,7 +855,7 @@ class _DownloadManagerSectionState extends State<_DownloadManagerSection> {
                 height: 56,
                 child: Row(
                   children: [
-                    _homeSectionIcon(context, Icons.download_outlined),
+                    _homeSectionIcon(context, Icons.download_for_offline),
                     const SizedBox(width: 12),
                     _HomeSectionTitle(
                       title: 'Download Manager'.tl,
@@ -906,7 +906,7 @@ class _DownloadManagerSectionState extends State<_DownloadManagerSection> {
                           ? null
                           : () => showMissingRepairDialog(context),
                       icon: const Icon(Icons.auto_fix_high, size: 18),
-                      label: Text('Repair Missing Pages'.tl),
+                      label: Text('Missing Page Repair'.tl),
                     ),
                   ),
                 ],

@@ -1012,7 +1012,7 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
           IconButton(
             onPressed: _showRepairMissingDialog,
             icon: const Icon(Icons.auto_fix_high),
-            tooltip: 'Repair missing'.tl,
+            tooltip: 'Missing Page Repair'.tl,
           ),
         IconButton(
           onPressed: share,

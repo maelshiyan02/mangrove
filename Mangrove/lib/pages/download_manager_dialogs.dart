@@ -20,6 +20,57 @@ import 'package:mangrove/foundation/download_manager_store.dart';
 import 'package:mangrove/network/repair_download.dart';
 import 'package:mangrove/utils/translations.dart';
 
+/// 自动 / 手动缺页修复模式切换下拉（用户 2026-10-16）。
+///
+/// 同一个开关（`autoRepairMissingPages`）的两处入口之一：缺页修复二级
+/// 弹窗标题右侧（本组件）+ 系统设置「下载管理」分组。样式参考系统设置
+/// 里已有的下拉（实时/省流/仅手动）：细边框圆角小盒 + 当前值 + 箭头。
+class RepairModeDropdown extends StatefulWidget {
+  const RepairModeDropdown({super.key, this.dense = false});
+
+  /// 紧凑模式：弹窗标题行用，字号与内边距更小。
+  final bool dense;
+
+  @override
+  State<RepairModeDropdown> createState() => _RepairModeDropdownState();
+}
+
+class _RepairModeDropdownState extends State<RepairModeDropdown> {
+  @override
+  Widget build(BuildContext context) {
+    final auto = autoRepairMissingPages;
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: context.colorScheme.outline),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      padding: EdgeInsets.symmetric(horizontal: widget.dense ? 6 : 10),
+      child: DropdownButton<bool>(
+        value: auto,
+        underline: const SizedBox.shrink(),
+        isDense: true,
+        borderRadius: BorderRadius.circular(8),
+        style: widget.dense ? ts.s12 : ts.s14,
+        items: [
+          DropdownMenuItem(
+            value: true,
+            child: Text("Auto".tl, style: widget.dense ? ts.s12 : ts.s14),
+          ),
+          DropdownMenuItem(
+            value: false,
+            child: Text("Manual".tl, style: widget.dense ? ts.s12 : ts.s14),
+          ),
+        ],
+        onChanged: (v) {
+          if (v == null) return;
+          setAutoRepairMissingPages(v);
+          setState(() {});
+        },
+      ),
+    );
+  }
+}
+
 /// 打开「统计缺页」弹窗，进入即自动开始一轮深扫。
 void showMissingStatsDialog(BuildContext context) {
   showDialog(
@@ -349,6 +400,8 @@ class _MissingRepairDialogState extends State<_MissingRepairDialog> {
     return ContentDialog(
       dismissible: !_creating,
       title: "Repair Missing Pages".tl,
+      // 标题右侧：自动/手动模式切换（与系统设置「下载管理」同一开关）。
+      titleTrailing: const RepairModeDropdown(dense: true),
       content: SizedBox(
         width: 640,
         height: 480,

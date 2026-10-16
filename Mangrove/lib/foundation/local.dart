@@ -21,6 +21,7 @@ import 'package:mangrove/foundation/missing_pages.dart';
 import 'package:mangrove/foundation/path_roots.dart';
 import 'package:mangrove/foundation/sqlite_connection.dart';
 import 'package:mangrove/network/download.dart';
+import 'package:mangrove/network/repair_download.dart';
 import 'package:mangrove/pages/reader/reader.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/translations.dart';
@@ -1068,7 +1069,14 @@ class LocalManager with ChangeNotifier {
     // 表现为"下完了也没有红色标记、也没被登记"。
     final stored = find(task.id, task.comicType);
     if (stored != null) {
-      unawaited(reconcileDiskState(stored));
+      if (autoRepairMissingPages) {
+        // 自动缺页修复（默认关，用户 2026-10-16）：让对账先把"半截章节 +
+        // 磁盘空洞"补进缺页表，再按章生成修复任务入队——与「缺页修复」
+        // 按钮同一套分组逻辑，一章一任务。设置关闭时走普通对账路径。
+        unawaited(_autoRepairAfterDownload(stored));
+      } else {
+        unawaited(reconcileDiskState(stored));
+      }
     }
     // 「过往任务」：整本下载完成 → 记入持久化历史（下载管理分区展示）。
     DownloadHistoryStore.instance.record(
@@ -1101,6 +1109,34 @@ class LocalManager with ChangeNotifier {
     saveCurrentDownloadingTasks();
     // Advance so cancelling the active task doesn't stall the rest of the queue.
     _advanceQueue();
+  }
+
+  /// 自动缺页修复的下载完成钩子（设置开启时才走）：
+  /// 先对账让缺页表完整（含磁盘探测出的空洞），仍有缺页则按章创建
+  /// 修复任务入队；每个成功章节一章一个任务，队列正常调度。
+  ///
+  /// 失败只记日志不影响下载主流程——这是附加体验，不是关键路径。
+  Future<void> _autoRepairAfterDownload(LocalComic comic) async {
+    try {
+      await reconcileDiskState(comic);
+      final table = MissingPages.peek(comic.baseDir);
+      if (table == null || table.isEmpty) return;
+      final created = RepairDownloadTask.enqueue(
+        comic,
+        table.entries.toList(),
+        silent: true,
+      );
+      if (created == 0) return;
+      Log.info(
+        "AutoRepair",
+        "Auto-created $created repair task(s) for '${comic.title}'",
+      );
+      App.rootContext.showMessage(
+        message: "Auto-created @a repair task(s)".tlParams({"a": created}),
+      );
+    } catch (e, s) {
+      Log.error("AutoRepair", "Auto repair failed for '${comic.title}': $e", s);
+    }
   }
 
   void moveToFirst(DownloadTask task) {

@@ -20,6 +20,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show ChangeNotifier, kDebugMode;
 
 import 'app.dart';
+import 'appdata.dart';
 import 'comic_card_kind.dart';
 import 'comic_type.dart';
 import 'local.dart';
@@ -394,4 +395,18 @@ class DownloadProblemScanner extends ChangeNotifier {
       candidateCount = 0;
     }
   }
+}
+
+/// 自动缺页修复开关（用户 2026-10-16；默认关）。
+///
+/// 开启后，下载任务完成时若该漫画被问题队列检出缺页，自动按章生成
+/// 修复任务入队（`RepairDownloadTask.enqueue` 同一套分组逻辑），无需
+/// 用户再手动逐章勾选。系统设置「下载管理」与缺页修复弹窗标题右侧
+/// 的模式下拉都读写这一个键。
+bool get autoRepairMissingPages =>
+    appdata.settings['autoRepairMissingPages'] == true;
+
+void setAutoRepairMissingPages(bool value) {
+  appdata.settings['autoRepairMissingPages'] = value;
+  appdata.saveData();
 }
