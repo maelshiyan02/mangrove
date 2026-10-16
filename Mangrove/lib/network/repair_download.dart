@@ -29,6 +29,16 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
 
   final String comicId;
 
+  /// 非空 = 本任务只修复这一章（按章节拆分后的单章任务）。
+  ///
+  /// 2026-10-16 用户实测反馈：多章合并成一个"浓缩任务"会同时踩两个坑 ——
+  /// ① 任务 id 整本共用（见 [id]），队列与「下载中」弹窗按 id 索引时互相
+  /// 覆盖，渲染出一片空白占位；② 单任务 target 跨章时页级统计/回写语义
+  /// 混乱。现在每个缺页章节一个独立任务，本章范围即任务范围。
+  ///
+  /// null = 旧版整本任务（仅持久化兼容，新代码一律传章节 id）。
+  final String? chapterId;
+
   final String? comicTitle;
 
   final String? comicCover;
@@ -47,6 +57,7 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
     required this.source,
     required this.comicId,
     required List<MissingPageEntry> targets,
+    this.chapterId,
     this.comicTitle,
     this.comicCover,
   }) : targets = List<MissingPageEntry>.of(targets) {
@@ -69,7 +80,7 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
   final Map<String, _RepairImageWrapper> _tasks = {};
 
   @override
-  String get id => "repair:$comicId";
+  String get id => repairTaskId(comicId, chapterId);
 
   @override
   ComicType get comicType => ComicType(source.key.hashCode);
@@ -78,7 +89,18 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
   String? get cover => comicCover;
 
   @override
-  String get title => comicTitle ?? "Repairing...".tl;
+  String get title {
+    final base = comicTitle ?? "Repairing...".tl;
+    if (chapterId == null) return base;
+    // 单章任务：标题带上章节，队列/过往列表里能直接看出在修哪一章。
+    // 章节标签优先用条目登记的章节标题，回落目录名（chapterId）。
+    final label = targets.isEmpty
+        ? chapterId!
+        : (targets.first.chapterTitle.isNotEmpty
+              ? targets.first.chapterTitle
+              : chapterId!);
+    return "$base · $label";
+  }
 
   @override
   String get message => _message;
@@ -417,6 +439,7 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
     "type": "RepairDownloadTask",
     "source": source.key,
     "comicId": comicId,
+    if (chapterId != null) "chapterId": chapterId,
     "comicTitle": comicTitle,
     "comicCover": comicCover,
     "path": path,
@@ -437,9 +460,14 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
       }
     }
     if (targets.isEmpty) return null;
+    final chapterId = json["chapterId"];
     return RepairDownloadTask(
         source: source,
         comicId: json["comicId"],
+        // 旧持久化数据没有 chapterId → null → 走旧版整本 id，兼容恢复。
+        chapterId: chapterId is String && chapterId.isNotEmpty
+            ? chapterId
+            : null,
         targets: targets,
         comicTitle: json["comicTitle"],
         comicCover: json["comicCover"],
@@ -470,31 +498,54 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
 
   // ---- static entry points ----
 
-  /// Queue a repair run for the given [entries] of [comic]. Shows a toast and
-  /// lets the download queue start it within the parallelism limit.
-  static void enqueue(LocalComic comic, List<MissingPageEntry> entries) {
-    if (entries.isEmpty) return;
+  /// Queue repair run(s) for the given [entries] of [comic].
+  ///
+  /// 每个缺页章节建成**独立任务**（见 [groupRepairEntriesByChapter]）：
+  /// 2026-10-16 用户实测，多章合并成一个"浓缩任务"会让任务 id 整本共用，
+  /// 队列与「下载中」弹窗按 id 索引时互相覆盖，显示成一片空白占位；
+  /// 且页级统计跨章混杂。拆开后一章一任务，队列、弹窗、过往记录都是
+  /// 一章一条，暂停/继续/删除都能精确落到单章。
+  ///
+  /// [silent] = true 时不弹 toast（批量选择场景由调用方统一汇报结果）。
+  ///
+  /// 返回创建的任务数。
+  static int enqueue(
+    LocalComic comic,
+    List<MissingPageEntry> entries, {
+    bool silent = false,
+  }) {
+    if (entries.isEmpty) return 0;
     registerRepairDownloadTaskType();
     final source = comic.comicType.comicSource;
     if (source == null) {
       Log.error("Repair", "No source for ${comic.id}; cannot repair");
-      return;
+      return 0;
     }
-    final task = RepairDownloadTask(
-      source: source,
-      comicId: comic.id,
-      targets: entries,
-      comicTitle: comic.title,
-      comicCover: comic.cover.isEmpty
-          ? null
-          : "file://${FilePath.join(comic.baseDir, comic.cover)}",
-    );
-    task.path = comic.baseDir;
-    LocalManager().addTask(task);
-    App.rootContext.showMessage(message: "Repair started".tl);
+    final tasks = <RepairDownloadTask>[];
+    for (final group in groupRepairEntriesByChapter(entries).entries) {
+      tasks.add(
+        RepairDownloadTask(
+          source: source,
+          comicId: comic.id,
+          chapterId: group.key,
+          targets: group.value,
+          comicTitle: comic.title,
+          comicCover: comic.cover.isEmpty
+              ? null
+              : "file://${FilePath.join(comic.baseDir, comic.cover)}",
+        )..path = comic.baseDir,
+      );
+    }
+    LocalManager().addTasks(tasks);
+    if (!silent) {
+      App.rootContext.showMessage(
+        message: "Created @a repair task(s)".tlParams({"a": tasks.length}),
+      );
+    }
+    return tasks.length;
   }
 
-  /// Repair every missing page of a comic.
+  /// Repair every missing page of a comic (one task per chapter).
   static void repairComic(LocalComic comic) {
     final table = MissingPages.peek(comic.baseDir);
     if (table == null) return;
@@ -515,6 +566,29 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
   static void repairEntry(LocalComic comic, MissingPageEntry entry) {
     enqueue(comic, [entry]);
   }
+}
+
+/// 把缺页条目按章节分组（保持首次出现顺序，不排序）。
+///
+/// 每个缺页章节必须建成独立的 [RepairDownloadTask]（用户 2026-10-16 反馈：
+/// 多章合并成一个"浓缩任务"会让任务 id 冲突——旧 id 整本一个——队列与
+/// "下载中"弹窗按 id 索引时互相覆盖，显示成一片空白占位）。
+Map<String, List<MissingPageEntry>> groupRepairEntriesByChapter(
+  List<MissingPageEntry> entries,
+) {
+  final byChapter = <String, List<MissingPageEntry>>{};
+  for (final e in entries) {
+    byChapter.putIfAbsent(e.chapterId, () => <MissingPageEntry>[]).add(e);
+  }
+  return byChapter;
+}
+
+/// 修复任务 id：旧版整本一个（`repair:<comicId>`），按章节拆分后为
+/// `repair:<comicId>:<chapterId>`（一章一 id，队列/弹窗/持久化恢复都靠它
+/// 区分任务）。[chapterId] 为空（旧数据）时回退旧格式。
+String repairTaskId(String comicId, String? chapterId) {
+  if (chapterId == null || chapterId.isEmpty) return "repair:$comicId";
+  return "repair:$comicId:$chapterId";
 }
 
 /// Per-page downloader for a repair run. Mirrors [_ImageDownloadWrapper] from

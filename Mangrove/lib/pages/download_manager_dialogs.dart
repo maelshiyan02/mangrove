@@ -17,9 +17,7 @@ import 'package:flutter/material.dart';
 import 'package:mangrove/components/components.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/download_manager_store.dart';
-import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/network/repair_download.dart';
-import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/translations.dart';
 
 /// 打开「统计缺页」弹窗，进入即自动开始一轮深扫。
@@ -31,7 +29,11 @@ void showMissingStatsDialog(BuildContext context) {
 }
 
 /// 打开「修复缺页」弹窗。[single] 传入时只列出这一本（问题队列卡片的
-/// 每本入口）；不传则列出扫描器当前的全部问题漫画。
+/// 每本入口、漫画详细页/本地漫画页的「下载修复」按钮）；不传则列出扫描器
+/// 当前的全部问题漫画（全库范围）。
+///
+/// 没有缺页章节时也打开弹窗，内容区显示「无缺页」提示（用户 2026-10-16：
+/// 打开弹窗应该看到提示语，而不是一个 toast 就把人打发了）。
 void showMissingRepairDialog(
   BuildContext context, {
   ComicMissingReport? single,
@@ -39,10 +41,6 @@ void showMissingRepairDialog(
   final reports = single != null
       ? [single]
       : DownloadProblemScanner.instance.reports;
-  if (reports.isEmpty) {
-    context.showMessage(message: "No problems detected".tl);
-    return;
-  }
   showDialog(
     context: context,
     builder: (context) => _MissingRepairDialog(reports: reports),
@@ -284,22 +282,14 @@ class _MissingRepairDialogState extends State<_MissingRepairDialog> {
           .where((e) => sel.contains(e.chapterId))
           .toList();
       if (entries.isEmpty) continue;
-      final source = report.comic.comicType.comicSource;
-      if (source == null) continue;
-      // 与 RepairDownloadTask.enqueue 相同的任务构造，但不走它内置的逐单
-      // toast —— 批量选择时一本一个 toast 会刷屏；结果统一显示在本弹窗里。
-      registerRepairDownloadTaskType();
-      final task = RepairDownloadTask(
-        source: source,
-        comicId: report.comic.id,
-        targets: entries,
-        comicTitle: report.comic.title,
-        comicCover: report.comic.cover.isEmpty
-            ? null
-            : "file://${FilePath.join(report.comic.baseDir, report.comic.cover)}",
-      )..path = report.comic.baseDir;
-      LocalManager().addTask(task);
-      taskCount++;
+      // 每个缺页章节一个独立任务（与 RepairDownloadTask.enqueue 同一套
+      // 分组逻辑）；silent：批量选择时一本一个 toast 会刷屏，结果统一
+      // 显示在本弹窗里。
+      taskCount += RepairDownloadTask.enqueue(
+        report.comic,
+        entries,
+        silent: true,
+      );
       chapterCount += sel.length;
       pageCount += entries.length;
     }
@@ -345,6 +335,14 @@ class _MissingRepairDialogState extends State<_MissingRepairDialog> {
                   ),
                 ],
               )
+            : widget.reports.isEmpty
+            ? Center(
+                // 没有缺页章节：空态提示（用户 2026-10-16）。
+                child: Text(
+                  "No missing pages to repair".tl,
+                  style: ts.s14.copyWith(color: context.colorScheme.outline),
+                ),
+              )
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -377,7 +375,7 @@ class _MissingRepairDialogState extends State<_MissingRepairDialog> {
           },
           child: Text(_result != null ? "Close".tl : "Cancel".tl),
         ),
-        if (_result == null)
+        if (_result == null && widget.reports.isNotEmpty)
           Button.filled(
             isLoading: _creating,
             onPressed: () {
@@ -411,49 +409,54 @@ class _RepairComicGroup extends StatelessWidget {
     final chapters = report.table.chapterIds.toList()..sort();
     final allSelected =
         selected.length == chapters.length && chapters.isNotEmpty;
-    return Column(
+    // 章节标签：优先条目登记的章节标题，回落目录名（chapterId 本身）。
+    String labelOf(String cid) {
+      for (final e in report.table.entries) {
+        if (e.chapterId == cid && e.chapterTitle.isNotEmpty) {
+          return e.chapterTitle;
+        }
+      }
+      return cid.isEmpty ? "Other".tl : cid;
+    }
+
+    return ExpansionTile(
+      // 缺页章节动辄几十上百：默认收起，点标题行整本展开/收起
+      // （自带旋转箭头 + 高度动效）。标题行的勾选框负责全选/全不选，
+      // 与展开收起互不干扰（Checkbox 自己消费点击）。
+      initiallyExpanded: false,
+      tilePadding: const EdgeInsets.symmetric(horizontal: 8),
+      childrenPadding: const EdgeInsets.only(left: 16, bottom: 8),
+      title: Text(
+        report.comic.title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: ts.s14.bold,
+      ),
+      subtitle: Text(
+        "@a chapters · @b pages missing".tlParams({
+          "a": report.chapterCount,
+          "b": report.pageCount,
+        }),
+        style: ts.s12.copyWith(color: context.colorScheme.error),
+      ),
+      trailing: Checkbox(
+        value: allSelected,
+        onChanged: (_) => onToggleComic(),
+      ),
       children: [
-        CheckboxListTile(
-          value: allSelected,
-          tristate: false,
-          title: Text(
-            report.comic.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: ts.s14.bold,
+        for (final cid in chapters)
+          CheckboxListTile(
+            dense: true,
+            value: selected.contains(cid),
+            title: Text(labelOf(cid), style: ts.s12),
+            subtitle: Text(
+              "@a pages missing".tlParams({
+                "a": report.table.countOfChapter(cid),
+              }),
+              style: ts.s12,
+            ),
+            onChanged: (_) => onToggleChapter(cid),
           ),
-          subtitle: Text(
-            "@a chapters · @b pages missing".tlParams({
-              "a": report.chapterCount,
-              "b": report.pageCount,
-            }),
-            style: ts.s12.copyWith(color: context.colorScheme.error),
-          ),
-          onChanged: (_) => onToggleComic(),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(left: 24),
-          child: Column(
-            children: [
-              for (final cid in chapters)
-                CheckboxListTile(
-                  dense: true,
-                  value: selected.contains(cid),
-                  title: Text(
-                    cid.isEmpty ? "Other".tl : cid,
-                    style: ts.s12,
-                  ),
-                  subtitle: Text(
-                    "@a pages missing".tlParams({
-                      "a": report.table.countOfChapter(cid),
-                    }),
-                    style: ts.s12,
-                  ),
-                  onChanged: (_) => onToggleChapter(cid),
-                ),
-            ],
-          ),
-        ),
       ],
     );
   }

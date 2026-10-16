@@ -20,6 +20,7 @@ import 'package:mangrove/foundation/comic_details_cache.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/comic_state_repository.dart';
 import 'package:mangrove/foundation/comic_type.dart';
+import 'package:mangrove/foundation/download_manager_store.dart';
 import 'package:mangrove/foundation/domain_database.dart';
 import 'package:mangrove/foundation/favorites.dart';
 import 'package:mangrove/foundation/favorites_meta.dart';
@@ -38,7 +39,7 @@ import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/missing_pages.dart';
 import 'package:mangrove/foundation/res.dart';
 import 'package:mangrove/network/download.dart';
-import 'package:mangrove/network/repair_download.dart';
+import 'package:mangrove/pages/download_manager_dialogs.dart';
 import 'package:mangrove/pages/missing_pages_dialog.dart';
 import 'package:mangrove/network/cache.dart';
 import 'package:mangrove/pages/aggregated_search_page.dart';
@@ -889,6 +890,27 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     }
   }
 
+  /// 「下载修复」入口（2026-10-16 从一键全本修复升级为二级确认弹窗）：
+  /// 复用「下载管理」的缺页修复弹窗单漫画模式 —— 只列本漫画的缺页章节，
+  /// 勾选后**每章单独**建修复任务（老逻辑把多章并成一个浓缩任务，任务 id
+  /// 整本共用，队列与下载弹窗按 id 索引时互相覆盖、显示空白）。
+  ///
+  /// 范围区别：这里只针对**这一本**；「下载管理」里的缺页修复/统计针对
+  /// 全库 + 下载管理分区中出现的问题漫画。
+  void _showRepairMissingDialog() {
+    final comic = _localComic;
+    if (comic == null) return;
+    final table = MissingPages.peek(comic.baseDir);
+    if (table == null || table.isEmpty) {
+      App.rootContext.showMessage(message: "No missing pages".tl);
+      return;
+    }
+    showMissingRepairDialog(
+      context,
+      single: ComicMissingReport(comic: comic, table: table),
+    );
+  }
+
   ComicDetails _fallbackDetails(ComicState state) {
     return ComicDetails.fromJson({
       'title': state.title ?? widget.title ?? widget.id,
@@ -981,11 +1003,14 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
             icon: const Icon(Icons.download_outlined),
             tooltip: 'Download'.tl,
           ),
-        // 已下载且存在缺失页的漫画：直接从此入口整部补救（S4）。
+        // 已下载且存在缺失页的漫画：打开二级确认弹窗按章节选择性修复
+        // （2026-10-16 升级：老按钮是一键全本修复，多章缺页会被并成
+        // 一个浓缩任务导致队列/弹窗按 id 覆盖显示空白；现在与「下载
+        // 管理」的缺页修复同款弹窗，每章单独建任务，范围仅限本漫画）。
         if (_localComic != null &&
             MissingPages.missingCount(_localComic!.baseDir) > 0)
           IconButton(
-            onPressed: () => RepairDownloadTask.repairComic(_localComic!),
+            onPressed: _showRepairMissingDialog,
             icon: const Icon(Icons.auto_fix_high),
             tooltip: 'Repair missing'.tl,
           ),

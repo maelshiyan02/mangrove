@@ -5,14 +5,15 @@ import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/comic_card_kind.dart';
 import 'package:mangrove/foundation/comic_type.dart';
+import 'package:mangrove/foundation/download_manager_store.dart';
 import 'package:mangrove/foundation/export_tasks.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/missing_pages.dart';
 import 'package:mangrove/foundation/open_folder.dart';
-import 'package:mangrove/network/repair_download.dart';
 import 'package:mangrove/pages/comic_delete_dialog.dart';
 import 'package:mangrove/pages/comic_details_page/comic_page.dart';
+import 'package:mangrove/pages/download_manager_dialogs.dart';
 import 'package:mangrove/pages/missing_pages_dialog.dart';
 import 'package:mangrove/pages/translation_studio/studio_page.dart';
 import 'package:mangrove/pages/webdav_migration_dialog.dart';
@@ -767,7 +768,20 @@ class _LocalComicsPageState extends State<LocalComicsPage>
                   MenuEntry(
                     icon: Icons.auto_fix_high,
                     text: "Repair missing (@a)".tlParams({"a": missing}),
-                    onClick: () => RepairDownloadTask.repairComic(comic),
+                    // 2026-10-16：与漫画详细页同款升级 —— 打开二级确认
+                    // 弹窗按章节选择性修复（每章一个独立任务），不再一键
+                    // 全本并成一个浓缩任务。
+                    onClick: () {
+                      final table = MissingPages.peek(comic.baseDir);
+                      if (table == null || table.isEmpty) return;
+                      showMissingRepairDialog(
+                        context,
+                        single: ComicMissingReport(
+                          comic: comic,
+                          table: table,
+                        ),
+                      );
+                    },
                   ),
                   MenuEntry(
                     icon: Icons.list_alt,

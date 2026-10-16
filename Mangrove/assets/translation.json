@@ -1803,7 +1803,13 @@
     "@a downloaded": "已下载 @a 本",
     "Right Edge Toolbar": "右缘工具栏",
     "Optional vertical toolbar on the right edge": "阅读器右缘的可选竖工具栏",
-    "Comments coming soon": "评论功能即将推出"
+    "Comments coming soon": "评论功能即将推出",
+    "Past": "历史",
+    "Problems": "问题",
+    "Standby": "待命",
+    "No missing pages to repair": "无缺页",
+    "Created @a repair task(s)": "已创建 @a 个修复任务",
+    "Repairing...": "修复中..."
   },
   "zh_TW": {
     "Chapter capsule": "章節膠囊",
@@ -3609,6 +3615,12 @@
     "@a downloaded": "已下載 @a 本",
     "Right Edge Toolbar": "右緣工具列",
     "Optional vertical toolbar on the right edge": "閱讀器右緣的可選豎工具列",
-    "Comments coming soon": "評論功能即將推出"
+    "Comments coming soon": "評論功能即將推出",
+    "Past": "歷史",
+    "Problems": "問題",
+    "Standby": "待命",
+    "No missing pages to repair": "無缺頁",
+    "Created @a repair task(s)": "已建立 @a 個修復任務",
+    "Repairing...": "修復中..."
   }
 }
