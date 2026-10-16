@@ -58,7 +58,7 @@ class _ComicManagementSettingsState extends State<ComicManagementSettings> {
               },
             ),
           ],
-        ),
+        ).toSliver(),
       ],
     );
   }

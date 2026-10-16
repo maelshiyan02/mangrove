@@ -792,7 +792,6 @@ class _DownloadManagerSectionState extends State<_DownloadManagerSection> {
   List<DownloadTask> _current = const [];
   List<DownloadTask> _errors = const [];
   List<ComicMissingReport> _problems = const [];
-  int _historyCount = 0;
 
   void _update() {
     if (!LocalManager().isInitialized) return;
@@ -813,7 +812,6 @@ class _DownloadManagerSectionState extends State<_DownloadManagerSection> {
           .toList();
       _errors = errors;
       _problems = problems;
-      _historyCount = DownloadHistoryStore.instance.count;
     });
   }
 
@@ -841,6 +839,17 @@ class _DownloadManagerSectionState extends State<_DownloadManagerSection> {
   @override
   Widget build(BuildContext context) {
     final problemCount = _problemCount;
+    // 缺页统计/修复按钮配色（P-DL6.1）：不再灰色 disabled；无缺页绿色、
+    // 有缺页红色（与详情页修复按钮同一语义）。两个按钮始终可用。
+    final missingStyle = problemCount > 0
+        ? FilledButton.styleFrom(
+            backgroundColor: context.colorScheme.errorContainer,
+            foregroundColor: context.colorScheme.onErrorContainer,
+          )
+        : FilledButton.styleFrom(
+            backgroundColor: Colors.green,
+            foregroundColor: Colors.white,
+          );
     return SliverToBoxAdapter(
       child: _HomeSectionSurface(
         child: Column(
@@ -867,17 +876,6 @@ class _DownloadManagerSectionState extends State<_DownloadManagerSection> {
               ),
             ),
             for (final t in _current.take(2)) _DownloadManagerMiniRow(task: t),
-            if (_current.isEmpty && problemCount == 0)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '@a downloaded'.tlParams({'a': _historyCount}),
-                    style: ts.s12.copyWith(color: context.colorScheme.outline),
-                  ),
-                ),
-              ),
             Divider(
               height: 1,
               color: Theme.of(context).colorScheme.outlineVariant,
@@ -888,6 +886,7 @@ class _DownloadManagerSectionState extends State<_DownloadManagerSection> {
                 children: [
                   Expanded(
                     child: FilledButton.icon(
+                      style: missingStyle,
                       onPressed: () => showMissingStatsDialog(context),
                       icon: const Icon(Icons.fact_check_outlined, size: 18),
                       label: Text('Missing Pages Statistics'.tl),
@@ -896,15 +895,8 @@ class _DownloadManagerSectionState extends State<_DownloadManagerSection> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton.icon(
-                      style: problemCount > 0
-                          ? FilledButton.styleFrom(
-                              backgroundColor: context.colorScheme.errorContainer,
-                              foregroundColor: context.colorScheme.onErrorContainer,
-                            )
-                          : null,
-                      onPressed: problemCount == 0
-                          ? null
-                          : () => showMissingRepairDialog(context),
+                      style: missingStyle,
+                      onPressed: () => showMissingRepairDialog(context),
                       icon: const Icon(Icons.auto_fix_high, size: 18),
                       label: Text('Missing Page Repair'.tl),
                     ),

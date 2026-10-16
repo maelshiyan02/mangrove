@@ -1054,20 +1054,22 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
         // （2026-10-16 升级：老按钮是一键全本修复，多章缺页会被并成
         // 一个浓缩任务导致队列/弹窗按 id 覆盖显示空白；现在与「下载
         // 管理」的缺页修复同款弹窗，每章单独建任务，范围仅限本漫画）。
-        if (_localComic != null &&
-            MissingPages.missingCount(_localComic!.baseDir) > 0) ...[
-          IconButton(
-            onPressed: _showRepairMissingDialog,
-            icon: const Icon(Icons.auto_fix_high),
-            tooltip: 'Missing Page Repair'.tl,
-          ),
-          // 缺页修复 自动/手动模式下拉（P-DL6 2026-10-16 修正）：此前这里
-          // 常驻显示的是「漫画信息自动更新」下拉，用户指出它实际对应的是
-          // 缺页修复功能、且无缺页时应当随修复按钮一起隐藏。现在绑定
-          // `autoRepairMissingPages`（与修复二级弹窗/系统设置同一开关），
-          // 并跟随修复按钮的可见性条件。
-          const RepairModeDropdown(dense: true),
-        ],
+        // 缺页修复按钮（P-DL6.1 修正）：常驻显示（仅当本地有该漫画时），
+        // 颜色随缺页状态——无缺页绿色、有缺页红色；不再"无缺页就隐藏"。
+        // 其下的自动/手动模式下拉（RepairModeDropdown）绑定
+        // `autoRepairMissingPages`（与修复二级弹窗/系统设置同一开关），同样常驻。
+        if (_localComic != null)
+          ...<Widget>[
+            IconButton(
+              onPressed: _showRepairMissingDialog,
+              color: MissingPages.missingCount(_localComic!.baseDir) > 0
+                  ? Colors.red
+                  : Colors.green,
+              icon: const Icon(Icons.auto_fix_high),
+              tooltip: 'Missing Page Repair'.tl,
+            ),
+            const RepairModeDropdown(dense: true),
+          ],
         IconButton(
           onPressed: share,
           icon: const Icon(Icons.share),
