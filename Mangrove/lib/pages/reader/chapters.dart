@@ -16,11 +16,32 @@ class _ChaptersViewState extends State<_ChaptersView> {
 
   var downloaded = <String>[];
 
+  /// 「本地显示模式」（P-DL6）下该章节是否保留：隐藏未下载的白色章节，
+  /// 蓝(已下载)/黄(下载中)/红(问题)/浅绿(待命)保留。与详情页共用
+  /// foundation 层的同一套状态判定。
+  bool _keptInLocalMode(int index0) {
+    final chapters = widget.reader.widget.chapters;
+    if (chapters == null) return true;
+    if (index0 < 0 || index0 >= chapters.ids.length) return true;
+    return chapterDownloadStatusFor(
+          comicId: widget.reader.cid,
+          comicType: widget.reader.type,
+          chapters: chapters,
+          chapterKey: chapters.ids.elementAt(index0),
+        ) !=
+        ChapterDownloadStatus.notDownloaded;
+  }
+
   List<int> get _visibleIndices => [
     for (final chapter in widget.reader.chapterOrder)
       if (!widget.reader.isChapterHidden(chapter) ||
           widget.reader.chapter == chapter)
-        chapter - 1,
+        // 本地显示模式下隐藏未下载章节；当前章节始终保留，历史记录指向
+        // 的章节才有得高亮。
+        if (!comicDisplayLocalMode ||
+            widget.reader.chapter == chapter ||
+            _keptInLocalMode(chapter - 1))
+          chapter - 1,
   ];
 
   @override
@@ -34,6 +55,23 @@ class _ChaptersViewState extends State<_ChaptersView> {
     if (local != null) {
       downloaded = local.downloadedChapters;
     }
+    // 本地模式不焊死（P-DL6）：其他下载任务完成/出错时刷新列表，
+    // 新下载好的章节会自动出现在本地模式章节列表里。
+    LocalManager().addListener(_onLocalChange);
+  }
+
+  void _onLocalChange() {
+    if (!mounted) return;
+    setState(() {
+      var local = LocalManager().find(widget.reader.cid, widget.reader.type);
+      downloaded = local?.downloadedChapters ?? const [];
+    });
+  }
+
+  @override
+  void dispose() {
+    LocalManager().removeListener(_onLocalChange);
+    super.dispose();
   }
 
   @override
@@ -119,6 +157,18 @@ class _GroupedChaptersViewState extends State<_GroupedChaptersView>
 
   var downloaded = <String>[];
 
+  /// 与扁平视图同一套「本地显示模式」保留判定（P-DL6）。
+  bool _keptInLocalMode(int index0) {
+    if (index0 < 0 || index0 >= chapters.ids.length) return true;
+    return chapterDownloadStatusFor(
+          comicId: widget.reader.cid,
+          comicType: widget.reader.type,
+          chapters: chapters,
+          chapterKey: chapters.ids.elementAt(index0),
+        ) !=
+        ChapterDownloadStatus.notDownloaded;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -144,6 +194,22 @@ class _GroupedChaptersViewState extends State<_GroupedChaptersView>
     if (local != null) {
       downloaded = local.downloadedChapters;
     }
+    // 与扁平视图同理：本地模式不焊死，任务完成时刷新。
+    LocalManager().addListener(_onLocalChange);
+  }
+
+  void _onLocalChange() {
+    if (!mounted) return;
+    setState(() {
+      var local = LocalManager().find(widget.reader.cid, widget.reader.type);
+      downloaded = local?.downloadedChapters ?? const [];
+    });
+  }
+
+  @override
+  void dispose() {
+    LocalManager().removeListener(_onLocalChange);
+    super.dispose();
   }
 
   @override
@@ -175,12 +241,16 @@ class _GroupedChaptersViewState extends State<_GroupedChaptersView>
     }
     // Chapters of this group in reading order that survive "hide duplicate
     // chapters"; the current chapter is kept even when hidden.
+    // 本地显示模式（P-DL6）下再过滤掉未下载的白色章节，当前章节保留。
     return [
       for (final chapter in widget.reader.chapterOrder)
         if (chapter >= base &&
             chapter < base + group.length &&
             (!widget.reader.isChapterHidden(chapter) ||
-                widget.reader.chapter == chapter))
+                widget.reader.chapter == chapter) &&
+            (!comicDisplayLocalMode ||
+                widget.reader.chapter == chapter ||
+                _keptInLocalMode(chapter - 1)))
           chapter,
     ];
   }

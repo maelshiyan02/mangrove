@@ -413,13 +413,25 @@ void setAutoRepairMissingPages(bool value) {
 
 /// 漫画信息采集/章节更新 自动模式总开关（默认关，2026-10-16）。
 ///
-/// 开启后，打开漫画时按来源判定模式：本地库打开=本地模式只读本地、
-/// 搜索/收藏网络打开=网络模式及时更新。系统设置「漫画管理」与漫画详情页
-/// 模式下拉都读写这一个键。
+/// 开启后，打开漫画时自动联网采集/刷新章节信息（P-DL6 起不区分网络/本地
+/// 来源，刷新结果统一回写本地记录）。系统设置「漫画管理」读写这一个键。
 bool get comicInfoAutoUpdate =>
     appdata.settings['comicInfoAutoUpdate'] == true;
 
 void setComicInfoAutoUpdate(bool value) {
   appdata.settings['comicInfoAutoUpdate'] = value;
+  appdata.saveData();
+}
+
+/// 章节「网络/本地显示模式」（默认 false = 网络模式，2026-10-16 P-DL6）。
+///
+/// 只影响章节列表显示、与联网无关：网络模式显示全部章节；本地模式隐藏
+/// 未下载的白色章节，保留蓝(已下载)/黄(下载中)/红(问题)/浅绿(待命)。
+/// 系统设置「漫画管理」与漫画详情页 AppBar 按钮都读写这一个键。
+bool get comicDisplayLocalMode =>
+    appdata.settings['comicDisplayLocalMode'] == true;
+
+void setComicDisplayLocalMode(bool value) {
+  appdata.settings['comicDisplayLocalMode'] = value;
   appdata.saveData();
 }

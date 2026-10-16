@@ -323,9 +323,23 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
       state.comic.id,
       state.comic.sourceKey,
     );
+    // 「本地显示模式」（P-DL6）：隐藏未下载的白色章节，蓝(已下载)/
+    // 黄(下载中)/红(问题)/浅绿(待命)全部保留。状态判定与配色共用
+    // [chapterDownloadStatusFor]；下载任务完成时 LocalManager 通知刷新，
+    // 本章会自动从过滤列表里"长"回来，列表不焊死。
+    final localMode = comicDisplayLocalMode;
     visible = [
       for (final i in ordered)
-        if (!hidden.contains(i)) i,
+        if (!hidden.contains(i) &&
+            !(localMode &&
+                chapterDownloadStatusFor(
+                      comicId: state.comic.id,
+                      comicType: state.comic.comicType,
+                      chapters: state.comic.chapters,
+                      chapterKey: _displayChapters.ids.elementAt(i),
+                    ) ==
+                    ChapterDownloadStatus.notDownloaded))
+          i,
     ];
   }
 
@@ -766,9 +780,22 @@ class _GroupedComicChaptersState extends State<_GroupedComicChapters>
       state.comic.sourceKey,
       index,
     );
+    // 「本地显示模式」（P-DL6）：与普通视图同规则，隐藏未下载的白色章节。
+    // chapterKey 取当前组的源章节 id（与下方渲染一致）。
+    final localMode = comicDisplayLocalMode;
+    final groupKeys = chapters.getGroupByIndex(index).keys;
     visible = [
       for (final i in ordered)
-        if (!hidden.contains(offset + i)) i,
+        if (!hidden.contains(offset + i) &&
+            !(localMode &&
+                chapterDownloadStatusFor(
+                      comicId: state.comic.id,
+                      comicType: state.comic.comicType,
+                      chapters: chapters,
+                      chapterKey: groupKeys.elementAt(i),
+                    ) ==
+                    ChapterDownloadStatus.notDownloaded))
+          i,
     ];
   }
 
@@ -1135,58 +1162,59 @@ class _ChapterChipColors {
   final Color? textColor;
 }
 
-/// 将章节 key（源章节 id）转换为缺失页表里使用的章节目录名。
-///
-/// 必须与下载侧完全一致 —— 两边现在都调 [chapterDirectoryName]（`foundation/
-/// chapter_directory.dart`）。以前这里是抄了一份规则，下载侧一改就会读不到。
-String chapterDirectoryId(ComicChapters? chapters, String chapterKey) =>
-    chapterDirectoryName(chapters, chapterKey);
-
 /// 按下载状态取章节标签配色：
-/// 白=基础 / 黄=下载中 / 蓝=已下载 / 红=缺页或下载失败。
-/// 红色依赖 S2 的缺失页记录表（missing_pages.json），优先级最高：
-/// 红 > 黄 > 蓝 > 基础。已读灰字逻辑由调用方保留（仅作用于未着色的基础态）。
+/// 白=基础 / 浅绿=待命 / 黄=下载中 / 蓝=已下载 / 红=缺页或下载失败。
+/// 状态判定统一在 foundation 层 [chapterDownloadStatusFor]（P-DL6 上提，
+/// 与"本地模式"章节过滤、阅读器章节列表共用一套判定）。优先级：
+/// 红 > 黄 > 绿 > 蓝 > 基础。已读灰字逻辑由调用方保留（仅作用于未着色的基础态）。
 _ChapterChipColors chapterChipColorFor(
   BuildContext context,
   ComicDetails comic,
   String chapterKey,
 ) {
-  final local = LocalManager().find(comic.id, comic.comicType);
-  // 缺页（红色）最高优先级：已知不完整的章节优先于下载中/已下载，
-  // 提示用户"这章没下全"，不会被蓝色/黄色覆盖。
-  int missing = 0;
-  if (local != null) {
-    final dir = chapterDirectoryId(comic.chapters, chapterKey);
-    missing = MissingPages.peek(local.baseDir)?.countOfChapter(dir) ?? 0;
-  }
-  final isDark = context.colorScheme.brightness == Brightness.dark;
-  if (missing > 0) {
-    return _ChapterChipColors(
-      isDark ? const Color(0xFF4A1414) : const Color(0xFFFFCDD2),
-      isDark ? const Color(0xFFEF9A9A) : const Color(0xFFB71C1C),
-    );
-  }
-  final downloading = LocalManager().downloadingTasks.any(
-    (t) =>
-        t.id == comic.id &&
-        t.comicType == comic.comicType &&
-        // `chapters` 在 ImagesDownloadTask 上；其它任务类型视为整部下载。
-        (t is! ImagesDownloadTask ||
-            t.chapters == null ||
-            t.chapters!.contains(chapterKey)),
+  final status = chapterDownloadStatusFor(
+    comicId: comic.id,
+    comicType: comic.comicType,
+    chapters: comic.chapters,
+    chapterKey: chapterKey,
   );
-  if (downloading) {
-    return _ChapterChipColors(
-      isDark ? const Color(0xFF4E4011) : const Color(0xFFFFE082),
-      isDark ? const Color(0xFFFFD54F) : const Color(0xFF7A5900),
-    );
+  final isDark = context.colorScheme.brightness == Brightness.dark;
+  switch (status) {
+    case ChapterDownloadStatus.missing:
+      return _ChapterChipColors(
+        isDark ? const Color(0xFF4A1414) : const Color(0xFFFFCDD2),
+        isDark ? const Color(0xFFEF9A9A) : const Color(0xFFB71C1C),
+      );
+    case ChapterDownloadStatus.downloading:
+      return _ChapterChipColors(
+        isDark ? const Color(0xFF4E4011) : const Color(0xFFFFE082),
+        isDark ? const Color(0xFFFFD54F) : const Color(0xFF7A5900),
+      );
+    case ChapterDownloadStatus.standby:
+      // 待命章节（用户 2026-10-16 定色）：浅绿色，介于"未下载(白)"与
+      // "下载中(黄)"之间——任务已建好、排队等跑，本地模式下保留显示。
+      return _ChapterChipColors(
+        isDark ? const Color(0xFF1B3A24) : const Color(0xFFC8E6C9),
+        isDark ? const Color(0xFF81C784) : const Color(0xFF1B5E20),
+      );
+    case ChapterDownloadStatus.downloaded:
+      return _ChapterChipColors(
+        isDark ? const Color(0xFF1D3A5F) : const Color(0xFFBBDEFB),
+        isDark ? const Color(0xFFA6C8FF) : const Color(0xFF0D47A1),
+      );
+    case ChapterDownloadStatus.notDownloaded:
+      return _ChapterChipColors(context.colorScheme.surfaceContainerLow, null);
   }
-  final downloaded = local?.downloadedChapters.contains(chapterKey) ?? false;
-  if (downloaded) {
-    return _ChapterChipColors(
-      isDark ? const Color(0xFF1D3A5F) : const Color(0xFFBBDEFB),
-      isDark ? const Color(0xFFA6C8FF) : const Color(0xFF0D47A1),
-    );
-  }
-  return _ChapterChipColors(context.colorScheme.surfaceContainerLow, null);
 }
+
+/// 「本地显示模式」下该章节是否保留：隐藏纯白未下载章节，蓝(已下载)/
+/// 黄(下载中)/红(问题)/浅绿(待命)全部保留。判断与配色共用同一状态函数，
+/// 下载任务完成时 LocalManager 通知刷新，章节会自动从过滤列表里"长"回来。
+bool chapterKeptInLocalMode(ComicDetails comic, String chapterKey) =>
+    chapterDownloadStatusFor(
+      comicId: comic.id,
+      comicType: comic.comicType,
+      chapters: comic.chapters,
+      chapterKey: chapterKey,
+    ) !=
+    ChapterDownloadStatus.notDownloaded;

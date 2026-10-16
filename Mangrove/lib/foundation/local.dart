@@ -679,6 +679,7 @@ class LocalManager with ChangeNotifier {
     String id,
     List<String> downloadedChapters, {
     ComicChapters? chapters,
+    List<String>? tags,
   }) {
     _db.execute(
       'INSERT OR REPLACE INTO comics '
@@ -689,7 +690,7 @@ class LocalManager with ChangeNotifier {
         id,
         comic.title,
         comic.subtitle,
-        jsonEncode(comic.tags),
+        jsonEncode(tags ?? comic.tags),
         comic.directory,
         jsonEncode(chapters ?? comic.chapters),
         comic.cover,
@@ -1729,24 +1730,75 @@ class LocalManager with ChangeNotifier {
   /// 与 [add] 的"拒绝缩小"是同一件事的两半：那边防退化（写入源信息更少时拒绝），
   /// 这边负责自愈（拿到更全的矩阵时补回来）。本地已有的话号与版本一律保留 ——
   /// 源上可能已经下架了用户当初下载的那一版。
+  ///
+  /// P-DL6（2026-10-16）泛化到三种章节模式：此前只认版本化矩阵（
+  /// `isVersioned`），拷贝漫画这类"单组默認"的分组源被直接跳过，本地
+  /// 记录永远合并不到新增章节（"第一次告白 62 话 vs 网站 63 话"成因之一）。
+  /// 判据改用 [ComicChapters.entryCount]（各模式通用的条目总数）。
   Future<bool> enrichComicChapters(
     String id,
     ComicType type,
     ComicChapters? online,
   ) async {
-    if (online == null || !online.isVersioned) return false;
+    if (online == null) return false;
     final old = find(id, type);
     if (old == null) return false;
     final merged = old.chapters?.mergedWith(online) ?? online;
-    final before = old.chapters?.versionCount ?? 0;
-    if (merged.versionCount <= before) return false;
+    final before = old.chapters?.entryCount ?? 0;
+    if (merged.entryCount <= before) return false;
     _writeComic(old, id, old.downloadedChapters, chapters: merged);
     notifyListeners();
     Log.info(
       "LocalManager",
       "Chapter matrix enriched for '${old.title}': $before -> "
-          "${merged.versionCount} version(s), ${merged.scanlationGroups.length} "
-          "group(s)",
+          "${merged.entryCount} chapter entry(ies)",
+    );
+    return true;
+  }
+
+  /// 把源刷新到的最新更新时间并回本地记录的「更新」tag（2026-10-16 P-DL6）。
+  ///
+  /// 详情页"更新日期"读的是本地记录 tags 里的 `更新:` 命名空间条目，下载
+  /// 时快照下来之后就再也不变 —— 手动刷新虽能补全章节矩阵，日期却停留在
+  /// 旧值。本方法把命中的更新命名空间条目替换为 [updateTime]；一条都没有
+  /// 时在末尾追加 `更新:` 条目。返回是否真的写了。
+  Future<bool> enrichComicUpdateTime(
+    String id,
+    ComicType type,
+    String updateTime,
+  ) async {
+    final old = find(id, type);
+    if (old == null || updateTime.isEmpty) return false;
+    const namespaces = ['更新', '最後更新', '最后更新', 'update', 'last update'];
+    bool isUpdateEntry(String tag) {
+      final idx = tag.indexOf(':');
+      if (idx <= 0) return false;
+      return namespaces.contains(tag.substring(0, idx).trim().toLowerCase());
+    }
+
+    final tags = List<String>.of(old.tags);
+    var changed = false;
+    for (var i = 0; i < tags.length; i++) {
+      if (isUpdateEntry(tags[i])) {
+        final prefix = tags[i].substring(0, tags[i].indexOf(':'));
+        final newValue = '$prefix:$updateTime';
+        if (tags[i] != newValue) {
+          tags[i] = newValue;
+          changed = true;
+        }
+        break;
+      }
+    }
+    if (!changed && !old.tags.any(isUpdateEntry)) {
+      tags.add('更新:$updateTime');
+      changed = true;
+    }
+    if (!changed) return false;
+    _writeComic(old, id, old.downloadedChapters, tags: tags);
+    notifyListeners();
+    Log.info(
+      "LocalManager",
+      "Update time enriched for '${old.title}': $updateTime",
     );
     return true;
   }

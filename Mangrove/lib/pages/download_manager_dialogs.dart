@@ -116,62 +116,6 @@ class _RepairModeDropdownState extends State<RepairModeDropdown> {
   }
 }
 
-/// 漫画信息采集/章节更新 自动/手动模式切换下拉（2026-10-16）。
-///
-/// 同一个开关（[comicInfoAutoUpdate]）的两处入口之一：漫画详情页 AppBar
-/// 右侧（本组件）+ 系统设置「漫画管理」开关。样式/上色与缺页修复下拉一致
-/// （[ContrastText] 双重保障）。
-class ComicInfoModeDropdown extends StatefulWidget {
-  const ComicInfoModeDropdown({super.key, this.dense = false});
-
-  /// 紧凑模式：详情页 AppBar 用，字号与内边距更小。
-  final bool dense;
-
-  @override
-  State<ComicInfoModeDropdown> createState() => _ComicInfoModeDropdownState();
-}
-
-class _ComicInfoModeDropdownState extends State<ComicInfoModeDropdown> {
-  @override
-  Widget build(BuildContext context) {
-    final auto = comicInfoAutoUpdate;
-    final dark = context.brightness == Brightness.dark;
-    final fg = dark ? Colors.white : Colors.black;
-    final fontSize = widget.dense ? 12.0 : 14.0;
-    return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: context.colorScheme.outline),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      padding: EdgeInsets.symmetric(horizontal: widget.dense ? 6 : 10),
-      child: DropdownButton<bool>(
-        value: auto,
-        underline: const SizedBox.shrink(),
-        isDense: true,
-        borderRadius: BorderRadius.circular(8),
-        style: TextStyle(fontSize: fontSize, color: fg, height: 1.2),
-        iconEnabledColor: fg,
-        iconDisabledColor: fg,
-        items: [
-          DropdownMenuItem(
-            value: true,
-            child: ContrastText("Auto".tl, fontSize: fontSize),
-          ),
-          DropdownMenuItem(
-            value: false,
-            child: ContrastText("Manual".tl, fontSize: fontSize),
-          ),
-        ],
-        onChanged: (v) {
-          if (v == null) return;
-          setComicInfoAutoUpdate(v);
-          setState(() {});
-        },
-      ),
-    );
-  }
-}
-
 /// 打开「统计缺页」弹窗，进入即自动开始一轮深扫。
 void showMissingStatsDialog(BuildContext context) {
   showDialog(

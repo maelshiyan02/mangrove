@@ -738,6 +738,20 @@ class ComicChapters {
       ? 0
       : _versionedChapters!.values.fold(0, (sum, list) => sum + list.length);
 
+  /// 章节条目总数（各模式通用）：扁平=话数；分组=各组之和；版本化=
+  /// 版本条目数。供 `enrichComicChapters` 在"是否变多"的判据上覆盖三种模式。
+  int get entryCount {
+    final versioned = _versionedChapters;
+    if (versioned != null) {
+      return versioned.values.fold(0, (sum, list) => sum + list.length);
+    }
+    final grouped = _groupedChapters;
+    if (grouped != null) {
+      return grouped.values.fold(0, (sum, m) => sum + m.length);
+    }
+    return _chapters?.length ?? 0;
+  }
+
   /// 把 [other] 的版本**并入**本对象：只增不减，按 `chapterKey` 去重。
   ///
   /// 🔴 为什么需要它：库里的章节矩阵一旦被"信息更少的写入源"覆盖，丢掉的翻译组
@@ -751,23 +765,57 @@ class ComicChapters {
   /// 详情页每次刷新拿到的都是源的**完整**矩阵，据此做并集回写即可自愈。
   /// 注意**绝不能整体替换** —— "本地 `chapters` 不被网络覆盖"那条既有约定的
   /// 本意正是如此：可以变多，不可以变少（本地可能有源上已下架的旧章节）。
+  ///
+  /// P-DL6（2026-10-16）起支持**分组式与扁平式**：拷贝漫画等源的章节是
+  /// 单组「默認」的分组矩阵，此前 `mergedWith` 只认版本化矩阵导致本地
+  /// 记录永远合并不到新增章节（"第一次告白 62 话 vs 网站 63 话"的成因
+  /// 之一）。同模式并集、key 相同保留本地值；模式不同（版本化 vs 扁平等）
+  /// 依旧不混并，返回本地原矩阵。
   ComicChapters mergedWith(ComicChapters? other) {
-    if (other == null || !other.isVersioned) return this;
-    // 扁平/分组的本地漫画不参与合并：两种模式混起来会把章节列表搞乱。
-    if (!isVersioned) return this;
-    final merged = <String, List<ComicChapterVersion>>{};
-    for (final entry in _versionedChapters!.entries) {
-      merged[entry.key] = List<ComicChapterVersion>.of(entry.value);
-    }
-    for (final entry in other._versionedChapters!.entries) {
-      final target =
-          merged.putIfAbsent(entry.key, () => <ComicChapterVersion>[]);
-      final known = {for (final v in target) v.chapterKey};
-      for (final version in entry.value) {
-        if (known.add(version.chapterKey)) target.add(version);
+    if (other == null) return this;
+    if (isVersioned && other.isVersioned) {
+      final merged = <String, List<ComicChapterVersion>>{};
+      for (final entry in _versionedChapters!.entries) {
+        merged[entry.key] = List<ComicChapterVersion>.of(entry.value);
       }
+      for (final entry in other._versionedChapters!.entries) {
+        final target =
+            merged.putIfAbsent(entry.key, () => <ComicChapterVersion>[]);
+        final known = {for (final v in target) v.chapterKey};
+        for (final version in entry.value) {
+          if (known.add(version.chapterKey)) target.add(version);
+        }
+      }
+      return ComicChapters.versioned(merged);
     }
-    return ComicChapters.versioned(merged);
+    // 分组式并入：组按名字并，组内按 key 只增不减。
+    if (isGrouped && other.isGrouped) {
+      final merged = <String, Map<String, String>>{};
+      for (final entry in _groupedChapters!.entries) {
+        merged[entry.key] = Map<String, String>.of(entry.value);
+      }
+      for (final entry in other._groupedChapters!.entries) {
+        final target =
+            merged.putIfAbsent(entry.key, () => <String, String>{});
+        for (final e in entry.value.entries) {
+          target.putIfAbsent(e.key, () => e.value);
+        }
+      }
+      return ComicChapters.grouped(merged);
+    }
+    // 扁平式并入。
+    if (!isVersioned &&
+        !isGrouped &&
+        !other.isVersioned &&
+        !other.isGrouped) {
+      final merged = Map<String, String>.of(_chapters ?? const {});
+      for (final e in (other._chapters ?? const {}).entries) {
+        merged.putIfAbsent(e.key, () => e.value);
+      }
+      return ComicChapters(merged);
+    }
+    // 模式不同不混并：混起来会把章节列表结构搞乱，保守保留本地矩阵。
+    return this;
   }
 
   /// For versioned chapters, returns the scanlation group name of the

@@ -162,14 +162,9 @@ final _settingsSearchIndex = <_SettingsSearchEntry>[
     keywords: ["comic", "info", "update", "auto", "refresh"],
   ),
   _SettingsSearchEntry(
-    "Network comics: auto refresh on open",
+    "Local Mode",
     2,
-    keywords: ["comic", "network", "auto", "refresh", "later"],
-  ),
-  _SettingsSearchEntry(
-    "Local comics: read-only on open",
-    2,
-    keywords: ["comic", "local", "read-only", "later"],
+    keywords: ["comic", "chapter", "local", "network", "mode", "display"],
   ),
 
   // --- 3: Local Favorites ---

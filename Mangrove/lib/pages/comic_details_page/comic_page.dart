@@ -12,7 +12,7 @@ import 'package:mangrove/components/rich_comment_content.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
-import 'package:mangrove/foundation/chapter_directory.dart';
+import 'package:mangrove/foundation/chapter_download_status.dart';
 import 'package:mangrove/foundation/chapter_title_parser.dart';
 import 'package:mangrove/foundation/chapter_duplicates.dart';
 import 'package:mangrove/foundation/comic_collection_store.dart';
@@ -566,11 +566,12 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       // "磁盘里有这一话、下载页却显示未下载"（见 LocalManager.reconcileDiskState）。
       scheduleMicrotask(() => _reconcileDiskState(localComic));
       var comicSource = ComicSource.find(widget.sourceKey);
-      // 漫画信息自动更新（2026-10-16）：本地库打开=本地模式，只读本地、
-      // 不联网刷新；总开关关也不刷新。故本地库分支恒不自动联网。
+      // 漫画信息自动更新（P-DL6 简化）：不再区分网络/本地打开来源，总开关
+      // 开即自动联网采集/刷新；刷新结果统一回写本地记录（章节矩阵 +
+      // 「更新」日期，见 _persistEnrichedChapters）。
       if (comicSource != null &&
           comicSource.loadComicInfo != null &&
-          _autoRefreshComicInfoOnOpen(isLocalLibrary: true)) {
+          _autoRefreshComicInfoOnOpen()) {
         scheduleMicrotask(() => _refreshNetworkDetails(comicSource));
       }
       return Res(_localDetails(localComic, state));
@@ -589,9 +590,9 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       return Res(_fallbackDetails(state));
     }
     // Return local data immediately, fetch network data in background.
-    // 漫画信息自动更新（2026-10-16）：搜索/收藏网络打开=网络模式，总开关
-    // 开才自动刷新；关则保持只读（手动刷新按钮仍可手动拉取）。
-    if (_autoRefreshComicInfoOnOpen(isLocalLibrary: false)) {
+    // 漫画信息自动更新（P-DL6 简化）：总开关开即自动刷新，不再区分
+    // 打开来源；关则只等手动刷新按钮拉取。
+    if (_autoRefreshComicInfoOnOpen()) {
       scheduleMicrotask(() => _refreshNetworkDetails(comicSource));
     }
     // Cached details from an earlier visit render the chapter list (and group
@@ -619,7 +620,9 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     }
   }
 
-  ComicDetails _localDetails(LocalComic localComic, ComicState state) {
+  /// 本地记录 tags（`"ns:value"` 列表）→ 详情页 tagsMap。_localDetails 与
+  /// _persistEnrichedChapters（回写「更新」日期后重建 tags）共用。
+  Map<String, List<String>> _tagsMapOf(LocalComic localComic) {
     var tagsMap = <String, List<String>>{};
     for (var tag in localComic.tags) {
       var parts = tag.split(':');
@@ -627,12 +630,16 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       var value = parts.length > 1 ? parts.sublist(1).join(':') : tag;
       tagsMap.putIfAbsent(key, () => []).add(value);
     }
+    return tagsMap;
+  }
+
+  ComicDetails _localDetails(LocalComic localComic, ComicState state) {
     return ComicDetails.fromJson({
       'title': localComic.title,
       'subtitle': localComic.subtitle,
       'cover': localComic.cover,
       'description': localComic.description,
-      'tags': tagsMap,
+      'tags': _tagsMapOf(localComic),
       // 已下载的版本提到每话首位：详情页的章节 chips、阅读器、以及"已下载"
       // 判定都只认首个版本，不这么做的话"下载了非首选组"的章节会显示为
       // 未下载且点开是空白。
@@ -665,15 +672,13 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     unawaited(_refreshNetworkDetails(source));
   }
 
-  /// 漫画信息采集/章节更新的自动模式判定（2026-10-16）。
+  /// 漫画信息采集/章节更新的自动模式判定（2026-10-16，P-DL6 简化）。
   ///
-  /// 返回 true 表示本次打开应自动联网刷新章节信息。规则：
-  /// - 总开关 [comicInfoAutoUpdate] 关 → 永不自动刷新（手动刷新按钮仍可用）。
-  /// - 总开关开 → 按打开来源判定：本地库打开（[isLocalLibrary]=true，含
-  ///   已下载/纯本地导入）走本地模式，只读本地、不联网；搜索/收藏网络打开
-  ///   走网络模式，及时刷新。
-  bool _autoRefreshComicInfoOnOpen({required bool isLocalLibrary}) =>
-      comicInfoAutoUpdate && !isLocalLibrary;
+  /// 返回 true 表示本次打开应自动联网刷新章节信息。总开关
+  /// [comicInfoAutoUpdate] 关 → 永不自动刷新（手动刷新按钮仍可用）；
+  /// 开 → 一律刷新，**不再区分网络/本地打开来源**（用户定案：区分规则
+  /// 本是为省重复请求，试行期取消），刷新结果统一回写本地记录。
+  bool _autoRefreshComicInfoOnOpen() => comicInfoAutoUpdate;
 
   Future<void> _refreshComicDetails() async {
     final localComic =
@@ -857,8 +862,10 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
           });
           ComicDetailsCache().update(widget.sourceKey, widget.id, res.data);
           // 源这边是完整矩阵：把它并回本地记录，让被覆盖过的（丢组、丢话的）
-          // 记录自愈。只增不减，未变少时不会产生写入。
-          await _persistEnrichedChapters(merged);
+          // 记录自愈。只增不减，未变少时不会产生写入。更新时间取**原始在线
+          // 响应**：merged 的 tags 已把本地旧「更新」与新「更新」并进同一
+          // 命名空间列表，findUpdateTime 取 first 会拿到旧值。
+          await _persistEnrichedChapters(merged, online: res.data);
           await onDataLoaded();
           return true;
         }
@@ -881,25 +888,47 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     return false;
   }
 
-  /// 把刷新到的完整章节矩阵**并回**本地库记录（只增不减），成功后刷新页面。
+  /// 把刷新到的完整章节矩阵与最新更新时间**并回**本地库记录（只增不减），
+  /// 成功后刷新页面。
+  ///
+  /// P-DL6（2026-10-16）扩展：除了章节矩阵，还把源的更新时间回写进本地
+  /// 记录的「更新」tag —— 否则详情页"更新日期"永远停留在下载时的快照
+  /// （《第一次告白》"62 话 / 9-30" vs 网站"63 话 / 10-11"的另一半成因）。
   ///
   /// 补全后 `downloadedChapters` 里那些 key 又能算出正确的章节目录名，缺页对账
   /// 与"修复"入口才找得到它们。
-  Future<void> _persistEnrichedChapters(ComicDetails merged) async {
+  Future<void> _persistEnrichedChapters(
+    ComicDetails merged, {
+    ComicDetails? online,
+  }) async {
     final local = _localComic;
     if (local == null) return;
     try {
-      final changed = await LocalManager().enrichComicChapters(
+      final changedChapters = await LocalManager().enrichComicChapters(
         local.id,
         local.comicType,
         merged.chapters,
       );
-      if (!changed || !mounted) return;
+      // 更新时间以原始在线响应为准（本地打开时 merged 的「更新」命名空间
+      // 里新旧日期并存，取 first 会拿到旧值）。
+      final updateTime = (online ?? merged).findUpdateTime();
+      final changedTime = updateTime == null
+          ? false
+          : await LocalManager().enrichComicUpdateTime(
+              local.id,
+              local.comicType,
+              updateTime,
+            );
+      if (!changedChapters && !changedTime) return;
       final refreshed = LocalManager().find(local.id, local.comicType);
       if (refreshed == null) return;
       setState(() {
         _localComic = refreshed;
-        data = (data ?? merged).copyWith(chapters: refreshed.chapters);
+        data = (data ?? merged).copyWith(
+          chapters: refreshed.chapters,
+          // 「更新」日期刚回写进 tags，立刻反映到详情页展示。
+          tags: _tagsMapOf(refreshed),
+        );
       });
       // 章节矩阵变了 → 目录名解析方式跟着变，立刻重跑一次磁盘对账。
       await _reconcileDiskState(refreshed);
@@ -1026,20 +1055,43 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
         // 一个浓缩任务导致队列/弹窗按 id 覆盖显示空白；现在与「下载
         // 管理」的缺页修复同款弹窗，每章单独建任务，范围仅限本漫画）。
         if (_localComic != null &&
-            MissingPages.missingCount(_localComic!.baseDir) > 0)
+            MissingPages.missingCount(_localComic!.baseDir) > 0) ...[
           IconButton(
             onPressed: _showRepairMissingDialog,
             icon: const Icon(Icons.auto_fix_high),
             tooltip: 'Missing Page Repair'.tl,
           ),
+          // 缺页修复 自动/手动模式下拉（P-DL6 2026-10-16 修正）：此前这里
+          // 常驻显示的是「漫画信息自动更新」下拉，用户指出它实际对应的是
+          // 缺页修复功能、且无缺页时应当随修复按钮一起隐藏。现在绑定
+          // `autoRepairMissingPages`（与修复二级弹窗/系统设置同一开关），
+          // 并跟随修复按钮的可见性条件。
+          const RepairModeDropdown(dense: true),
+        ],
         IconButton(
           onPressed: share,
           icon: const Icon(Icons.share),
           tooltip: 'Share'.tl,
         ),
-        // 漫画信息采集/章节更新 自动/手动模式下拉（2026-10-16，与系统设置
-        // 「漫画管理」联动；Appbar 环境用双重保障上色，见 ContrastText）。
-        const ComicInfoModeDropdown(dense: true),
+        // 章节「网络/本地显示模式」切换（P-DL6 2026-10-16）。只影响章节
+        // 列表的显示、与联网无关：网络模式显示全部章节；本地模式隐藏
+        // 未下载的白色章节。图标即模式形象（网络=wifi 样子 / 本地=飞行
+        // 模式），与系统设置「漫画管理」读写同一个键，切完立即整页重建。
+        IconButton(
+          onPressed: () {
+            setComicDisplayLocalMode(!comicDisplayLocalMode);
+            update();
+          },
+          icon: Icon(
+            comicDisplayLocalMode
+                ? Icons.airplanemode_active
+                : Icons.wifi,
+          ),
+          tooltip: (comicDisplayLocalMode
+                  ? 'Switch to Network Mode'
+                  : 'Switch to Local Mode')
+              .tl,
+        ),
         if (widget.sourceKey == 'local' ||
             ComicSource.find(widget.sourceKey)?.loadComicInfo != null)
           IconButton(
