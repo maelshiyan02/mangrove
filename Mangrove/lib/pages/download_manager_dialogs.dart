@@ -35,10 +35,53 @@ class RepairModeDropdown extends StatefulWidget {
   State<RepairModeDropdown> createState() => _RepairModeDropdownState();
 }
 
+/// 文字「双重保障」上色（用户 2026-10-16）：**浅色主题 = 黑字白框，
+/// 深色主题 = 白字黑框**。
+///
+/// 起因：模式下拉放在对话框标题行（Appbar）里，继承了 Appbar 的白色
+/// DefaultTextStyle，而 P47 全局多配色方案下无法保证继承色与背景永不
+/// 撞色。这里显式按明暗定填充色，再加一圈反差色描边——任一侧背景
+/// （浅/深/意外撞色）下文字都保持可读。
+class _ContrastText extends StatelessWidget {
+  const _ContrastText(this.text, {this.fontSize = 12});
+
+  final String text;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = context.brightness == Brightness.dark;
+    final base = TextStyle(
+      fontSize: fontSize,
+      height: 1.2,
+      color: dark ? Colors.white : Colors.black,
+    );
+    return Stack(
+      children: [
+        // 描边层：反差色硬框（浅→白框、深→黑框）。
+        Text(
+          text,
+          style: base.copyWith(
+            foreground: Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 2.5
+              ..color = dark ? Colors.black : Colors.white,
+          ),
+        ),
+        Text(text, style: base),
+      ],
+    );
+  }
+}
+
 class _RepairModeDropdownState extends State<RepairModeDropdown> {
   @override
   Widget build(BuildContext context) {
     final auto = autoRepairMissingPages;
+    // 文字与图标统一用明暗对比色（不再继承 Appbar 的白色）。
+    final dark = context.brightness == Brightness.dark;
+    final fg = dark ? Colors.white : Colors.black;
+    final fontSize = widget.dense ? 12.0 : 14.0;
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: context.colorScheme.outline),
@@ -50,15 +93,17 @@ class _RepairModeDropdownState extends State<RepairModeDropdown> {
         underline: const SizedBox.shrink(),
         isDense: true,
         borderRadius: BorderRadius.circular(8),
-        style: widget.dense ? ts.s12 : ts.s14,
+        style: TextStyle(fontSize: fontSize, color: fg, height: 1.2),
+        iconEnabledColor: fg,
+        iconDisabledColor: fg,
         items: [
           DropdownMenuItem(
             value: true,
-            child: Text("Auto".tl, style: widget.dense ? ts.s12 : ts.s14),
+            child: _ContrastText("Auto".tl, fontSize: fontSize),
           ),
           DropdownMenuItem(
             value: false,
-            child: Text("Manual".tl, style: widget.dense ? ts.s12 : ts.s14),
+            child: _ContrastText("Manual".tl, fontSize: fontSize),
           ),
         ],
         onChanged: (v) {
