@@ -155,16 +155,33 @@ final _settingsSearchIndex = <_SettingsSearchEntry>[
     visible: () => LauncherIconService.isSupported,
   ),
 
-  // --- 2: Local Favorites ---
-  _SettingsSearchEntry("Show local favorites before network favorites", 2),
-  _SettingsSearchEntry("Auto close favorite panel after operation", 2),
-  _SettingsSearchEntry("Add new favorite to", 2),
-  _SettingsSearchEntry("Move favorite after reading", 2),
-  _SettingsSearchEntry("Quick Favorite", 2),
-  _SettingsSearchEntry("Delete all unavailable local favorite items", 2),
-  _SettingsSearchEntry("Click favorite", 2),
+  // --- 2: Comic Management ---
+  _SettingsSearchEntry(
+    "Auto Update Comic Info",
+    2,
+    keywords: ["comic", "info", "update", "auto", "refresh"],
+  ),
+  _SettingsSearchEntry(
+    "Network comics: auto refresh on open",
+    2,
+    keywords: ["comic", "network", "auto", "refresh", "later"],
+  ),
+  _SettingsSearchEntry(
+    "Local comics: read-only on open",
+    2,
+    keywords: ["comic", "local", "read-only", "later"],
+  ),
 
-  // --- 3: Data & Sync ---
+  // --- 3: Local Favorites ---
+  _SettingsSearchEntry("Show local favorites before network favorites", 3),
+  _SettingsSearchEntry("Auto close favorite panel after operation", 3),
+  _SettingsSearchEntry("Add new favorite to", 3),
+  _SettingsSearchEntry("Move favorite after reading", 3),
+  _SettingsSearchEntry("Quick Favorite", 3),
+  _SettingsSearchEntry("Delete all unavailable local favorite items", 3),
+  _SettingsSearchEntry("Click favorite", 3),
+
+  // --- 4: Data & Sync ---
   _SettingsSearchEntry(
     "Download Management",
     3,
@@ -175,14 +192,14 @@ final _settingsSearchIndex = <_SettingsSearchEntry>[
     3,
     keywords: ["repair", "missing", "auto"],
   ),
-  _SettingsSearchEntry("Storage Path for local comics", 3, keywords: ["path"]),
-  _SettingsSearchEntry("Set New Storage Path", 3, keywords: ["path"]),
-  _SettingsSearchEntry("Cache Size", 3, keywords: ["cache"]),
-  _SettingsSearchEntry("Clear Cache", 3, keywords: ["cache"]),
-  _SettingsSearchEntry("Cache Limit", 3, keywords: ["cache"]),
-  _SettingsSearchEntry("Auto clean reading history", 3),
-  _SettingsSearchEntry("Export App Data", 3, keywords: ["backup", "export"]),
-  _SettingsSearchEntry("Import App Data", 3, keywords: ["restore", "import"]),
+  _SettingsSearchEntry("Storage Path for local comics", 4, keywords: ["path"]),
+  _SettingsSearchEntry("Set New Storage Path", 4, keywords: ["path"]),
+  _SettingsSearchEntry("Cache Size", 4, keywords: ["cache"]),
+  _SettingsSearchEntry("Clear Cache", 4, keywords: ["cache"]),
+  _SettingsSearchEntry("Cache Limit", 4, keywords: ["cache"]),
+  _SettingsSearchEntry("Auto clean reading history", 4),
+  _SettingsSearchEntry("Export App Data", 4, keywords: ["backup", "export"]),
+  _SettingsSearchEntry("Import App Data", 4, keywords: ["restore", "import"]),
   _SettingsSearchEntry(
     "Data Sync",
     3,
@@ -193,7 +210,7 @@ final _settingsSearchIndex = <_SettingsSearchEntry>[
     3,
     keywords: ["webdav", "sync", "skip", "exclude"],
   ),
-  _SettingsSearchEntry("Sync Logs", 3, keywords: ["webdav", "log"]),
+  _SettingsSearchEntry("Sync Logs", 4, keywords: ["webdav", "log"]),
   _SettingsSearchEntry(
     "WebDAV Comic Library",
     3,
@@ -215,31 +232,31 @@ final _settingsSearchIndex = <_SettingsSearchEntry>[
     visible: () => App.isWindows,
   ),
 
-  // --- 5: Network ---
-  _SettingsSearchEntry("Proxy", 5, keywords: ["vpn", "socks", "http"]),
-  _SettingsSearchEntry("DNS Overrides", 5, keywords: ["dns", "hosts", "sni"]),
-  _SettingsSearchEntry("Download Threads", 5, keywords: ["download"]),
-  _SettingsSearchEntry("Parallel Downloads", 5, keywords: ["download"]),
+  // --- 6: Network ---
+  _SettingsSearchEntry("Proxy", 6, keywords: ["vpn", "socks", "http"]),
+  _SettingsSearchEntry("DNS Overrides", 6, keywords: ["dns", "hosts", "sni"]),
+  _SettingsSearchEntry("Download Threads", 6, keywords: ["download"]),
+  _SettingsSearchEntry("Parallel Downloads", 6, keywords: ["download"]),
   _SettingsSearchEntry(
     "Download on WiFi Only",
     5,
     keywords: ["wifi", "wlan", "download", "data"],
   ),
 
-  // --- 7: About ---
-  _SettingsSearchEntry("Check for updates", 7, keywords: ["update", "version"]),
-  _SettingsSearchEntry("Check for updates on startup", 7, keywords: ["update"]),
+  // --- 8: About ---
+  _SettingsSearchEntry("Check for updates", 8, keywords: ["update", "version"]),
+  _SettingsSearchEntry("Check for updates on startup", 8, keywords: ["update"]),
   _SettingsSearchEntry(
     "Guide",
     7,
     keywords: ["guide", "help", "manual", "how to", "usage"],
   ),
-  _SettingsSearchEntry("Repository", 7, keywords: ["github", "source"]),
-  _SettingsSearchEntry("User Agreement & Disclaimer", 7),
+  _SettingsSearchEntry("Repository", 8, keywords: ["github", "source"]),
+  _SettingsSearchEntry("User Agreement & Disclaimer", 8),
 
-  // --- 6: Debug ---
-  _SettingsSearchEntry("Reload Configs", 6),
-  _SettingsSearchEntry("Open Log", 6, keywords: ["log", "logs"]),
+  // --- 7: Debug ---
+  _SettingsSearchEntry("Reload Configs", 7),
+  _SettingsSearchEntry("Open Log", 7, keywords: ["log", "logs"]),
   _SettingsSearchEntry(
     "Ignore Certificate Errors",
     6,

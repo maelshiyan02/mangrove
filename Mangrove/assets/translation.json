@@ -1817,7 +1817,14 @@
     "Manual": "手动",
     "Missing Page Repair": "缺页修复",
     "Missing Page Repair (@a)": "缺页修复（@a）",
-    "Auto-created @a repair task(s)": "已自动创建 @a 个缺页修复任务"
+    "Auto-created @a repair task(s)": "已自动创建 @a 个缺页修复任务",
+    "Comic Management": "漫画管理",
+    "Auto Update Comic Info": "自动更新漫画信息",
+    "When on, opening a comic auto-collects/updates chapter info. Local-library comics stay read-only; network comics refresh. Off by default.": "开启后，打开漫画会自动采集/更新章节信息：本地库漫画保持只读，网络漫画刷新。默认关闭。",
+    "Network comics: auto refresh on open": "网络漫画：打开时自动刷新",
+    "Planned: network comics refresh chapter info by default. Enabled later.": "规划中：网络漫画默认自动刷新章节信息，稍后开放。",
+    "Local comics: read-only on open": "本地漫画：打开时只读本地",
+    "Planned: local-library comics stay read-only by default. Enabled later.": "规划中：本地库漫画默认只读本地记录，稍后开放。"
   },
   "zh_TW": {
     "Chapter capsule": "章節膠囊",
@@ -3637,6 +3644,13 @@
     "Manual": "手動",
     "Missing Page Repair": "缺頁修復",
     "Missing Page Repair (@a)": "缺頁修復（@a）",
-    "Auto-created @a repair task(s)": "已自動建立 @a 個缺頁修復任務"
+    "Auto-created @a repair task(s)": "已自動建立 @a 個缺頁修復任務",
+    "Comic Management": "漫畫管理",
+    "Auto Update Comic Info": "自動更新漫畫資訊",
+    "When on, opening a comic auto-collects/updates chapter info. Local-library comics stay read-only; network comics refresh. Off by default.": "開啟後，開啟漫畫會自動採集/更新章節資訊：本機庫漫畫保持唯讀，網路漫畫重新整理。預設關閉。",
+    "Network comics: auto refresh on open": "網路漫畫：開啟時自動重新整理",
+    "Planned: network comics refresh chapter info by default. Enabled later.": "規劃中：網路漫畫預設自動重新整理章節資訊，稍後開放。",
+    "Local comics: read-only on open": "本機漫畫：開啟時唯讀本機",
+    "Planned: local-library comics stay read-only by default. Enabled later.": "規劃中：本機庫漫畫預設唯讀本機記錄，稍後開放。"
   }
 }

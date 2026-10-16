@@ -410,3 +410,16 @@ void setAutoRepairMissingPages(bool value) {
   appdata.settings['autoRepairMissingPages'] = value;
   appdata.saveData();
 }
+
+/// 漫画信息采集/章节更新 自动模式总开关（默认关，2026-10-16）。
+///
+/// 开启后，打开漫画时按来源判定模式：本地库打开=本地模式只读本地、
+/// 搜索/收藏网络打开=网络模式及时更新。系统设置「漫画管理」与漫画详情页
+/// 模式下拉都读写这一个键。
+bool get comicInfoAutoUpdate =>
+    appdata.settings['comicInfoAutoUpdate'] == true;
+
+void setComicInfoAutoUpdate(bool value) {
+  appdata.settings['comicInfoAutoUpdate'] = value;
+  appdata.saveData();
+}

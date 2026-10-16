@@ -16,6 +16,7 @@ import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/cache_manager.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/comic_type.dart';
+import 'package:mangrove/foundation/download_manager_store.dart';
 import 'package:mangrove/foundation/download_network_guard.dart';
 import 'package:mangrove/foundation/favorites.dart';
 import 'package:mangrove/foundation/home_layout.dart';
@@ -66,6 +67,7 @@ part 'local_favorites.dart';
 part 'app.dart';
 part 'app_color_scheme.dart';
 part 'data_sync.dart';
+part 'comic_management.dart';
 part 'about.dart';
 part 'network.dart';
 part 'debug.dart';
@@ -78,6 +80,7 @@ part 'settings_search.dart';
 const _settingsCategories = <String>[
   "App",
   "Reading settings",
+  "Comic Management",
   "Local Favorites",
   "Data & Sync",
   "Explore",
@@ -89,6 +92,7 @@ const _settingsCategories = <String>[
 const _settingsCategoryIcons = <IconData>[
   Icons.apps,
   Icons.book,
+  Icons.auto_stories,
   Icons.collections_bookmark_rounded,
   Icons.cloud_sync_outlined,
   Icons.explore,
@@ -317,12 +321,13 @@ class _SettingsPageState extends State<SettingsPage> {
     return switch (pageIndex) {
       0 => const AppSettings(),
       1 => const ReaderSettings(),
-      2 => const LocalFavoritesSettings(),
-      3 => const DataSyncSettings(),
-      4 => const ExploreSettings(),
-      5 => const NetworkSettings(),
-      6 => const DebugPage(),
-      7 => const AboutSettings(),
+      2 => const ComicManagementSettings(),
+      3 => const LocalFavoritesSettings(),
+      4 => const DataSyncSettings(),
+      5 => const ExploreSettings(),
+      6 => const NetworkSettings(),
+      7 => const DebugPage(),
+      8 => const AboutSettings(),
       _ => throw UnimplementedError(),
     };
   }
@@ -342,12 +347,13 @@ class _SettingsDetailPage extends StatelessWidget {
     return switch (pageIndex) {
       0 => const AppSettings(),
       1 => const ReaderSettings(),
-      2 => const LocalFavoritesSettings(),
-      3 => const DataSyncSettings(),
-      4 => const ExploreSettings(),
-      5 => const NetworkSettings(),
-      6 => const DebugPage(),
-      7 => const AboutSettings(),
+      2 => const ComicManagementSettings(),
+      3 => const LocalFavoritesSettings(),
+      4 => const DataSyncSettings(),
+      5 => const ExploreSettings(),
+      6 => const NetworkSettings(),
+      7 => const DebugPage(),
+      8 => const AboutSettings(),
       _ => throw UnimplementedError(),
     };
   }

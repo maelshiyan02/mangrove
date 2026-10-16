@@ -566,7 +566,11 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       // "磁盘里有这一话、下载页却显示未下载"（见 LocalManager.reconcileDiskState）。
       scheduleMicrotask(() => _reconcileDiskState(localComic));
       var comicSource = ComicSource.find(widget.sourceKey);
-      if (comicSource != null && comicSource.loadComicInfo != null) {
+      // 漫画信息自动更新（2026-10-16）：本地库打开=本地模式，只读本地、
+      // 不联网刷新；总开关关也不刷新。故本地库分支恒不自动联网。
+      if (comicSource != null &&
+          comicSource.loadComicInfo != null &&
+          _autoRefreshComicInfoOnOpen(isLocalLibrary: true)) {
         scheduleMicrotask(() => _refreshNetworkDetails(comicSource));
       }
       return Res(_localDetails(localComic, state));
@@ -584,8 +588,12 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       detailsLoadError = 'Comic source not found';
       return Res(_fallbackDetails(state));
     }
-    // Return local data immediately, fetch network data in background
-    scheduleMicrotask(() => _refreshNetworkDetails(comicSource));
+    // Return local data immediately, fetch network data in background.
+    // 漫画信息自动更新（2026-10-16）：搜索/收藏网络打开=网络模式，总开关
+    // 开才自动刷新；关则保持只读（手动刷新按钮仍可手动拉取）。
+    if (_autoRefreshComicInfoOnOpen(isLocalLibrary: false)) {
+      scheduleMicrotask(() => _refreshNetworkDetails(comicSource));
+    }
     // Cached details from an earlier visit render the chapter list (and group
     // tabs) instantly; the background fetch above refreshes them.
     final cached = ComicDetailsCache().find(widget.sourceKey, widget.id);
@@ -656,6 +664,16 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     if (source == null || source.loadComicInfo == null) return;
     unawaited(_refreshNetworkDetails(source));
   }
+
+  /// 漫画信息采集/章节更新的自动模式判定（2026-10-16）。
+  ///
+  /// 返回 true 表示本次打开应自动联网刷新章节信息。规则：
+  /// - 总开关 [comicInfoAutoUpdate] 关 → 永不自动刷新（手动刷新按钮仍可用）。
+  /// - 总开关开 → 按打开来源判定：本地库打开（[isLocalLibrary]=true，含
+  ///   已下载/纯本地导入）走本地模式，只读本地、不联网；搜索/收藏网络打开
+  ///   走网络模式，及时刷新。
+  bool _autoRefreshComicInfoOnOpen({required bool isLocalLibrary}) =>
+      comicInfoAutoUpdate && !isLocalLibrary;
 
   Future<void> _refreshComicDetails() async {
     final localComic =
@@ -1019,6 +1037,9 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
           icon: const Icon(Icons.share),
           tooltip: 'Share'.tl,
         ),
+        // 漫画信息采集/章节更新 自动/手动模式下拉（2026-10-16，与系统设置
+        // 「漫画管理」联动；Appbar 环境用双重保障上色，见 ContrastText）。
+        const ComicInfoModeDropdown(dense: true),
         if (widget.sourceKey == 'local' ||
             ComicSource.find(widget.sourceKey)?.loadComicInfo != null)
           IconButton(
