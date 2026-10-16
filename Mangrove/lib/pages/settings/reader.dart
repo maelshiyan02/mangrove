@@ -516,6 +516,22 @@ class _ReaderSettingsState extends State<ReaderSettings> {
                     : null,
                 useDeviceSettings: useDeviceSpecificSettings,
               ),
+            // Desktop only: a vertical toolbar pinned to the right edge is a
+            // mouse-oriented layout, not a touch layout.
+            if (App.isDesktop)
+              _SwitchSetting(
+                title: "Right Edge Toolbar".tl,
+                subtitle: "Optional vertical toolbar on the right edge".tl,
+                settingKey: "readerSideToolbar",
+                onChanged: () {
+                  widget.onChanged?.call("readerSideToolbar");
+                },
+                comicId: isEnabledSpecificSettings ? widget.comicId : null,
+                comicSource: isEnabledSpecificSettings
+                    ? widget.comicSource
+                    : null,
+                useDeviceSettings: useDeviceSpecificSettings,
+              ),
             _SwitchSetting(
               title: "Chapter end navigation".tl,
               subtitle: "Show prev/next chapter cards at the end of a chapter".tl,

@@ -1800,7 +1800,10 @@
     "Repair runs in the download queue; the problem list updates when pages are recovered.": "修复任务在下载队列中运行，补回页面后问题列表会自动更新。",
     "Select chapters to repair": "选择要修复的章节",
     "@a chapters selected": "已选 @a 章",
-    "@a downloaded": "已下载 @a 本"
+    "@a downloaded": "已下载 @a 本",
+    "Right Edge Toolbar": "右缘工具栏",
+    "Optional vertical toolbar on the right edge": "阅读器右缘的可选竖工具栏",
+    "Comments coming soon": "评论功能即将推出"
   },
   "zh_TW": {
     "Chapter capsule": "章節膠囊",
@@ -3603,6 +3606,9 @@
     "Repair runs in the download queue; the problem list updates when pages are recovered.": "修復任務在下載隊列中執行，補回頁面後問題清單會自動更新。",
     "Select chapters to repair": "選擇要修復的章節",
     "@a chapters selected": "已選 @a 章",
-    "@a downloaded": "已下載 @a 本"
+    "@a downloaded": "已下載 @a 本",
+    "Right Edge Toolbar": "右緣工具列",
+    "Optional vertical toolbar on the right edge": "閱讀器右緣的可選豎工具列",
+    "Comments coming soon": "評論功能即將推出"
   }
 }

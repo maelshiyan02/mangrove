@@ -174,4 +174,24 @@ void main() {
       }
     });
   });
+
+  group('side toolbar (R5)', () {
+    test('defaults off so existing installs are unchanged', () {
+      expect(appdata.settings['readerSideToolbar'], false);
+      // Reverse case: a literal true must flip it on (the scaffold gates the
+      // slide-in on exactly this value).
+      expect(appdata.settings['readerSideToolbar'] == true, isFalse);
+    });
+
+    test('the key is classified for sync', () {
+      // Same rationale as R4: an unclassified reading key gets overwritten by
+      // the web/other-device preference and silently resets the toggle.
+      final reading = syncSkipCategories.firstWhere((c) => c.id == 'reading');
+      expect(
+        reading.keys,
+        contains('readerSideToolbar'),
+        reason: 'readerSideToolbar is missing from sync_skip.dart',
+      );
+    });
+  });
 }

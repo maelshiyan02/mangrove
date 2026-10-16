@@ -82,6 +82,7 @@ part 'chapter_end_nav.dart';
 part 'help_dialog.dart';
 part 'reader_filters.dart';
 part 'chapter_capsule.dart';
+part 'side_toolbar.dart';
 
 @visibleForTesting
 SystemUiMode resolveReaderSystemUiMode(bool showSystemStatusBar) {

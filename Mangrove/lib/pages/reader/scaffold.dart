@@ -463,6 +463,13 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
             width: kPageRailWidth,
             child: const RepaintBoundary(child: ReaderPageRail()),
           ),
+        // R5 可选右缘竖工具栏：从右缘滑入，垂直居中，与顶/底栏并存。
+        Positioned(
+          right: 10,
+          top: 0,
+          bottom: 0,
+          child: Center(child: ReaderSideToolbar()),
+        ),
       ],
     );
   }

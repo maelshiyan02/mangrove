@@ -559,6 +559,8 @@ class Settings with ChangeNotifier {
     'readerAutoPlayMode': 'page',
     // P47 R4：匀速滚动速度（px/s），仅 continuous + mode=scroll 生效。
     'autoScrollSpeed': 150.0,
+    // P47 R5：可选右缘竖工具栏（默认关）。开启后阅读器右缘滑入一列图标钮。
+    'readerSideToolbar': false,
     'localFavoritesFirst': true,
     'autoCloseFavoritePanel': false,
     'showChapterComments': true, // show chapter comments in reader
