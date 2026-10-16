@@ -169,14 +169,43 @@ class _MissingStatsDialogState extends State<_MissingStatsDialog> {
   }
 }
 
+/// 收起/展开的箭头提示按钮，放在分组标题**左侧**（用户 2026-10-16：
+/// 修复弹窗原本把 ExpansionTile 的 trailing 换成 Checkbox，默认旋转箭头
+/// 被挤掉，初次使用者找不到收起展开入口；统计弹窗同款左置，两个弹窗
+/// 风格统一）。
+///
+/// 方向按常规：收起 = 尖朝下（▽），展开 = 尖朝上（△）。
+class _ExpandHintIcon extends StatelessWidget {
+  const _ExpandHintIcon({required this.expanded});
+
+  final bool expanded;
+
+  @override
+  Widget build(BuildContext context) {
+    return Icon(
+      expanded ? Icons.expand_less : Icons.expand_more,
+      size: 20,
+      color: context.colorScheme.onSurfaceVariant,
+    );
+  }
+}
+
 /// 一本问题漫画的折叠分组：标题行 + 章节缺页明细（#9）。
-class _StatsComicGroup extends StatelessWidget {
+class _StatsComicGroup extends StatefulWidget {
   const _StatsComicGroup({required this.report});
 
   final ComicMissingReport report;
 
   @override
+  State<_StatsComicGroup> createState() => _StatsComicGroupState();
+}
+
+class _StatsComicGroupState extends State<_StatsComicGroup> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
+    final report = widget.report;
     // 章节聚合：chapterId -> (显示名, 缺页数)。显示名优先用登记时的
     // 章节标题，回落到目录名（chapterId 本身）。
     final labels = <String, String>{};
@@ -189,6 +218,12 @@ class _StatsComicGroup extends StatelessWidget {
     }
     final chapters = counts.keys.toList()..sort();
     return ExpansionTile(
+      initiallyExpanded: _expanded,
+      // 左置箭头提示（收起 ▽ / 展开 △）；去掉默认的右侧旋转箭头，
+      // 与修复弹窗统一。
+      leading: _ExpandHintIcon(expanded: _expanded),
+      trailing: const SizedBox.shrink(),
+      onExpansionChanged: (v) => setState(() => _expanded = v),
       tilePadding: const EdgeInsets.symmetric(horizontal: 8),
       childrenPadding: const EdgeInsets.only(left: 16, bottom: 8),
       title: Text(
@@ -391,7 +426,7 @@ class _MissingRepairDialogState extends State<_MissingRepairDialog> {
   }
 }
 
-class _RepairComicGroup extends StatelessWidget {
+class _RepairComicGroup extends StatefulWidget {
   const _RepairComicGroup({
     required this.report,
     required this.selected,
@@ -405,7 +440,16 @@ class _RepairComicGroup extends StatelessWidget {
   final void Function(String cid) onToggleChapter;
 
   @override
+  State<_RepairComicGroup> createState() => _RepairComicGroupState();
+}
+
+class _RepairComicGroupState extends State<_RepairComicGroup> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
+    final report = widget.report;
+    final selected = widget.selected;
     final chapters = report.table.chapterIds.toList()..sort();
     final allSelected =
         selected.length == chapters.length && chapters.isNotEmpty;
@@ -420,10 +464,12 @@ class _RepairComicGroup extends StatelessWidget {
     }
 
     return ExpansionTile(
-      // 缺页章节动辄几十上百：默认收起，点标题行整本展开/收起
-      // （自带旋转箭头 + 高度动效）。标题行的勾选框负责全选/全不选，
-      // 与展开收起互不干扰（Checkbox 自己消费点击）。
-      initiallyExpanded: false,
+      // 缺页章节动辄几十上百：默认收起。左置箭头提示收起/展开状态
+      // （收起 ▽ / 展开 △，用户 2026-10-16），整行（含箭头）皆可点；
+      // 标题行右侧勾选框负责全选/全不选，与展开收起互不干扰。
+      initiallyExpanded: _expanded,
+      leading: _ExpandHintIcon(expanded: _expanded),
+      onExpansionChanged: (v) => setState(() => _expanded = v),
       tilePadding: const EdgeInsets.symmetric(horizontal: 8),
       childrenPadding: const EdgeInsets.only(left: 16, bottom: 8),
       title: Text(
@@ -441,7 +487,7 @@ class _RepairComicGroup extends StatelessWidget {
       ),
       trailing: Checkbox(
         value: allSelected,
-        onChanged: (_) => onToggleComic(),
+        onChanged: (_) => widget.onToggleComic(),
       ),
       children: [
         for (final cid in chapters)
@@ -455,7 +501,7 @@ class _RepairComicGroup extends StatelessWidget {
               }),
               style: ts.s12,
             ),
-            onChanged: (_) => onToggleChapter(cid),
+            onChanged: (_) => widget.onToggleChapter(cid),
           ),
       ],
     );

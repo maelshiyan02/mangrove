@@ -69,3 +69,18 @@
 - 待 GUI 验收：V2' 队列 tab 中文、V3' 弹窗多选每章一任务
   （当前队列 + 下载中弹窗各显示 N 条）、折叠动效、详细页/本地页
   二级弹窗、无缺页空态。
+
+## 追加：收起/展开箭头提示（用户二次反馈，同日）
+
+- 反馈：修复弹窗能点漫画名收起展开，但初次使用者找不到——需要
+  按钮提示；方向按常规：**收起 ▽（尖朝下）、展开 △（尖朝上）**；
+  符号放漫画名**左侧**，与统计缺页弹窗风格统一。
+- 根因：上轮改造把 ExpansionTile 的 `trailing` 换成 Checkbox，
+  Flutter 默认的右侧旋转箭头被挤掉，只剩无提示的整行点击。
+- 修复：新增共用 `_ExpandHintIcon`（`Icons.expand_more` 收起 /
+  `Icons.expand_less` 展开，20px，onSurfaceVariant 色）；修复弹窗
+  `_RepairComicGroup` 与统计弹窗 `_StatsComicGroup` 均改
+  StatefulWidget + `leading` 左置箭头 + `onExpansionChanged` 同步
+  状态；统计弹窗同时去掉默认右侧箭头（`trailing: SizedBox.shrink()`），
+  两个弹窗统一左置。箭头随整行可点，与右侧 Checkbox 全选互不干扰。
+- 验证：BUILD_OK（analyze rc=0）。
