@@ -47,6 +47,10 @@ S9.5-b 之后工作室管线**一行都不写**旧的 `TranslationStore`（`imag
 
 ## 1. 磁盘布局（三个根）
 
+> 🔰 **搬家/路径失效先读 [A14](A14-路径便携与搬家自愈.md)**：库根、工程根、工程
+> json `directory`、漫画源目录都已接入 PathRoots 便携自愈（exe 上溯找
+> `ComicLibrary/downloads` 签名；`local_path`/`btProjectRoot` 自愈后回写相对形式）。
+
 ```
 ComicLibrary/
 ├── downloads/<漫画>/<章节>/<n>.webp  + cover    ← 本地库（阅读器直接读）

@@ -75,6 +75,7 @@ script_check.json
 bootstrap_check.json
 download_check.json
 portable_paths_check.json
+tools/test_out.txt
 tools/headless_once.bat
 
 # ---- 6. 本机数据与备份 ----

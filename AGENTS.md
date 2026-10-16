@@ -3,15 +3,17 @@
 > 本文件是**薄入口**：只告诉你去哪里读，不重复内容。
 > 适用于任何会读 `AGENTS.md` 的编码 agent（Codex / Cursor / Copilot Workspace / 其他）。
 
-## 你要读的三个地方
+## 你要读的地方（按顺序）
 
 | 顺序 | 路径 | 内容 |
 |---|---|---|
+| 0 | **`../_shared/index.md`**（工作区根的共享层，在本仓库之外） | 跨项目全局规则 / 通用网络 / 共享 venv / 方法论 M01~M14 |
 | 1 | **`.agent/memory/MEMORY.md`** | 主记忆：框架 + 索引 + 三条不能违反的底线（**必读**） |
-| 2 | **`.agent/memory/appendices/A0x-*.md`** | 项目事实（按 MEMORY.md 索引里的「触发时机」按需读） |
-| 3 | **`.agent/kb/INDEX.md`** | 跨项目方法论 M01~M07（做设计/验证/交接前读） |
+| 2 | **`.agent/memory/appendices/A0x-*.md`** | 项目事实（A01~A14，按 MEMORY.md 索引里的「触发时机」按需读；**开工先看 A08**） |
+| 3 | **`.agent/kb/INDEX.md`** | 项目内方法论 M01~M11（做设计/验证/交接前读；M12~M14 在共享层） |
 
-历史决策的来龙去脉：`.agent/memory/appendices/W00-工作日志索引.md`（W01~W42）。
+历史决策的来龙去脉：`.agent/memory/appendices/W00-工作日志索引.md`
+（总索引 + 五卷明细：W00a=W01~W42、W00b=W43~W54、W00c=P11~P20、W00d=P21~P32、W00e=P33~P45）。
 
 ## 两条硬约束
 
