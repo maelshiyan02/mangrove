@@ -2555,7 +2555,7 @@ class _SliverComicSourceState extends State<_SliverComicSource> {
         trailing: const Icon(Icons.arrow_right),
         onTap: () async {
           await context.to(
-            () => _LoginPage(config: source.account!, source: source),
+            () => LoginPage(config: source.account!, source: source),
           );
           if (!mounted) return;
           source.saveData();
@@ -2623,18 +2623,18 @@ class _SliverComicSourceState extends State<_SliverComicSource> {
   }
 }
 
-class _LoginPage extends StatefulWidget {
-  const _LoginPage({required this.config, required this.source});
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key, required this.config, required this.source});
 
   final AccountConfig config;
 
   final ComicSource source;
 
   @override
-  State<_LoginPage> createState() => _LoginPageState();
+  State<LoginPage> createState() => _LoginPageState();
 }
 
-class _LoginPageState extends State<_LoginPage> {
+class _LoginPageState extends State<LoginPage> {
   String username = "";
   String password = "";
   bool loading = false;

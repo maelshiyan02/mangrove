@@ -24,6 +24,7 @@ import 'package:mangrove/network/cache.dart';
 import 'package:mangrove/pages/comic_details_page/comic_page.dart';
 import 'package:mangrove/pages/reader/reader.dart';
 import 'package:mangrove/pages/settings/settings_page.dart';
+import 'package:mangrove/pages/comic_source_page.dart';
 import 'package:mangrove/utils/ext.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/opencc.dart';

@@ -96,6 +96,16 @@ class _NormalFavoritePageState extends State<_NormalFavoritePage> {
 
   @override
   Widget build(BuildContext context) {
+    final source = ComicSource.find(widget.data.key);
+    // If the source requires login (has an account config) but is not
+    // logged in, show a guided "login required" panel instead of letting
+    // ComicList error out with the bare "Not login" string.
+    if (source != null && source.account != null && !source.isLogged) {
+      return _LoginRequiredView(
+        source: source,
+        onLoggedIn: () => setState(() {}),
+      );
+    }
     return ComicList(
       key: comicListKey,
       scrollbarTopPadding: context.padding.top + 56,
@@ -281,6 +291,23 @@ class _MultiFolderFavoritesPageState extends State<_MultiFolderFavoritesPage> {
         ],
       );
     } else if (_errorMessage != null) {
+      final source = ComicSource.find(widget.data.key);
+      if (source != null && source.account != null && !source.isLogged) {
+        return Column(
+          children: [
+            appBar,
+            Expanded(
+              child: _LoginRequiredView(
+                source: source,
+                onLoggedIn: () => setState(() {
+                  _loading = true;
+                  _errorMessage = null;
+                }),
+              ),
+            ),
+          ],
+        );
+      }
       return Column(
         children: [
           appBar,
@@ -609,6 +636,58 @@ class _FavoriteFolder extends StatelessWidget {
           ),
         ];
       },
+    );
+  }
+}
+
+class _LoginRequiredView extends StatelessWidget {
+  const _LoginRequiredView({
+    required this.source,
+    required this.onLoggedIn,
+  });
+
+  final ComicSource source;
+  final VoidCallback onLoggedIn;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.login,
+              size: 64,
+              color: Theme.of(context).colorScheme.secondary,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              "Login required".tl,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "This source requires login to view favorites.".tl,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            Button.filled(
+              onPressed: () async {
+                await context.to(
+                  () => LoginPage(
+                    config: source.account!,
+                    source: source,
+                  ),
+                );
+                if (context.mounted) onLoggedIn();
+              },
+              child: Text("Go to Login".tl),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
