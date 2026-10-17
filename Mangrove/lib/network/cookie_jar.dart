@@ -1,6 +1,6 @@
 import 'package:dio/dio.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/common.dart';
+import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/sqlite_connection.dart';
 import 'package:mangrove/utils/ext.dart';
@@ -311,8 +311,8 @@ class SingleInstanceCookieJar extends CookieJarSql {
     if (instance != null) {
       return instance!;
     }
-    var dataPath = (await getApplicationSupportDirectory()).path;
-    instance = SingleInstanceCookieJar("$dataPath/cookie.db");
+    // Follow App.dataPath so cookies relocate with the rest of the app data.
+    instance = SingleInstanceCookieJar("${App.dataPath}/cookie.db");
     return instance!;
   }
 }

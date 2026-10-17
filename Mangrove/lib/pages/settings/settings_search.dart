@@ -262,6 +262,21 @@ final _settingsSearchIndex = <_SettingsSearchEntry>[
     6,
     keywords: ["javascript", "js", "eval"],
   ),
+
+  // --- 4: Data & Sync (local storage) ---
+  _SettingsSearchEntry("App Data Storage Location", 4),
+  _SettingsSearchEntry(
+    "Data Directory",
+    4,
+    keywords: ["path", "storage", "folder"],
+  ),
+  _SettingsSearchEntry(
+    "Comic Cache Directory",
+    4,
+    keywords: ["cache", "path", "folder"],
+  ),
+  _SettingsSearchEntry("Change Data Directory", 4),
+  _SettingsSearchEntry("Change Comic Cache Directory", 4),
 ];
 
 /// Returns the entries matching [query] (case-insensitive substring over the

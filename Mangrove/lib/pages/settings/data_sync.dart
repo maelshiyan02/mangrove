@@ -21,6 +21,13 @@ class _DataSyncSettingsState extends State<DataSyncSettings> {
     return key.tl;
   }
 
+  Future<void> _openFolder(String path) async {
+    final uri = Uri.file(path);
+    if (await canLaunchUrlString(uri.toString())) {
+      await launchUrlString(uri.toString());
+    }
+  }
+
   void _showSyncLogsDialog(BuildContext context) {
     final logs = DataSync().syncLogs;
     showDialog(
@@ -216,6 +223,131 @@ class _DataSyncSettingsState extends State<DataSyncSettings> {
                 context.showMessage(message: "Cache cleared".tl);
                 setState(() {});
               },
+            ),
+            _SettingsExpansionTile(
+              expansionKey: const PageStorageKey('appDataStorageGroup'),
+              initiallyExpanded: true,
+              icon: Icons.folder,
+              title: "App Data Storage Location".tl,
+              children: [
+                ListTile(
+                  title: Text("Data Directory".tl),
+                  subtitle: Text(
+                    App.dataDirectoryOverride != null
+                        ? '${App.dataPath} (${"Custom".tl})'
+                        : '${App.dataPath} (${"Portable".tl})',
+                    softWrap: false,
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.folder_open),
+                        tooltip: "Open Folder".tl,
+                        onPressed: () => _openFolder(App.dataPath),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy),
+                        tooltip: "Copy".tl,
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: App.dataPath));
+                          context.showMessage(
+                            message: "Path copied to clipboard".tl,
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                ListTile(
+                  title: Text("Comic Cache Directory".tl),
+                  subtitle: Text(CacheManager.configuredPath, softWrap: false),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.folder_open),
+                        tooltip: "Open Folder".tl,
+                        onPressed: () => _openFolder(CacheManager.configuredPath),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.copy),
+                        tooltip: "Copy".tl,
+                        onPressed: () {
+                          Clipboard.setData(
+                            ClipboardData(text: CacheManager.configuredPath),
+                          );
+                          context.showMessage(
+                            message: "Path copied to clipboard".tl,
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                _CallbackSetting(
+                  title: "Change Data Directory".tl,
+                  actionTitle: "Change".tl,
+                  callback: () async {
+                    final result = await selectDirectory();
+                    if (result == null || result.isEmpty) return;
+                    final dir = Directory(result);
+                    if (!dir.existsSync()) {
+                      try {
+                        dir.createSync(recursive: true);
+                      } catch (e) {
+                        if (mounted) {
+                          context.showMessage(
+                            message: "Cannot create directory: $e".tl,
+                          );
+                        }
+                        return;
+                      }
+                    }
+                    await App.setDataDirectoryOverride(result);
+                    if (mounted) {
+                      context.showMessage(
+                        message:
+                            "Data directory set, please restart the app to apply".tl,
+                      );
+                      setState(() {});
+                    }
+                  },
+                ),
+                _CallbackSetting(
+                  title: "Change Comic Cache Directory".tl,
+                  actionTitle: "Change".tl,
+                  callback: () async {
+                    final result = await selectDirectory();
+                    if (result == null || result.isEmpty) return;
+                    try {
+                      await CacheManager.setCustomDirectory(result);
+                      if (mounted) {
+                        context.showMessage(
+                          message:
+                              "Comic cache directory set, please restart the app to apply"
+                                  .tl,
+                        );
+                        setState(() {});
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        context.showMessage(message: e.toString().tl);
+                      }
+                    }
+                  },
+                ),
+                ListTile(
+                  title: Text(
+                    "Changing the directory takes effect after restarting the app."
+                        .tl,
+                  ),
+                  subtitle: Text(
+                    "History, settings, cache and cookies are all stored under the data directory."
+                        .tl,
+                  ),
+                ),
+              ],
             ),
             _CallbackSetting(
               title: "Cache Limit".tl,

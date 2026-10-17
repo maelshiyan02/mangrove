@@ -18,6 +18,9 @@ Ballonstranslator_store/
 Mangrove-portable/
 ComicLibrary/
 builds/
+# 应用运行时数据目录（P-DL7：默认在 exe 同级 data/，本机覆盖到项目根 data/）。
+# 含 appdata.json / 各 db / 漫画缓存 / webview 等用户数据，不进 git。
+/data/
 # 便携漫画源目录（PathRoots：随项目文件夹一起迁移的运行时源脚本/登录态）。
 # 本地搬目录时它跟着走；属用户数据（自定义源/账号 .data），不进 git。
 /comic_source/

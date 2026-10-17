@@ -2,8 +2,11 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart'
     show kIsWeb, TargetPlatform, defaultTargetPlatform;
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:mangrove/foundation/download_network_guard.dart';
 import 'package:mangrove/foundation/history.dart';
@@ -98,9 +101,67 @@ class _App {
     }
   }
 
+  /// Pointer file (in the fixed AppData root, independent of [dataPath]) that
+  /// stores an explicit data-directory override. Kept OUTSIDE [dataPath] so
+  /// reading it has no circular dependency on the very directory it selects.
+  static const String _dataPathPointerFile = '.mangrove_datapath';
+
+  /// Explicitly-set data directory (e.g. the project folder on this machine),
+  /// or null when running with the portable default (next to the executable).
+  String? _dataDirectoryOverride;
+
+  /// The explicit data-directory override, or null.
+  String? get dataDirectoryOverride => _dataDirectoryOverride;
+
+  /// Reads the override pointer from the fixed AppData root (sync, for [init]).
+  String? _readDataDirectoryOverrideSync() {
+    final env = Platform.environment['LOCALAPPDATA'];
+    if (env == null || env.isEmpty) return null;
+    final file = File(p.join(env, _dataPathPointerFile));
+    if (!file.existsSync()) return null;
+    final raw = file.readAsStringSync().trim();
+    return raw.isEmpty ? null : raw;
+  }
+
+  /// Persists or clears the data-directory override. Takes effect on restart.
+  Future<void> setDataDirectoryOverride(String? path) async {
+    final env = Platform.environment['LOCALAPPDATA'];
+    final root = env != null && env.isNotEmpty
+        ? env
+        : p.dirname((await getApplicationSupportDirectory()).path);
+    final file = File(p.join(root, _dataPathPointerFile));
+    final trimmed = path?.trim() ?? '';
+    if (trimmed.isEmpty) {
+      if (file.existsSync()) file.deleteSync();
+      _dataDirectoryOverride = null;
+    } else {
+      file.writeAsStringSync(trimmed);
+      _dataDirectoryOverride = trimmed;
+    }
+  }
+
   Future<void> init() async {
-    cachePath = (await getApplicationCacheDirectory()).path;
-    dataPath = (await getApplicationSupportDirectory()).path;
+    // Effective data directory:
+    //   1. explicit override (project folder) from a fixed pointer file;
+    //   2. portable default: a `data` folder next to the executable so the
+    //      app's data travels with the build.
+    final override = _readDataDirectoryOverrideSync();
+    String resolved;
+    if (override != null && override.isNotEmpty && Directory(override).existsSync()) {
+      resolved = override;
+      _dataDirectoryOverride = override;
+    } else {
+      final exeDir = p.dirname(Platform.resolvedExecutable);
+      resolved = p.join(exeDir, 'data');
+      try {
+        Directory(resolved).createSync(recursive: true);
+      } catch (_) {
+        resolved = (await getApplicationSupportDirectory()).path;
+      }
+      _dataDirectoryOverride = null;
+    }
+    dataPath = resolved;
+    cachePath = resolved;
     if (isAndroid) {
       externalStoragePath = (await getExternalStorageDirectory())!.path;
     }
