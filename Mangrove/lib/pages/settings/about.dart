@@ -45,7 +45,7 @@ class _AboutSettingsState extends State<AboutSettings> {
             const SizedBox(height: 8),
             Text("V${App.version}", style: const TextStyle(fontSize: 16)),
             Text(
-              "Mangrove is a free and open-source, multi-platform comic reader forked from Mangrove and maintained with enhancements over the original.".tl,
+              "Mangrove is a free and open-source, multi-platform comic reader forked from Venera and maintained with enhancements over the original.".tl,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
