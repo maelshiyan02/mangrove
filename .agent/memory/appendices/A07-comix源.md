@@ -64,3 +64,24 @@
 - 分析文档：`docs/P4-comix-to漫画源配置分析-20260929.md`、
   `docs/P4-针对comix.to漫画源配置文件的设计与实施工程记录日志.md`、
   `docs/P4-agent-handoff-comix-to.md`。
+
+## 7. 章节列表采集 · 分组 · 翻页 · 同组重复 bug（扩篇见 A07b）
+
+> 这部分已扩篇为独立附录 **`A07b-comix章节列表采集与分组.md`**（2026-10-17），
+> 碰**章节列表采集 / 分组下拉 / 翻页 / 下载面板分组计数**之前读它。
+
+- 🔴 分组下拉真实可用：`?group_id=N` 切组后列表变短，**先切组再翻页可绕开长列表翻页卡顿**。
+- 🔴 翻页卡顿是通用问题：`page N not effective after wait, stopping` 会提前 break → 只采部分页。
+- 🔴 源站无组内重复；下载面板"同组重复"是 Mangrove bug（local.db 实证 4 处 intra-(组,话) 重复）。
+- 🔴 "Unknown group" 标签误导：真组名在 uploader 字段（如 NUVIATOON）。
+
+## 8. 反爬判定（Third-party 页 / CF 挑战 / 会话标记）→ 见 `A07c`
+
+> 2026-10-19 新增。碰**「Third-party apps are not supported」/「请稍候…」/ 503 /
+> 过完验证仍被拦**之前读 **`A07c-comix反爬与第三方判定.md`**。
+
+- 🔴 `Third-party apps are not supported` = **comix 自己的 503 页**，不是 CF。
+- 🔴 触发原因：**`Page.navigate` 直接打站内非首页 URL**；站内跳转必须用 `pushState` 客户端路由。
+- 🔴 `pushState` 到**同一 URL** 是 no-op → 必须"回首页再进目标"。
+- 🔴 CF 挑战只认**本会话自己的 cf_clearance**；重复导航会把挑战重置。
+- 🔴 503 是**会话级标记**（删 comix cookie 即消失），不是 IP 永久封禁，也别指望换浏览器品牌解决。

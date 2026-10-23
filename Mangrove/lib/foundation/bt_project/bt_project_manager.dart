@@ -21,6 +21,7 @@ import '../translation_project/artifact_reconciliation.dart';
 import '../translation_project/project.dart';
 import '../translation_project/project_bootstrap.dart';
 import '../translation_project/project_io.dart';
+import '../translation_project/studio_project_meta.dart';
 
 /// Registers BallonsTranslator projects as read-only local comics.
 ///
@@ -560,7 +561,12 @@ class BtProjectManager extends ChangeNotifier {
           // (json + neither original nor inpainted/mask on disk). Skipping it
           // silently is what made a project vanish from the studio with no
           // diagnostic, so say so loudly instead.
-          if (coverKeyFor(project) == null) {
+          //
+          // P5 起多一条放行：**空壳工程**（一页图都没有、也没有封面）也是正当的
+          // 工程 —— 用户可以先建壳再往里填页。它靠"有显式归属边车"来证明自己
+          // 不是坏文件；两者都没有 ⇒ 仍然是坏工程，继续跳过。
+          final association = associationFor(project);
+          if (coverKeyFor(project) == null && association == null) {
             Log.warning(
               'BT Project',
               'Skipped ${file.path}: no cover and no page image found '
@@ -680,6 +686,22 @@ class BtProjectManager extends ChangeNotifier {
     return '$idPrefix${hash.toRadixString(16).padLeft(8, '0')}';
   }
 
+  /// 这个工程的**显式归属**（它属于哪一本来源漫画），没有则 null。
+  ///
+  /// 🔴 只认**边车**（`mangrove_project.json`，写在工程根）：那是工程自己携带
+  /// 的归属，不依赖任何外部表，也不会因为"表被清空"而失效。
+  ///
+  /// 刻意**不**在这里回落绑定表（`StudioReaderStore`）：那个表住在
+  /// `translation_project/studio_reader_app.dart`，而那个文件 import 了这个文件
+  /// —— 反向 import 会把两个模块缠成一个环。归类页那一侧（两个方向都能 import）
+  /// 才做绑定表兜底。
+  static StudioProjectMeta? associationFor(BtProject project) {
+    final jsonPath = project.jsonFile.path.replaceAll('\\', '/');
+    final slash = jsonPath.lastIndexOf('/');
+    if (slash <= 0) return null;
+    return StudioProjectMeta.readFromProjectDir(jsonPath.substring(0, slash));
+  }
+
   /// Writes/refreshes the [LocalComic] row for [project]. The parsed project
   /// itself is cached by the caller regardless of this outcome; this only keeps
   /// the local-comic database (grid, favorites, state) in sync.
@@ -690,7 +712,11 @@ class BtProjectManager extends ChangeNotifier {
     int mtime,
   ) {
     final coverKey = coverKeyFor(project);
-    if (coverKey == null) return;
+    final association = associationFor(project);
+    // 🔴 没有封面**不等于**这个工程该消失：空壳工程（还没往里填页）就是这一副
+    // 模样，但它有显式归属边车 ⇒ 是用户自己建的正当工程。没有封面**也没有**
+    // 归属的，才是真的坏文件，交给调用方跳过。
+    if (coverKey == null && association == null) return;
 
     final jsonPath = project.jsonFile.path.replaceAll('\\', '/');
     final parent = _basename(_dirname(jsonPath));
@@ -704,11 +730,20 @@ class BtProjectManager extends ChangeNotifier {
     final comic = LocalComic(
       id: id,
       title: parent.isEmpty ? project.jsonFile.path : parent,
-      subtitle: grandParent,
+      // 🔴 副标题过去是"祖父目录名"，而工程布局是
+      // `<projectsRoot>/<漫画名>-<章节名>/` ⇒ 祖父目录**永远是** `projectsRoot`
+      // 自己，于是所有工程卡的副标题都显示成 "projects"，且归类页按它分组时
+      // 会把同一个 root 下的**所有**工程并成一页。
+      //
+      // 有显式归属时改用**来源漫画名** —— 这才是副标题该表达的东西（"这一章
+      // 属于哪一本"）。没有边车的老工程仍旧回落到祖父目录名（不改动既有行为）。
+      subtitle: association?.comicTitle.isNotEmpty == true
+          ? association!.comicTitle
+          : grandParent,
       tags: const ['BT'],
       directory: project.directory,
       chapters: chapterNames.isEmpty ? null : ComicChapters(displayTitles),
-      cover: coverKey,
+      cover: coverKey ?? '',
       comicType: ComicType.local,
       downloadedChapters: chapterNames,
       createdAt: DateTime.fromMillisecondsSinceEpoch(mtime),
@@ -725,6 +760,10 @@ class BtProjectManager extends ChangeNotifier {
     if (old != null &&
         sameDownloadedChapters &&
         old.title == comic.title &&
+        // 🔴 副标题也要比：边车是**后**写的（工程建成之后才有归属），所以第一
+        // 次扫描登记的行副标题还是 "projects"，边车落盘后的第二次扫描必须能把
+        // 它改成漫画名 —— 不比这一项，这一行就永远停在旧值上。
+        old.subtitle == comic.subtitle &&
         old.directory == comic.directory &&
         old.cover == comic.cover &&
         old.createdAt.millisecondsSinceEpoch == mtime &&

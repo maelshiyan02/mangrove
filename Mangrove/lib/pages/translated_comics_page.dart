@@ -8,7 +8,7 @@ import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/widget_utils.dart';
 import 'package:mangrove/utils/translations.dart';
 
-import 'translation_studio/studio_page.dart';
+import 'translation_studio/translation_project_detail_page.dart';
 import 'translation_studio/studio_project_menu.dart';
 
 /// Entry point of the translation studio (P6 §2.9(e)①, revised in S7R).
@@ -116,15 +116,17 @@ class _TranslationStudioLauncherPageState
               sliver: SliverGridComics(
                 comics: [for (final comic in projects) _asComic(comic)],
                 enableHero: false,
-                onTap: (comic, _) => context.to(
-                  () => TranslationStudioPage(comicId: comic.id),
+                onTap: (comic, _) => TranslationProjectDetailPage.openFor(
+                  context,
+                  comic.id,
                 ),
                 menuBuilder: (comic) => [
                   MenuEntry(
                     icon: Icons.open_in_new,
                     text: 'Open studio'.tl,
-                    onClick: () => context.to(
-                      () => TranslationStudioPage(comicId: comic.id),
+                    onClick: () => TranslationProjectDetailPage.openFor(
+                      context,
+                      comic.id,
                     ),
                   ),
                 ],

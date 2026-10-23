@@ -540,17 +540,26 @@ class SearchOptionWidget extends StatelessWidget {
             runSpacing: 8,
             spacing: 8,
             children: option.options.entries.map((e) {
+              // P-DL9: 防御性解析——当 value 不是合法 JSON List 时（如 String 默认值），
+              // 回退为空列表而不是崩溃。正常情况下 multi-select value 是 jsonEncode([])。
+              List decoded;
+              try {
+                final raw = jsonDecode(value);
+                decoded = raw is List ? raw : const [];
+              } catch (_) {
+                decoded = const [];
+              }
               return OptionChip(
                 text: e.value.ts(sourceKey),
-                isSelected: (jsonDecode(value) as List).contains(e.key),
+                isSelected: decoded.contains(e.key),
                 onTap: () {
-                  var list = jsonDecode(value) as List;
-                  if (list.contains(e.key)) {
-                    list.remove(e.key);
+                  final next = List<String>.from(decoded);
+                  if (next.contains(e.key)) {
+                    next.remove(e.key);
                   } else {
-                    list.add(e.key);
+                    next.add(e.key);
                   }
-                  onChanged(jsonEncode(list));
+                  onChanged(jsonEncode(next));
                 },
               );
             }).toList(),

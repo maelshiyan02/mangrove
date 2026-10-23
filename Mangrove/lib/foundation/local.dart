@@ -750,6 +750,27 @@ class LocalManager with ChangeNotifier {
     notifyListeners();
   }
 
+  /// 直接回写一条本地漫画记录（绕过 [add] 的"拒绝缩小"守卫）。
+  ///
+  /// [add] 的守卫是为防"网络刷新源信息更少时把版本矩阵冲掉"而设，但**用户主动
+  /// 删除章节**恰恰需要把矩阵收小 —— 那条守卫会把它拦下来、保留旧的大矩阵，
+  /// 于是被删的章节在列表里阴魂不散、点开却读不到。本章节编辑（自建漫画加章/
+  /// 删章/换封面）统一走这个直写入口：调用方已经自行算好收小后的矩阵与
+  /// downloadedChapters，不应再被守卫推翻。
+  void updateComicDirect(LocalComic comic) {
+    _writeComic(
+      comic,
+      comic.id,
+      List<String>.from(comic.downloadedChapters),
+      chapters: comic.chapters,
+      tags: comic.tags,
+    );
+    try {
+      const ComicStateRepository().mirrorLocalComic(comic);
+    } catch (_) {}
+    notifyListeners();
+  }
+
   void removeComic(LocalComic comic) {
     remove(comic.id, comic.comicType);
     notifyListeners();

@@ -27,6 +27,8 @@ import 'package:mangrove/pages/comic_details_page/comic_page.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/translations.dart';
 
+import 'package:mangrove/network/comix_client.dart';
+
 import 'download_manager_dialogs.dart';
 
 class DownloadManagerPage extends StatefulWidget {
@@ -227,11 +229,6 @@ class _DownloadManagerPageState extends State<DownloadManagerPage>
           MenuButton(
             entries: [
               MenuEntry(
-                icon: Icons.add_link,
-                text: "Create Download Task".tl,
-                onClick: _showCreateTaskPlaceholder,
-              ),
-              MenuEntry(
                 icon: Icons.delete_sweep_outlined,
                 text: "Clear Past Records".tl,
                 color: context.colorScheme.error,
@@ -244,21 +241,17 @@ class _DownloadManagerPageState extends State<DownloadManagerPage>
     );
   }
 
-  void _showCreateTaskPlaceholder() {
+  /// #11 创建下载任务：comix.to 专用 URL 入口。
+  ///
+  /// ⚠️ 已随 comix.to 在线功能一起在软件内封禁（用户决策，2026-10-19）：站点对
+  /// 自动化/无头访问强拦截、采集基本不可行，Mangrove 内暂不做它的在线下载。
+  /// 入口已移除；本方法连同 `_CreateComixTaskDialog` 保留为死代码，待采集方案
+  /// 成熟、把 `comix_to` 移出 [ComicSourceManager._bannedSourceKeys] 后可恢复。
+  // ignore: unused_element
+  void _showCreateComixTaskDialog() {
     showDialog(
       context: context,
-      builder: (context) => ContentDialog(
-        title: "Create Download Task".tl,
-        content: Text(
-          "Create Download Task Hint".tl,
-        ).paddingHorizontal(16),
-        actions: [
-          Button.filled(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text("OK".tl),
-          ),
-        ],
-      ),
+      builder: (context) => const _CreateComixTaskDialog(),
     );
   }
 
@@ -828,6 +821,272 @@ class _CoverBox extends StatelessWidget {
               filterQuality: FilterQuality.medium,
               fit: BoxFit.cover,
             ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #11 创建下载任务对话框（comix.to 专用，URL 驱动）
+// ---------------------------------------------------------------------------
+
+class _ChapterPick {
+  final String key;
+  final String title;
+  const _ChapterPick(this.key, this.title);
+}
+
+class _CreateComixTaskDialog extends StatefulWidget {
+  const _CreateComixTaskDialog();
+
+  @override
+  State<_CreateComixTaskDialog> createState() => _CreateComixTaskDialogState();
+}
+
+class _CreateComixTaskDialogState extends State<_CreateComixTaskDialog> {
+  final _urlCtl = TextEditingController();
+  bool _loading = false;
+  String? _error;
+  ComicDetails? _details;
+  final Map<String, List<_ChapterPick>> _sections = {};
+  final Set<String> _selected = {};
+
+  static final _urlRe = RegExp(r'comix\.to/title/([A-Za-z0-9]+)(?:-([^/?#]+))?');
+
+  Future<void> _resolve() async {
+    final url = _urlCtl.text.trim();
+    final m = _urlRe.firstMatch(url);
+    if (m == null) {
+      setState(() {
+        _error =
+            '请输入有效的 comix.to 漫画链接（形如 https://comix.to/title/503jz-i-will-save-my-father）';
+      });
+      return;
+    }
+    final hid = m.group(1)!;
+    final slug = m.group(2) ?? '';
+    final comicId = '$hid//$slug';
+    setState(() {
+      _loading = true;
+      _error = null;
+      _details = null;
+      _sections.clear();
+      _selected.clear();
+    });
+    try {
+      final source = ComicSource.find('comix_to');
+      if (source == null || source.loadComicInfo == null) {
+        throw Exception('comix.to 源未加载');
+      }
+      ComicDetails details;
+      try {
+        details = await _loadDetails(source, comicId);
+      } on Object catch (e) {
+        final msg = e.toString();
+        // 🔴 2026-10-19 死锁修复：comix 自家「Third-party 503」是速率封锁，用户过
+        //    CF 也解不开，反而会在死 / 封页面上触发验证死循环（对话框一直转圈）。
+        //    这种错误直接报错，不弹验证窗、不自动验证。
+        if (msg.contains('COMIX_THIRD_PARTY')) rethrow;
+        // 人机协作：真正的 CF 拦截时弹出真实浏览器窗口让用户过一次验证，再重试。
+        final ok = await ComixClient().verifyCloudflare(
+          url: 'https://comix.to/title/$hid',
+        );
+        if (!ok) rethrow;
+        details = await _loadDetails(source, comicId);
+      }
+      final sections = <String, List<_ChapterPick>>{};
+      final ch = details.chapters!;
+      if (ch.isVersioned) {
+        for (final entry in ch.allVersions) {
+          final g = (entry.version.scanlationGroup?.trim().isEmpty ?? true)
+              ? 'Unknown group'.tl
+              : entry.version.scanlationGroup!;
+          sections.putIfAbsent(g, () => []).add(
+            _ChapterPick(entry.version.chapterKey, entry.version.title),
+          );
+        }
+      } else {
+        final ids = ch.ids.toList();
+        final titles = ch.titles.toList();
+        final list = <_ChapterPick>[
+          for (var i = 0; i < ids.length; i++) _ChapterPick(ids[i], titles[i]),
+        ];
+        sections[''] = list;
+      }
+      if (!mounted) return;
+      setState(() {
+        _details = details;
+        _sections
+          ..clear()
+          ..addAll(sections);
+        _loading = false;
+      });
+    } catch (e) {
+      // 🔴 2026-10-19 修复：采集可能耗时 20~60s，用户中途关掉对话框时
+      //    State 已 dispose，此时 setState 会命中 `_element!` 空断言
+      //    （线上日志：Null check operator used on a null value @ _resolve）。
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = '采集失败：${e is Exception ? e.toString().replaceFirst('Exception: ', '') : e}';
+      });
+    }
+  }
+
+  Future<ComicDetails> _loadDetails(ComicSource source, String comicId) async {
+    final res = await source.loadComicInfo!(comicId);
+    if (!res.success || res.data.chapters == null) {
+      throw Exception(res.errorMessage ?? '采集章节失败');
+    }
+    return res.data;
+  }
+
+  Future<void> _create() async {
+    if (_details == null || _selected.isEmpty) return;
+    // comix.to 已被软件内封禁（见 _bannedSourceKeys）；本弹窗入口已移除，
+    // 这里保留 null 守卫以防任何遗留路径触发时直接崩溃。
+    final source = ComicSource.find('comix_to');
+    if (source == null) return;
+    final ct = ComicType(source.key.hashCode);
+    final rootDir = await LocalManager().findValidDirectory(
+      _details!.comicId,
+      ct,
+      _details!.title,
+    );
+    LocalManager().addTasks([
+      for (final k in _selected)
+        ImagesDownloadTask(
+          source: source,
+          comicId: _details!.comicId,
+          comic: _details!,
+          chapters: [k],
+        )..path = rootDir.path,
+    ]);
+    if (mounted) Navigator.of(context).pop();
+    App.rootContext.showMessage(message: 'Download started'.tl);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = _sections.values.expand((e) => e).length;
+    return ContentDialog(
+      title: 'Create Download Task'.tl,
+      content: SizedBox(
+        width: 640,
+        height: 480,
+        child: _details == null
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '粘贴 comix.to 漫画链接，采集章节后选择要下载的章节'
+                        .tl,
+                    style: ts.s12.copyWith(
+                      color: context.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _urlCtl,
+                          decoration: InputDecoration(
+                            hintText:
+                                'https://comix.to/title/503jz-i-will-save-my-father',
+                          ),
+                          onSubmitted: (_) {
+                            _resolve();
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Button.filled(
+                        onPressed: () {
+                          if (_loading) return;
+                          _resolve();
+                        },
+                        isLoading: _loading,
+                        child: Text('Resolve'.tl),
+                      ),
+                    ],
+                  ),
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      _error!,
+                      style: ts.s12.copyWith(
+                        color: context.colorScheme.error,
+                      ),
+                    ),
+                  ],
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '@title · @sel / @total selected'
+                        .tlParams({
+                          'title': _details!.title,
+                          'sel': _selected.length,
+                          'total': total,
+                        }),
+                    style: ts.s12.copyWith(
+                      color: context.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        for (final group in _sections.keys) ...[
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Text(
+                              group.isEmpty ? 'Chapters'.tl : group,
+                              style: ts.s14.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          for (final pick in _sections[group]!)
+                            CheckboxListTile(
+                              dense: true,
+                              title: Text(pick.title, style: ts.s12),
+                              value: _selected.contains(pick.key),
+                              onChanged: (v) {
+                                setState(() {
+                                  if (v == true) {
+                                    _selected.add(pick.key);
+                                  } else {
+                                    _selected.remove(pick.key);
+                                  }
+                                });
+                              },
+                            ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+      ),
+      actions: [
+        Button.text(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text('Cancel'.tl),
+        ),
+        if (_details != null)
+          Button.filled(
+            onPressed: () {
+              if (_selected.isEmpty) return;
+              _create();
+            },
+            child: Text(
+              'Create @n Task(s)'.tlParams({'n': _selected.length}),
+            ),
+          ),
+      ],
     );
   }
 }

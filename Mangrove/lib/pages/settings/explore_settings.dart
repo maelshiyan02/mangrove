@@ -104,6 +104,11 @@ class _ExploreSettingsState extends State<ExploreSettings> {
             }()),
           },
         ).toSliver(),
+        _SwitchSetting(
+          // P-DL9c (2026-10-18): comix.to 反自动化拦截高级筛选 API，默认关闭。
+          title: "高级搜索筛选".tl,
+          settingKey: "enableAdvancedSearchFilters",
+        ).toSliver(),
         SelectSetting(
           title: "Auto Language Filters".tl,
           settingKey: "autoAddLanguageFilter",

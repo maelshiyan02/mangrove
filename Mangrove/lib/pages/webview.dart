@@ -9,6 +9,8 @@ import 'package:url_launcher/url_launcher_string.dart';
 import 'package:mangrove/components/components.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
+import 'package:mangrove/foundation/consts.dart';
+import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/network/proxy.dart';
 import 'package:mangrove/utils/ext.dart';
 import 'package:mangrove/utils/translations.dart';
@@ -93,6 +95,14 @@ class _AppWebviewState extends State<AppWebview> {
 
   double _progress = 0;
 
+  @override
+  void initState() {
+    super.initState();
+    // 🚨 DEBUG: 只要 AppWebview 被创建就立刻写文件
+    io.File("${App.dataPath}\\ua_debug.txt")
+      .writeAsStringSync("[initState] url=${widget.initialUrl}\n");
+  }
+
   late var future = _createWebviewEnvironment();
 
   Future<bool> _createWebviewEnvironment() async {
@@ -118,6 +128,10 @@ class _AppWebviewState extends State<AppWebview> {
     AppWebview.webViewEnvironment = await WebViewEnvironment.create(
       settings: WebViewEnvironmentSettings(
         userDataFolder: "${App.dataPath}\\webview",
+        // P-DL9c (2026-10-18): 和 headless worker 一致，禁用 Client Hints
+        // 否则 WebView2 会自动追加 sec-ch-ua: "Edg" headers → CF challenge 页白屏
+        additionalBrowserArguments:
+            '--disable-features=SecCHUserAgent,EnableClientHintsUserAgentHeaders',
       ),
     );
     return true;
@@ -191,7 +205,12 @@ class _AppWebviewState extends State<AppWebview> {
   Widget createWebviewWithEnvironment(WebViewEnvironment? e) {
     return InAppWebView(
       webViewEnvironment: e,
-      initialSettings: InAppWebViewSettings(isInspectable: true),
+      // P-DL9: 关键！设 Chrome UA 避免 Cloudflare 检测 WebView2 自带的 Edg UA →
+      // Turnstile 挑战页永不渲染 checkbox（用户看到一直转圈）
+      initialSettings: InAppWebViewSettings(
+        isInspectable: true,
+        userAgent: webUA,
+      ),
       initialUrlRequest: URLRequest(
         url: WebUri(widget.initialUrl),
         headers: widget.initialHeaders,
@@ -214,11 +233,27 @@ class _AppWebviewState extends State<AppWebview> {
           return NavigationActionPolicy.ALLOW;
         }
       },
-      onWebViewCreated: (c) {
+      onWebViewCreated: (c) async {
         controller = c;
+        final dbg = io.File("${App.dataPath}\\ua_debug.txt");
+        await dbg.writeAsString("[WebView] onWebViewCreated — evaluating UA...\n");
+        try {
+          final ua = await c.evaluateJavascript(source: "navigator.userAgent");
+          await dbg.writeAsString("✅ actual UA: $ua\n", mode: io.FileMode.append);
+          final headers = await c.evaluateJavascript(source: "JSON.stringify({ua: navigator.userAgent, secChUa: navigator.userAgentData?.brands?.map(b=>b.brand+' '+b.version)})\n");
+          await dbg.writeAsString("📋 full headers: $headers\n", mode: io.FileMode.append);
+        } catch (e) {
+          await dbg.writeAsString("❌ UA eval failed: $e\n", mode: io.FileMode.append);
+        }
         widget.onStarted?.call(c);
       },
-      onLoadStop: (c, r) {
+      onLoadStop: (c, r) async {
+        final dbg = io.File("${App.dataPath}\\ua_debug.txt");
+        await dbg.writeAsString("[WebView] onLoadStop: ${r}\n", mode: io.FileMode.append);
+        try {
+          final ua = await c.evaluateJavascript(source: "navigator.userAgent");
+          await dbg.writeAsString("🔄 post-load UA: $ua\n", mode: io.FileMode.append);
+        } catch (_) {}
         widget.onLoadStop?.call(c);
       },
       onProgressChanged: (c, p) {
@@ -227,6 +262,9 @@ class _AppWebviewState extends State<AppWebview> {
             _progress = p / 100;
           });
         }
+      },
+      onReceivedError: (c, request, error) {
+        debugPrint("AppWebview onReceivedError: url=${request.url} code=${error.type} msg=${error.description}");
       },
     );
   }

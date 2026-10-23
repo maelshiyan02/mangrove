@@ -45,8 +45,15 @@ class LocalComicImageProvider
     if (comic.directory.isEmpty) {
       throw "Error: Cover not found.";
     }
-    File? file = comic.coverFile;
-    if(! await file.exists()) {
+    // 🔴 `cover` 为空时**不能**去拼 `coverFile`：`FilePath.join(baseDir, '')` 落回
+    // `baseDir` 本身，那是个**目录** —— `exists()` 为真，于是后面
+    // `readAsBytes()` 直接对着目录读，抛出来的是一句看不懂的路径错误。
+    //
+    // 空封面的漫画有两类：空壳翻译工程（还没往里填页）与还没封面的本地漫画。
+    // 两类都该走下面的"扫目录找第一张图"，找不到就报"没有封面" —— 这是本来
+    // 就有的兜底路径。
+    File? file = comic.cover.isEmpty ? null : comic.coverFile;
+    if (file == null || !await file.exists()) {
       file = null;
       var dir = Directory(comic.baseDir);
       if (! await dir.exists()) {

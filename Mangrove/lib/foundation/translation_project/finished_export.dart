@@ -462,9 +462,19 @@ class FinishedExport {
     String comicName,
     String? sourceComicId,
   ) {
-    final source = sourceComicId == null
-        ? null
-        : LocalManager().find(sourceComicId, ComicType.local);
+    // 🔴 按 **id** 找来源漫画，**不按 `ComicType.local` 找**：从网络源（comix.to
+    // 等）下载到本地的漫画，`comic_type` 是**源类型整数**（例如 `496108553`），
+    // 写死 local 就永远找不到它 ⇒ 凑不出第二个成员 ⇒ 不建集合 ⇒ 成品成了一张
+    // 孤立的卡，"原版 / 翻译版"两个页签这个设计就等于没上线。
+    LocalComic? source;
+    if (sourceComicId != null) {
+      for (final comic in LocalManager().getComics(LocalSortType.defaultSort)) {
+        if (comic.id == sourceComicId) {
+          source = comic;
+          break;
+        }
+      }
+    }
     final members = <CollectionMember>[
       if (source != null)
         CollectionMember(

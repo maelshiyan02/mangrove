@@ -29,6 +29,7 @@ import 'package:mangrove/foundation/translation_project/project_io.dart';
 import 'package:mangrove/foundation/translation_project/project_writer.dart';
 import 'package:mangrove/foundation/translation_project/result_renderer.dart';
 import 'package:mangrove/foundation/translation_project/studio_project_entry.dart';
+import 'package:mangrove/foundation/translation_project/studio_project_meta.dart';
 import 'package:mangrove/foundation/translation_project/studio_reader.dart';
 
 /// 「素材漫画的某章 → 工作室工程」绑定表的**唯一 owner**。
@@ -380,6 +381,28 @@ class StudioReaderTarget {
 abstract final class StudioReaderLink {
   StudioReaderLink._();
 
+  /// 本地库里这一本漫画的卡片对象。
+  ///
+  /// 🔴 类型必须**从 `sourceKey` 重建**（见 [locate] 的注释）：网络源下载到本地的
+  /// 漫画，`comic_type` 是源类型整数而非 0，写死 local 就找不到。
+  ///
+  /// 抽成方法而不是内联，是为了"查找这一本"的规则只有**一处** —— 边车写入
+  /// （[StudioProjectMeta]）也要用到它，两处各写一遍就会出现"边车里的漫画名是
+  /// 空的、归类页标题也就空了"。
+  static LocalComic? findLocalComic({
+    required String cid,
+    required String? sourceKey,
+  }) {
+    // 🔴 `fromKey` 要的是非空串：`sourceKey` 为 null（本地导入 / 归一化为空）
+    // 时按空串处理，落点与 `locate` 原来的非空入参完全一致。
+    final type = ComicType.fromKey(sourceKey ?? '');
+    var comic = LocalManager().find(cid, type);
+    if (comic == null && type != ComicType.local) {
+      comic = LocalManager().find(cid, ComicType.local);
+    }
+    return comic;
+  }
+
   /// 从本地库定位一本素材漫画的某一章。取不到返回 null（未下载 / 目录不在）。
   ///
   /// 🔴 只接受**本地已下载**的漫画：工程要把原图**复制**进 `source/`
@@ -395,11 +418,7 @@ abstract final class StudioReaderLink {
     // downloads 里躺着原件，却报"本地没有这本漫画的副本"，删除工程后无法重建。
     // 类型从 `sourceKey` 重建（`'local'`→local；`'comix_to'`→496108553），并保留
     // `local` 兜底（本地导入的漫画、sourceKey 归一化为空时都落到 local）。
-    final type = ComicType.fromKey(sourceKey);
-    var comic = LocalManager().find(cid, type);
-    if (comic == null && type != ComicType.local) {
-      comic = LocalManager().find(cid, ComicType.local);
-    }
+    final comic = findLocalComic(cid: cid, sourceKey: sourceKey);
     if (comic == null) return null;
     final base = comic.baseDir;
     if (base.isEmpty || !Directory(base).existsSync()) return null;
@@ -433,12 +452,18 @@ abstract final class StudioReaderLink {
   /// 拒绝理由**。
   ///
   /// 幂等：已经绑定过、且 json 还在 ⇒ 直接返回既有绑定，不碰磁盘。
+  ///
+  /// [allowEmptyShell] 放开"这一章没有页图"的硬拒（见下面 `plan.isEmpty` 处）。
+  /// 默认**关**：阅读器开关那条链路（`studio_enqueue.dart`）必须继续把空章当
+  /// 错误，否则用户拨一下开关就会凭空多出一个空工程。只有"创建翻译工程"向导
+  /// 显式传 true 才会建空壳。
   static Future<(StudioReaderBinding?, String?)> ensureBinding({
     required String cid,
     required String? sourceKey,
     required String eid,
     required StudioReaderTarget target,
     bool forceRescan = false,
+    bool allowEmptyShell = false,
   }) async {
     final originScope = glossaryScopeOf(cid: cid, sourceKey: sourceKey);
     StudioReaderBinding bindingFor(String jsonPath, String projectDirectory) =>
@@ -449,6 +474,17 @@ abstract final class StudioReaderLink {
           originScope: originScope,
           group: target.group,
         );
+
+    // 🔴 边车（显式归属）在**这一刻**写，不等扫描：P4 的归类要靠它，而扫描是
+    // 异步的 —— 刚建完工程就点进归类页时，边车必须已经在盘上。
+    final meta = StudioProjectMeta(
+      comicId: cid,
+      comicTitle:
+          StudioReaderLink.findLocalComic(cid: cid, sourceKey: sourceKey)?.title ??
+              '',
+      sourceKey: sourceKey ?? '',
+      eid: eid,
+    );
 
     final existing = StudioReaderStore.bindingFor(
       cid: cid,
@@ -471,8 +507,11 @@ abstract final class StudioReaderLink {
           eid: eid,
           binding: upgraded,
         );
+        // 老工程早于本特性建成，盘上没有归属信息 —— 顺手补一份。
+        await _writeMeta(existing.jsonPath, meta);
         return (upgraded, null);
       }
+      await _writeMeta(existing.jsonPath, meta);
       return (existing, null);
     }
 
@@ -484,7 +523,16 @@ abstract final class StudioReaderLink {
       comicDirectory: target.comicDirectory,
       chapterName: target.chapterName,
     );
-    if (plan.isEmpty) return (null, 'chapter-has-no-page');
+    // 🔴 空章过去一律硬拒（`'chapter-has-no-page'`）。P5 起"空文件夹工程"也是
+    // 一种正当的工程（用户先建壳、之后再往里填页），所以向导可以把拒变成建：
+    // `ProjectBootstrap.create` 对空 plan 会建出工程目录 + 空页的 json，并把
+    // **源漫画的封面**复制过去当工程封面（所以多数空壳仍有封面可显示）。
+    //
+    // 阅读器开关那条链路仍然拒（`allowEmptyShell` 默认 false）—— 拨一下开关就
+    // 凭空多一个空工程，那是另一种噪声。
+    if (plan.isEmpty && !allowEmptyShell) {
+      return (null, 'chapter-has-no-page');
+    }
 
     final result = await ProjectBootstrap.create(
       projectsRoot: projectsRoot,
@@ -505,6 +553,7 @@ abstract final class StudioReaderLink {
           eid: eid,
           binding: binding,
         );
+        await _writeMeta(result.jsonFile.path, meta);
         return (binding, result.missingSources.isEmpty ? null : 'missing-source');
       }
       return (null, result.error ?? 'create-failed');
@@ -517,6 +566,7 @@ abstract final class StudioReaderLink {
       eid: eid,
       binding: binding,
     );
+    await _writeMeta(result.jsonFile.path, meta);
     if (result.missingSources.isNotEmpty) {
       // 复制不全是**必须上报**的：缺的那几页在工作室里显示成"没有可读页图"，
       // 而"少了几页"与"页面本来就是空的"在界面上长得一样。
@@ -528,6 +578,21 @@ abstract final class StudioReaderLink {
       );
     }
     return (binding, result.missingSources.isEmpty ? null : 'missing-source');
+  }
+
+  /// 把归属边车写到工程 json 所在的目录（= 工程根）。
+  ///
+  /// 🔴 落点是 **json 的父目录**，不是 `directory`（`source/` 副本根）—— 边车
+  /// 描述的是"这个工程"，必须跟着工程 json 走；放进 `source/` 会在工程被重新
+  /// 复制原图时丢在原地，而工程的目录布局是会变的。
+  static Future<void> _writeMeta(
+    String jsonPath,
+    StudioProjectMeta meta,
+  ) async {
+    final path = jsonPath.replaceAll('\\', '/');
+    final slash = path.lastIndexOf('/');
+    if (slash <= 0) return;
+    await StudioProjectMeta.writeToProjectDir(path.substring(0, slash), meta);
   }
 
   /// 工程应当建在哪儿（复用 `BtProjectManager` 的唯一规则，别写第二份）。

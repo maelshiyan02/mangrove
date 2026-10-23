@@ -118,6 +118,7 @@ class StudioProjectOutcome {
     required this.reusedExisting,
     this.listed = true,
     this.projectJsonPath = '',
+    this.emptyProject = false,
   });
 
   /// 建好的工程在本地库里的 id（`bt_<hash>`）。
@@ -146,6 +147,12 @@ class StudioProjectOutcome {
   /// 与"磁盘真的就绪"的判据。**只存 json 路径、不另外存目录** —— 目录是派生的，
   /// 存两份迟早会不一致，而不一致的那一处恰好决定跳转按钮亮不亮。
   final String projectJsonPath;
+
+  /// 这个工程**一页都没有**（源章节本来就没有页图，建的是个空壳）。
+  ///
+  /// 🔴 必须单独说：空壳工程在工作室里表现为"一页都没有"，与"页面本来就是空的"
+  /// 长得一样 —— 不说出来，用户会以为是坏了。
+  final bool emptyProject;
 }
 
 /// 工程根目录（`json` 的父目录）。取不到返回空串。
@@ -167,7 +174,9 @@ String _projectRootOf(String jsonPath) {
 ///
 /// 🔴 提示语用 [App.rootContext] 发：紧接着就是一次页面跳转，用被跳走的那个
 /// `context` 发提示会让它随页面一起消失（"什么都没提示"）。
-Future<void> createStudioProject(
+/// 返回值给"建完就地刷新"的调用方用（翻译工程归类页）：返回 `null` 表示用户
+/// 取消或中途失败；返回非 null 表示**确实建了（或打开了）一个工程**。
+Future<StudioProjectOutcome?> createStudioProject(
   BuildContext context, {
   String? presetComicId,
 }) async {
@@ -175,7 +184,7 @@ Future<void> createStudioProject(
     context: context,
     builder: (_) => _StudioProjectDialog(presetComicId: presetComicId),
   );
-  if (outcome == null || !context.mounted) return;
+  if (outcome == null || !context.mounted) return null;
   // 🔴 建完**不**自动跳工作室：跳转那一刻工作室那侧的工程登记还没跟上，用户看到
   // 的是"没找到工程"的空白（实测：退出重进才好）。改成先落地「创建成功」窗 ——
   // 工程落在哪儿、有几页没复制上、要不要现在过去，全摆在同一屏里由用户自己按。
@@ -184,8 +193,9 @@ Future<void> createStudioProject(
     context: context,
     builder: (_) => _StudioProjectCreatedDialog(outcome: outcome),
   );
-  if (openProject != true || !context.mounted) return;
+  if (openProject != true || !context.mounted) return outcome;
   await context.to(() => TranslationStudioPage(comicId: outcome.comicId));
+  return outcome;
 }
 
 /// 创建成功之后的落地窗 —— **不**自动跳进工作室。
@@ -245,6 +255,9 @@ class _StudioProjectCreatedDialogState
       if (outcome.missingSources > 0)
         '@a page(s) could not be copied'
             .tlParams({'a': '${outcome.missingSources}'}),
+      if (outcome.emptyProject)
+        'The new project has no pages yet. Add page images to it later.'
+            .tl,
     ];
     return Dialog(
       child: SizedBox(
@@ -596,6 +609,10 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
       sourceKey: sourceKey,
       eid: chapter.ref.eid,
       target: target,
+      // 🔴 允许建**空壳工程**：这一章还没有页图时也照样建出一个工程（0 页），
+      // 用户之后可以往里填页。阅读器开关那条链路不传这个开关，仍然把空章当
+      // 错误（拨一下开关就凭空多一个空工程是另一种噪声）。
+      allowEmptyShell: true,
     );
     if (!mounted) return;
     if (binding == null) {
@@ -621,6 +638,8 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
         // 一切正常而工作室看不到它（见 [StudioProjectOutcome.listed]）。
         listed: BtProjectManager().projectFor(comicId) != null,
         projectJsonPath: binding.jsonPath,
+        // 选的那一章本来就没有页图 ⇒ 建出来是个 0 页的空壳。
+        emptyProject: !chapter.selectable,
       ),
     );
   }
@@ -853,7 +872,7 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
     if (options == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (options.every((o) => !o.selectable)) {
+    if (options.isEmpty) {
       return Center(
         child: Text(
           'No chapter with page images. Pick another comic.'.tl,
@@ -868,7 +887,7 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
         Text('Choose a chapter'.tl, style: ts.s14.bold),
         const SizedBox(height: 4),
         Text(
-          'A greyed-out chapter has no page image, so no project can be built from it.'
+          'A chapter without page images can still be selected; the new project will start empty.'
               .tl,
           style: ts.s12.withColor(context.colorScheme.onSurfaceVariant),
         ),
@@ -880,7 +899,6 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
               final option = options[index];
               return ListTile(
                 dense: true,
-                enabled: option.selectable,
                 selected: identical(option, _chapter),
                 title: Text(
                   option.ref.label.isEmpty
@@ -892,16 +910,19 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
                 subtitle: Text(
                   option.selectable
                       ? '@a page(s)'.tlParams({'a': '${option.pageCount}'})
-                      : 'This chapter has no page image.'.tl,
+                      : 'This chapter has no page image. The new project will start empty.'
+                          .tl,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                onTap: option.selectable
-                    ? () => setState(() {
-                        _chapter = option;
-                        _error = '';
-                      })
-                    : null,
+                // 🔴 空章**也允许选**（P5）：以前这里 `enabled: false`，于是
+                // "这一章还没有页图"的用户没有任何出路 —— 而"先建个空工程、
+                // 之后往里填页"是正当需求。灰掉变选中之后，工程会是 0 页的，
+                // 这一点在副标题与创建结果窗里都写明了。
+                onTap: () => setState(() {
+                  _chapter = option;
+                  _error = '';
+                }),
               );
             },
           ),
@@ -948,6 +969,14 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
               'This chapter already has a project. Creating will open the existing one instead.'
                   .tl,
               style: ts.s12.withColor(context.colorScheme.primary),
+            ),
+          ],
+          if (_chapter != null && !_chapter!.selectable) ...[
+            const SizedBox(height: 8),
+            Text(
+              'This chapter has no page image. The new project will start empty.'
+                  .tl,
+              style: ts.s12.withColor(context.colorScheme.onSurfaceVariant),
             ),
           ],
         ],

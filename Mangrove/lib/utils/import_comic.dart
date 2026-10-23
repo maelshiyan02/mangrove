@@ -367,21 +367,34 @@ class ImportComic {
       var toBeCopied = data['toBeCopied'] as List<String>;
       var destination = data['destination'] as String;
       Map<String, String> result = {};
-      for (var dir in toBeCopied) {
-        var source = Directory(dir);
-        var dest = Directory("$destination/${source.name}");
-        if (dest.existsSync()) {
-          // The destination directory already exists, and it is not managed by the app.
-          // Rename the old directory to avoid conflicts.
-          Log.info("Import Comic",
-              "Directory already exists: ${source.name}\nRenaming the old directory.");
-          dest.renameSync(
-              findValidDirectoryName(dest.parent.path, "${dest.path}_old"));
-        }
-        dest.createSync();
-        await copyDirectory(source, dest);
+    for (var dir in toBeCopied) {
+      var source = Directory(dir);
+      var dest = Directory("$destination/${source.name}");
+      if (source.path == dest.path) {
+        // 源已经在库根下（用户把文件夹直接放进库目录再"导入"）：
+        // 无需拷贝，否则会把它自己误判成"已存在的目标"去改名/覆盖，
+        // 正是导致"原文件被顶成 _old 变空"的根因。直接复用原位。
         result[source.path] = dest.path;
+        continue;
       }
+      if (dest.existsSync()) {
+        // 目标已存在（多半是用户手动放进库里、与待导入同名的文件夹）。
+        // 不要覆盖销毁它 —— 把它改名为同级 `${source.name}_old` 备份起来，
+        // 再拷入新源。旧实现把 `${dest.path}_old` 整体传给
+        // findValidDirectoryName，被 sanitizeFileName 把路径斜杠改成空格，
+        // 生成了诸如 "D AI Coding...downloads X_old" 的乱名、且可能把源当成
+        // 目标覆盖。这里只传源名，生成的才是合法且可定位的备份名。
+        final backupName =
+            findValidDirectoryName(dest.parent.path, "${source.name}_old");
+        final backup = Directory(FilePath.join(dest.parent.path, backupName));
+        Log.info("Import Comic",
+            "Directory already exists: ${source.name}\nBacking up the old one to '${backup.path}'.");
+        dest.renameSync(backup.path);
+      }
+      dest.createSync();
+      await copyDirectory(source, dest);
+      result[source.path] = dest.path;
+    }
       return result;
     });
   }

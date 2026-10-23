@@ -1,5 +1,5 @@
 /**
- * comix.to 漫画源 v0.6.5
+ * comix.to 漫画源 v0.6.6
  *
  * 架构：
  * - 元数据：HTTP GET 详情页 initial-data（comix.to 只有详情页有 SSR）
@@ -62,11 +62,12 @@ function _comixBust(url) {
 // 不再重启 worker 重试），这里统一翻成可操作的中英双语提示。
 // 当天实测封禁名单（随时间漂移）：美国/印度/法国/澳大利亚/香港Y01；
 // 可用：香港Y02/Y03/Y05/Y09/Y11、日本Y01/Y03、新加坡Y02、英国/德国/加拿大。
-var _comixBlockedHint = "comix.to 已拦截当前网络出口（WAF 安全校验页）："
-    + "请把代理节点切换到香港其他节点（如 Y05/Y02）/日本/新加坡/英国/德国后重试，"
-    + "当前节点已被封；若当前是直连，请开启代理后再试。"
-    + " / comix.to blocked your current exit IP (WAF security check page): "
-    + "switch the proxy to another HK (e.g. Y05/Y02) / JP / SG / UK / DE node and retry.";
+var _comixBlockedHint = "comix.to 需要手动完成 Cloudflare 人机验证："
+    + "请在应用内打开 comix.to 验证页面（长按 comix.to 源 → 手动过验证），"
+    + "或使用 Chrome 浏览器访问 comix.to 完成验证后，回到应用重试。"
+    + " / comix.to requires manual Cloudflare verification: "
+    + "open the verification page in-app (long-press comix.to source → verify), "
+    + "or complete verification in Chrome and retry.";
 
 function _comixIsBlocked(e) {
     return String(e && e.message !== undefined ? e.message : e).indexOf("COMIX_IP_BLOCKED") >= 0;
@@ -162,17 +163,109 @@ function _comixMapList(res) {
 class ComixTo extends ComicSource {
     name = "comix.to";
     key = "comix_to";
-    version = "0.6.5";
+    version = "0.6.6";
     minAppVersion = "1.4.0";
     url = "https://comix.to";
 
     // === 搜索：SPA 搜索页是空壳（无 SSR），API 要签名 token，
     // 必须走 headless webview 桥接（comix_browse）===
+    // P-DL9 (2026-10-17)：新增高级筛选 optionList。Mangrove 框架自动渲染
+    // 为 chip/dropdown UI，用户选值通过 searchOption 数组传入 load()。
+    // 参数索引（按 optionList 顺序）：
+    //   [0] sort          → query.sort
+    //   [1] types (多选)   → query.types (数组 join 逗号)
+    //   [2] statuses (多选) → query.statuses
+    //   [3] demos (多选)   → query.demos
     search = {
+        // 高级筛选配置（optionList 字段由 parser 自动加载为 SearchOptions）
+        optionList: [
+            {
+                label: "Sort by",
+                type: "select",
+                options: [
+                    "latest_update-Latest Update",
+                    "rating-Rating",
+                    "popularity-Popularity",
+                    "newest-Newest",
+                ],
+            },
+            {
+                label: "Types",
+                type: "multi-select",
+                options: [
+                    "manga-Manga",
+                    "manhwa-Manhwa",
+                    "manhua-Manhua",
+                    "other-Other",
+                ],
+            },
+            {
+                label: "Release Status",
+                type: "multi-select",
+                options: [
+                    "releasing-Releasing",
+                    "finished-Finished",
+                    "on_hiatus-On Hiatus",
+                    "discontinued-Discontinued",
+                ],
+            },
+            {
+                label: "Demographic",
+                type: "multi-select",
+                options: [
+                    "seinen-Seinen",
+                    "shounen-Shounen",
+                    "shoujo-Shoujo",
+                    "josei-Josei",
+                    "ecchi-Ecchi",
+                ],
+            },
+        ],
+
         load: async function(keyword, searchOption, page) {
             page = page || 1;
-            console.log("comix_to: search keyword=" + keyword + " page=" + page);
-            var res = await _comixBrowse({ q: keyword }, page);
+            console.log("comix_to: search keyword=" + keyword + " page=" + page + " options=" + JSON.stringify(searchOption));
+            var query = {};
+            if (keyword && keyword.trim()) query.q = keyword.trim();
+            // P-DL9：解析高级筛选参数（searchOption 数组顺序对应 optionList）
+            if (searchOption && searchOption.length > 0) {
+                // [0] sort — 单选字符串
+                var sortVal = searchOption[0];
+                if (sortVal && sortVal !== "latest_update") {
+                    query.sort = sortVal;
+                }
+                // [1] types — multi-select，值是 JSON 数组字符串
+                var typesRaw = searchOption[1];
+                if (typesRaw) {
+                    try {
+                        var types = JSON.parse(typesRaw);
+                        if (Array.isArray(types) && types.length > 0) {
+                            query.types = types.join(",");
+                        }
+                    } catch (e) {}
+                }
+                // [2] statuses — 同上
+                var statusesRaw = searchOption[2];
+                if (statusesRaw) {
+                    try {
+                        var statuses = JSON.parse(statusesRaw);
+                        if (Array.isArray(statuses) && statuses.length > 0) {
+                            query.statuses = statuses.join(",");
+                        }
+                    } catch (e) {}
+                }
+                // [3] demos — 同上
+                var demosRaw = searchOption[3];
+                if (demosRaw) {
+                    try {
+                        var demos = JSON.parse(demosRaw);
+                        if (Array.isArray(demos) && demos.length > 0) {
+                            query.demos = demos.join(",");
+                        }
+                    } catch (e) {}
+                }
+            }
+            var res = await _comixBrowse(query, page);
             var out = _comixMapList(res);
             console.log("comix_to: search got " + out.comics.length + " comics, maxPage=" + out.maxPage);
             return out;
@@ -252,11 +345,11 @@ class ComixTo extends ComicSource {
             }
             if (!hid) throw new Error("invalid comic id: " + id);
 
-            var headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "text/html,*/*",
-            };
-
+            // 🔴 2026-10-19（第十一轮）：删掉「Chrome 伪装的 Dio headers」。
+            //    comix 的 "Third-party apps are not supported" 正是针对
+            //    「非浏览器 HTTP 客户端」发的：Dio 的 TLS/HTTP2 指纹、缺失的
+            //    Sec-Fetch、伪造 UA 一眼可辨。每发一次 Dio 请求就把本机出口
+            //    往「第三方 app」上推一步，连累随后的浏览器会话也 503。
             var html = null;
             // P41：出口 IP 被 WAF 拦截时给用户的可操作提示
             // （Dart 侧以 COMIX_IP_BLOCKED 错误码标记；P45 起提示文案统一为模块级
@@ -267,21 +360,10 @@ class ComixTo extends ComicSource {
                 ? ["https://comix.to/title/" + hid + "-" + slug]
                 : [];
             urls.push("https://comix.to/title/" + hid);
-            for (var i = 0; i < urls.length; i++) {
-                console.log("comix_to: fetching " + urls[i]);
-                try {
-                    var res = await Network.get(urls[i], headers);
-                    console.log("comix_to: status=" + res.status + " len=" + (res.body ? res.body.length : 0));
-                    if (res.status === 200 && res.body) {
-                        html = res.body;
-                        break;
-                    }
-                } catch (e) {
-                    console.warn("comix_to: fetch err: " + e);
-                }
-            }
-            // 2026-10-05：整站 CF managed challenge 后 dio 通道全 403。
-            // 降级走常驻离屏 WebView 的页内同源 fetch（与章节采集同一通道）。
+            // 🔴 2026-10-19（第十一轮）：**不再走 Network.get（Dio 直连）**。
+            //    只走 comix_fetch_html —— 内置浏览器页内 fetch，带真实 cookie
+            //    与 Sec-Fetch 头，comix 看到的是「浏览器」而不是「app」。
+            var pageMeta = null;
             if (!html) {
                 for (var j = 0; j < urls.length; j++) {
                     try {
@@ -290,20 +372,41 @@ class ComixTo extends ComicSource {
                             method: "comix_fetch_html",
                             url: urls[j],
                         });
-                        if (res2 && res2.status === 200 && res2.body) {
+                        // 2026-10-19：comix 自家「Third-party apps」503 是硬阻断，
+                        // 不是 CF 挑战，重试无用 —— 直接按封禁引导，不再打第二个 URL。
+                        if (res2 && res2.status === 503) {
+                            console.warn("comix_to: comix returned Third-party 503");
+                            ipBlocked = true;
+                            break;
+                        }
+                        // P-DL9：Dart 侧已加 COMIX_IP_BLOCKED 快失败，这里再做
+                        // body 长度检查作为第二道防线——39 字符的 CF challenge
+                        // stub 绝不是有效 SSR HTML（comix 真页至少 20KB）。
+                        if (res2 && res2.status === 200 && res2.body && res2.body.length > 500) {
                             html = res2.body;
+                            pageMeta = res2.meta || null;
+                            break;
+                        } else if (res2 && res2.body && res2.body.length <= 500) {
+                            console.warn("comix_to: webview returned tiny HTML (" + res2.body.length + " chars), treating as challenge");
+                            ipBlocked = true;
                             break;
                         }
                     } catch (e2) {
                         console.warn("comix_to: webview fetch err: " + e2);
                         if (String(e2).indexOf("COMIX_IP_BLOCKED") >= 0) {
                             ipBlocked = true;
+                            break;
                         }
                     }
                 }
             }
             if (!html) {
-                if (ipBlocked) throw new Error(_comixBlockedHint);
+                if (ipBlocked) {
+                    // 2026-10-19：comix 自家 Third-party 503 是速率封锁，用户过 CF
+                    // 也解不开；用显式标记让 Dart 侧「创建下载任务」跳过自动验证，
+                    // 避免死 / 封页面上触发验证死循环（一直转圈）。
+                    throw new Error("COMIX_THIRD_PARTY: " + _comixBlockedHint);
+                }
                 throw new Error("all URLs failed for hid=" + hid);
             }
             // dio 通道偶发返回 200 但 body 是封禁/挑战页：同样按 IP 被封引导。
@@ -315,27 +418,48 @@ class ComixTo extends ComicSource {
             }
 
             // comix.to 实际格式：<script type="application/json" id="initial-data">
+            // 2026-10-19：SPA 客户端路由出来的详情页**没有**这个 SSR 脚本
+            // （只有文档级 SSR 才注入它）。此时退回 DOM 元信息（og:title 等）——
+            // 元信息够建下载任务（标题/封面/简介），章节仍由章节桥单独取。
             var startTag = 'id="initial-data">';
             var startIdx = html.indexOf(startTag);
-            if (startIdx < 0) throw new Error("no initial-data in page");
-            var jsonStart = startIdx + startTag.length;
-            var endIdx = html.indexOf('</script>', jsonStart);
-            if (endIdx < 0) throw new Error("malformed initial-data");
-            var data = JSON.parse(html.substring(jsonStart, endIdx));
-
-            var detail = null;
-            var queries = data.queries || {};
-            var detailKey = JSON.stringify(["manga", "detail", hid]);
-            if (queries[detailKey]) {
-                detail = queries[detailKey];
-            } else {
-                var keys = Object.keys(queries);
-                for (var j = 0; j < keys.length; j++) {
-                    if (keys[j].indexOf('"manga"') >= 0 && keys[j].indexOf('"detail"') >= 0) {
-                        detail = queries[keys[j]];
-                        break;
+            var data = null;
+            if (startIdx >= 0) {
+                var jsonStart = startIdx + startTag.length;
+                var endIdx = html.indexOf('</script>', jsonStart);
+                if (endIdx > jsonStart) {
+                    try {
+                        data = JSON.parse(html.substring(jsonStart, endIdx));
+                    } catch (e) {
+                        console.warn("comix_to: initial-data parse failed: " + e);
                     }
                 }
+            }
+
+            var detail = null;
+            if (data) {
+                var queries = data.queries || {};
+                var detailKey = JSON.stringify(["manga", "detail", hid]);
+                if (queries[detailKey]) {
+                    detail = queries[detailKey];
+                } else {
+                    var keys = Object.keys(queries);
+                    for (var j = 0; j < keys.length; j++) {
+                        if (keys[j].indexOf('"manga"') >= 0 && keys[j].indexOf('"detail"') >= 0) {
+                            detail = queries[keys[j]];
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!detail && pageMeta && pageMeta.title) {
+                detail = {
+                    title: pageMeta.title,
+                    poster: pageMeta.image || '',
+                    synopsis: pageMeta.desc || '',
+                    url: pageMeta.path || '',
+                };
+                console.log("comix_to: initial-data missing → DOM meta fallback: " + detail.title);
             }
             if (!detail) throw new Error("no manga detail for hid " + hid);
             console.log("comix_to: title=" + detail.title + " status=" + detail.status);

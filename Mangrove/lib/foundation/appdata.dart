@@ -424,6 +424,9 @@ class Settings with ChangeNotifier {
     'blockedTags': [],
     'blockedCommentWords': [],
     'defaultSearchTarget': null,
+    // P-DL9c (2026-10-18): comix.to 反自动化升级，高级筛选 API 被服务器 503 拦截。
+    // 默认关闭，用户可在设置里手动打开（等 WebView2 采集修复后再开启）。
+    'enableAdvancedSearchFilters': false,
     'autoPageTurningInterval': 5, // in seconds
     'readerMode': 'galleryLeftToRight', // values of [ReaderMode]
     'enableContinuousChapterReading': true,

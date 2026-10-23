@@ -12,10 +12,12 @@ import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/missing_pages.dart';
 import 'package:mangrove/foundation/open_folder.dart';
 import 'package:mangrove/pages/comic_delete_dialog.dart';
+import 'package:mangrove/pages/local_comic_edit_dialogs.dart';
+import 'package:mangrove/pages/translation_studio/translation_project_detail_page.dart';
+import 'package:mangrove/utils/local_comic_edit.dart';
 import 'package:mangrove/pages/comic_details_page/comic_page.dart';
 import 'package:mangrove/pages/download_manager_dialogs.dart';
 import 'package:mangrove/pages/missing_pages_dialog.dart';
-import 'package:mangrove/pages/translation_studio/studio_page.dart';
 import 'package:mangrove/pages/webdav_migration_dialog.dart';
 import 'package:mangrove/network/download.dart';
 import 'package:mangrove/pages/downloading_page.dart';
@@ -23,9 +25,9 @@ import 'package:mangrove/pages/favorites/favorites_page.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/translations.dart';
 import 'package:mangrove/pages/home_page.dart';
-import 'package:url_launcher/url_launcher_string.dart';
 import 'package:mangrove/foundation/translation_project/finished_export.dart';
 import 'package:mangrove/foundation/translation_project/project.dart';
+import 'package:mangrove/foundation/translation_project/studio_project_meta.dart';
 import 'package:mangrove/pages/translation_studio/studio_project_menu.dart';
 
 /// Short remaining-time text for the download progress label, e.g. "45s",
@@ -139,62 +141,74 @@ class _LocalComicsPageState extends State<LocalComicsPage>
   String _categoryLabel(LocalComic comic) =>
       _categoryLabels[comicCardKindOf(comic.id)] ?? '素材';
 
-  /// 本地库「工程 / 成品」段为空时，在网格位置渲染一张占位卡：
-  /// 虚线边框 + 加号，点击进入对应二级弹窗。
-  /// - 工程段：打开「创建翻译工程」向导（复用 [createStudioProject]）。
-  /// - 成品段：弹出一个本地工程列表，选一个导出成品到 `translated/`。
-  Widget _buildEmptySegmentSliver(BuildContext context) {
+  /// 本地库三个段（素材 / 工程 / 成品）网格末尾**常驻**的「新建」卡片内容。
+  ///
+  /// 与旧的 [_buildEmptySegmentSliver] 不同——它**始终显示**（不再只在空段出现），
+  /// 解决「建完一个工程就找不到再建入口」的反馈（2026-10-23）。卡片由 build
+  /// 里的 `SliverGrid(SliverGridDelegateWithComics())` 承载（与上方
+  /// `SliverGridComics` 同列对齐），这里只返回单元格内容。
+  ///
+  /// 文案统一为**动作型**：新建漫画 / 新建翻译工程 / 导出成品，不再用
+  /// "No ... yet" 这种不适配台词。
+  /// - 素材段：打开「新建本地漫画」对话框（[showCreateLocalComicDialog]）。
+  /// - 工程段：打开「创建翻译工程」向导（[createStudioProject]），完成后
+  ///   重新扫描注册 `bt_` 工程。
+  /// - 成品段：弹出本地工程列表，选一个导出成品到 `translated/`（[_pickProjectAndPublish]）。
+  Widget _buildCreateCard(BuildContext context) {
     final isProduct = kindFilter == ComicCardKind.product;
+    final isProject = kindFilter == ComicCardKind.project;
     final cs = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    return SliverToBoxAdapter(
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 260),
+    final label = isProduct
+        ? '导出成品'
+        : isProject
+            ? '新建翻译工程'
+            : '新建漫画';
+    final sub = isProduct
+        ? '选择一个翻译工程导出成品'
+        : isProject
+            ? '基于本地素材创建翻译工程'
+            : '新建一本本地漫画并填充章节';
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: cs.outline),
+        borderRadius: BorderRadius.circular(12),
+        color: cs.surfaceContainerLowest,
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () async {
+          if (isProduct) {
+            await _pickProjectAndPublish(context);
+          } else if (isProject) {
+            await createStudioProject(context);
+            if (mounted) {
+              await BtProjectManager().scan();
+              update();
+            }
+          } else {
+            final c = await showCreateLocalComicDialog(context);
+            if (c != null && mounted) update();
+          }
+        },
+        child: Center(
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 48),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: isProduct
-                  ? () => _pickProjectAndPublish(context)
-                  : () async {
-                      await createStudioProject(context);
-                      if (mounted) {
-                        await BtProjectManager().scan();
-                        update();
-                      }
-                    },
-              child: Container(
-                decoration: BoxDecoration(
-                  border: Border.all(color: cs.outline),
-                  borderRadius: BorderRadius.circular(12),
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.add, size: 40, color: cs.primary),
+                const SizedBox(height: 8),
+                Text(label.tl, style: textTheme.titleMedium),
+                const SizedBox(height: 4),
+                Text(
+                  sub.tl,
+                  style: textTheme.bodySmall?.copyWith(
+                    color: cs.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.add, size: 48),
-                    const SizedBox(height: 12),
-                    Text(
-                      isProduct
-                          ? 'No published works yet'.tl
-                          : 'No translation projects yet'.tl,
-                      style: textTheme.titleMedium,
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      isProduct
-                          ? 'Pick a project to export a finished comic'.tl
-                          : 'Create a new translation project'.tl,
-                      style: textTheme.bodySmall?.copyWith(
-                        color: cs.onSurfaceVariant,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              ),
+              ],
             ),
           ),
         ),
@@ -258,6 +272,12 @@ class _LocalComicsPageState extends State<LocalComicsPage>
       'translated',
     );
     final comicName = FinishedExport.comicNameFor(chosen);
+    // 🔴 把**来源漫画**一起传出去：成品与原版合成"一张卡两个页签"（原版 /
+    // 翻译版）靠的就是这个 id（P5 的显式归属边车 `mangrove_project.json`）。
+    // 不传 ⇒ `FinishedExport._ensureCollection` 只凑得出一个成员 ⇒ 不建集合，
+    // 成品就只是一张孤立的卡。
+    final sourceComicId =
+        StudioProjectMeta.readFromProjectDir(chosen.jsonDirectory)?.comicId;
     final controller = showLoadingDialog(
       context,
       message: 'Publishing…'.tl,
@@ -270,6 +290,7 @@ class _LocalComicsPageState extends State<LocalComicsPage>
         project: chosen,
         translatedRoot: translatedRoot,
         comicName: comicName,
+        sourceComicId: sourceComicId,
         onProgress: (done, total) {
           if (total > 0) controller.setProgress(done / total);
         },
@@ -604,6 +625,56 @@ class _LocalComicsPageState extends State<LocalComicsPage>
           },
         ),
       ),
+      Tooltip(
+        message: "刷新".tl,
+        child: IconButton(
+          icon: const Icon(Icons.refresh),
+          onPressed: () async {
+            final controller = showLoadingDialog(
+              context,
+              barrierDismissible: false,
+            );
+            try {
+              // 先清理"同一文件夹被多条记录引用"的重复记录（只删记录不删目录），
+              // 再扫描 `ComicLibrary/downloads/` 下未登记的素材文件夹（含空文件夹，
+              // 登记为可填充空漫画），并让工作室把 `projects/` 下的 `bt_` 工程重新注册。
+              // P6：`translated/` 下的成品（`ft_`）同样要补登记 —— 成品过去只在
+              // 导出那一刻登记，换设备 / 重装软件后磁盘上还在、库里却没了。
+              final deduped = await dedupeDownloadFolderRecords();
+              final n = await registerUnlistedDownloadFolders();
+              await BtProjectManager().scan();
+              final products = await registerUnlistedProductFolders();
+              controller.close();
+              if (mounted) {
+                final parts = <String>[];
+                if (deduped > 0) {
+                  parts.add('清理重复 @d 本'.tlParams({'d': deduped}));
+                }
+                if (n > 0) {
+                  parts.add('新增 @n 本'.tlParams({'n': n}));
+                }
+                if (products > 0) {
+                  parts.add('新增 @n 个成品'.tlParams({'n': products}));
+                }
+                context.showMessage(
+                  message: parts.isNotEmpty
+                      ? parts.join('，')
+                      : 'No new comic folders'.tl,
+                );
+                update();
+              }
+            } catch (e, s) {
+              controller.close();
+              Log.error('Local Library', 'Refresh failed', s);
+              if (mounted) {
+                context.showMessage(
+                  message: 'Refresh failed: @a'.tlParams({'a': e}),
+                );
+              }
+            }
+          },
+        ),
+      ),
       MenuButton(
         entries: [
           MenuEntry(
@@ -707,14 +778,7 @@ class _LocalComicsPageState extends State<LocalComicsPage>
                 ),
               ),
             ),
-          if (comics.isEmpty &&
-              !searchMode &&
-              !multiSelectMode &&
-              (kindFilter == ComicCardKind.project ||
-                  kindFilter == ComicCardKind.product))
-            _buildEmptySegmentSliver(context)
-          else
-            SliverGridComics(
+          SliverGridComics(
             comics: comics,
             enableHero: false,
             // 右上角分类小标签（素材 / 工程 / 成品），颜色在 [ComicTile] 里按文案区分。
@@ -741,12 +805,19 @@ class _LocalComicsPageState extends State<LocalComicsPage>
                 // persisted yet, and the `!` would crash. Use it directly.
                 var comic = c as LocalComic;
                 if (BtProjectManager.isBtComic(comic.id)) {
-                  // The "翻译工作室" tab is the studio's front door: an FT
-                  // project opens in the read-only canvas, not in the reader.
-                  // Reading it as a comic still works — the reader's BT branch
-                  // re-renders from `inpainted/` + json — but the canvas is
-                  // where the styles are inspectable.
-                  context.to(() => TranslationStudioPage(comicId: comic.id));
+                  // P4（2026-10-23）：工程卡不再直达工作室画布，而是先进
+                  // 「翻译工程详情页」归类同一本漫画不同章节的多个 bt_ 工程，
+                  // 在详情页点单个工程才进画布。
+                  TranslationProjectDetailPage.openFor(context, comic.id);
+                } else if (comic.comicType == ComicType.local) {
+                  // 本地漫画**没有网络来源**：空文件夹是"可填充"状态，不是
+                  // "未下载不可用"。新建的空本地漫画必须能直接进详情页去加章节 /
+                  // 换封面，所以不能走 [LocalComicStatus.notDownloaded] 那个
+                  // "This comic has not been downloaded yet" 弹窗（那是给有
+                  // 来源的漫画准备的）。无论文件夹是否为空，本地漫画一律进详情页。
+                  context.to(
+                    () => ComicPage(id: comic.id, sourceKey: comic.sourceKey),
+                  );
                 } else if (comic.status == LocalComicStatus.notDownloaded) {
                   _showNotDownloadedDialog(comic);
                 } else {
@@ -807,10 +878,48 @@ class _LocalComicsPageState extends State<LocalComicsPage>
                     });
                   },
                 ),
+                if (comic.comicType == ComicType.local) ...[
+                  MenuEntry(
+                    icon: Icons.add_photo_alternate_outlined,
+                    text: "添加章节".tl,
+                    onClick: () async {
+                      final updated = await showAddChapterDialog(
+                        context,
+                        comic,
+                      );
+                      if (updated != null && mounted) {
+                        update();
+                      }
+                    },
+                  ),
+                  MenuEntry(
+                    icon: Icons.playlist_remove_outlined,
+                    text: "管理章节".tl,
+                    onClick: () async {
+                      final changed = await showManageChaptersDialog(
+                        context,
+                        comic,
+                      );
+                      if (changed && mounted) {
+                        update();
+                      }
+                    },
+                  ),
+                ],
                 ...exportActions([c as LocalComic]),
               ];
             },
           ),
+          // P8（2026-10-23）：三个段的网格末尾都**常驻**一张「新建」卡片
+          // （不再只在空段出现）。这样无论是否已有项目，都能继续新建 / 导出，
+          // 解决「建完一个就找不到入口」的反馈。卡片用与上方 `SliverGridComics`
+          // 相同的 `SliverGridDelegateWithComics` 委托，保证同列对齐。
+          // 仅在正常浏览态显示（搜索 / 多选时隐藏，避免干扰）。
+          if (!searchMode && !multiSelectMode)
+            SliverGrid(
+              gridDelegate: SliverGridDelegateWithComics(),
+              delegate: SliverChildListDelegate([_buildCreateCard(context)]),
+            ),
         ],
       ),
     );

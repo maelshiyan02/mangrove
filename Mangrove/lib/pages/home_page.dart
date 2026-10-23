@@ -36,7 +36,7 @@ import 'package:mangrove/pages/reading_statistics_page.dart';
 import 'package:mangrove/pages/search_page.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/pages/translated_comics_page.dart';
-import 'package:mangrove/pages/translation_studio/studio_page.dart';
+import 'package:mangrove/pages/translation_studio/translation_project_detail_page.dart';
 import 'package:mangrove/utils/data_sync.dart';
 import 'package:mangrove/utils/import_comic.dart';
 import 'package:mangrove/utils/tags_translation.dart';
@@ -1159,8 +1159,9 @@ class _TranslatedComicsState extends State<_TranslatedComics> {
                       heroID: Object.hash('studio', comic.id),
                       width: tileSize.width,
                       height: tileSize.height,
-                      onTap: () => context.to(
-                        () => TranslationStudioPage(comicId: comic.id),
+                      onTap: () => TranslationProjectDetailPage.openFor(
+                        context,
+                        comic.id,
                       ),
                     ).paddingHorizontal(8).paddingVertical(2);
                   },

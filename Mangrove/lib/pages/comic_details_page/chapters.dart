@@ -213,6 +213,30 @@ mixin _ChapterSelectionMixin<T extends StatefulWidget> on State<T> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // P8（2026-10-23）：本地漫画的章节标题行**常驻**「添加章节」入口。
+          // 之前只在 `chapters==null`（空漫画）时由 buildChapters 的空状态引导
+          // 提供该按钮；一旦加了章节，常规章节列表里就再没有任何「添加章节」
+          // 入口，用户无法继续加章。这里挂在标题行 trailing，空/非空都可见，
+          // 且只对本地漫画显示（网络漫画的章节来自源站，不在此处添加）。
+          //
+          // 🔴 P6：**成品（`ft_`）不给这个按钮** —— 成品是导出结果，往它的目录里
+          // 加章，下次导出同一本就会被覆盖（用户加的章无声消失）。成品该有的
+          // 是「只读」提示，而不是编辑入口。
+          if (pageState.comic.comicType == ComicType.local &&
+              !pageState._isProduct)
+            Tooltip(
+              message: "添加章节".tl,
+              child: IconButton(
+                icon: const Icon(Icons.add),
+                onPressed: () async {
+                  final updated = await showAddChapterDialog(
+                    context,
+                    pageState.comic as LocalComic,
+                  );
+                  if (updated != null) pageState.update();
+                },
+              ),
+            ),
           Tooltip(
             message: "Batch manage".tl,
             child: IconButton(

@@ -449,8 +449,8 @@ class ComicChapterVersion {
     return ComicChapterVersion(
       scanlationGroup: json['group'] as String?,
       language: json['lang'] as String?,
-      title: json['title'] as String,
-      chapterKey: json['key'] as String,
+      title: json['title'] as String? ?? '',
+      chapterKey: json['key'] as String? ?? '',
       uploadedAt: ts == null
           ? null
           : DateTime.fromMillisecondsSinceEpoch((ts as num).toInt()),

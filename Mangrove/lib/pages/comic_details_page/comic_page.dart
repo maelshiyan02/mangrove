@@ -54,10 +54,12 @@ import 'package:mangrove/pages/webdav_migration_dialog.dart';
 import 'package:mangrove/pages/search_result_page.dart';
 import 'package:mangrove/pages/settings/settings_page.dart';
 import 'package:mangrove/foundation/translation_project/chapter_translation_state.dart';
+import 'package:mangrove/foundation/translation_project/finished_export.dart';
 import 'package:mangrove/foundation/translation_project/studio_enqueue.dart';
 import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
 import 'package:mangrove/pages/translation_studio/studio_enqueue_message.dart';
 import 'package:mangrove/pages/translation_studio/studio_project_menu.dart';
+import 'package:mangrove/pages/local_comic_edit_dialogs.dart';
 import 'package:mangrove/utils/file_type.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/local_comic_scanner.dart';
@@ -171,6 +173,18 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
   /// The backing local-library comic for this page, when there is one. Lets the
   /// cover load directly from disk for pure local imports (issue #38).
   LocalComic? _localComic;
+
+  /// 这一本是不是**已导出的翻译成品**（`ft_<hash>`）。
+  ///
+  /// 🔴 成品与素材/工程在**语义**上不是一回事：素材是待翻译的原图、工程是
+  /// 可编辑的中���间态、成品是**已经排好版的只读结果**。同一个详情页上不给
+  /// 区别提示，用户会以为成品还能"再加一章""再建个工程"——而这两件事对成品
+  /// 都不成立（成品是导出结果，不该被当成素材再加工）。
+  ///
+  /// 判据用 **id 前缀**（`FinishedExport.idPrefix`），与 `comic_card_kind.dart`
+  /// 的三分法同源；**不看 `comicType`** —— 成品的 `comic_type` 也是 local，
+  /// 拿它判会把真正的本地素材一起算成成品。
+  bool get _isProduct => comic.id.startsWith(FinishedExport.idPrefix);
 
   bool descriptionExpanded = false;
 
@@ -425,6 +439,7 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
           scrollbarTopPadding: context.padding.top + 56,
           slivers: [
             ...buildTitle(horizontalInset),
+            inset(buildProductNotice()),
             inset(buildActions()),
             inset(buildRelatedSources()),
             inset(buildDescription()),
@@ -436,6 +451,64 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
               padding: EdgeInsets.only(
                 bottom: context.padding.bottom + 80,
               ), // Add additional padding for FAB
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 成品的只读提示条（P6）。
+  ///
+  /// 🔴 成品是**导出结果**，不是素材也不是可编辑的工程。详情页上不给提示，
+  /// 用户会照着素材的习惯操作：点「添加章节」往成品目录里塞章（下次导出就被
+  /// 覆盖）、找「创建翻译工程」把成品当素材（向导会选不到任何东西）。
+  ///
+  /// 放在标题下方、其它区块之上 —— 差异是**整页**的性质，不该藏在页脚。
+  Widget buildProductNotice() {
+    if (!_isProduct) return const SliverPadding(padding: EdgeInsets.zero);
+    final scheme = context.colorScheme;
+    return SliverLazyToBoxAdapter(
+      child: Container(
+        margin: const EdgeInsets.only(top: 4, bottom: 8),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: scheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.verified_outlined,
+              color: scheme.onSecondaryContainer,
+              size: 20,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '翻译成品'.tl,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: scheme.onSecondaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '这是从翻译工程导出的成品，页图已经排好版，不能再编辑章节。'
+                        .tl,
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.5,
+                      color: scheme.onSecondaryContainer,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -1079,21 +1152,25 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
         // 列表的显示、与联网无关：网络模式显示全部章节；本地模式隐藏
         // 未下载的白色章节。图标即模式形象（网络=wifi 样子 / 本地=飞行
         // 模式），与系统设置「漫画管理」读写同一个键，切完立即整页重建。
-        IconButton(
-          onPressed: () {
-            setComicDisplayLocalMode(!comicDisplayLocalMode);
-            update();
-          },
-          icon: Icon(
-            comicDisplayLocalMode
-                ? Icons.airplanemode_active
-                : Icons.wifi,
+        // 🔴 P3（2026-10-23）：本地漫画（comicSource==null，无网络源）根本没有
+        // "网络模式"可言——所有章节都是本地的，切换毫无意义反而误导。故仅在
+        // 有网络源时显示该切换，本地漫画默认就是"本地模式"。
+        if (comicSource != null)
+          IconButton(
+            onPressed: () {
+              setComicDisplayLocalMode(!comicDisplayLocalMode);
+              update();
+            },
+            icon: Icon(
+              comicDisplayLocalMode
+                  ? Icons.airplanemode_active
+                  : Icons.wifi,
+            ),
+            tooltip: (comicDisplayLocalMode
+                    ? 'Switch to Network Mode'
+                    : 'Switch to Local Mode')
+                .tl,
           ),
-          tooltip: (comicDisplayLocalMode
-                  ? 'Switch to Network Mode'
-                  : 'Switch to Local Mode')
-              .tl,
-        ),
         if (widget.sourceKey == 'local' ||
             ComicSource.find(widget.sourceKey)?.loadComicInfo != null)
           IconButton(
@@ -1108,7 +1185,11 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
         // 而在这里还要再从一长串漫画里挑出刚打开的这一本，等于把已知的事问第二
         // 遍。所以传 `presetComicId`：向导直接站到第 2 步（选章节）。
         // 🔴 组件是**同一个** `StudioProjectMenu`，差异只有开局步数。
-        StudioProjectMenu(presetComicId: comic.id),
+        //
+        // 🔴 P6：**成品（`ft_`）不给这个入口** —— 成品是导出结果，页图已经排好
+        // 版，拿它当素材再加工是错的（向导本来也把 `ft_` 排除在候选之外，
+        // 留个按钮只会让人点进一个选不了任何东西的向导）。
+        if (!_isProduct) StudioProjectMenu(presetComicId: comic.id),
         IconButton(
           onPressed: showMoreActions,
           icon: const Icon(Icons.more_horiz),
@@ -1841,6 +1922,82 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(0, 12, 0, 28),
                     child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+      // P3（2026-10-23）：本地漫画且确实没有章节（`chapters==null` 是持久空状态，
+      // 不是加载中）时，给友好空状态引导去「添加章节 / 管理章节」，而不是一片空白。
+      // 网络漫画走到这里通常是章节还没异步加载完，不插这条引导。
+      if (_localComic != null && _localComic!.comicType == ComicType.local) {
+        return SliverLazyToBoxAdapter(
+          child: Container(
+            margin: const EdgeInsets.only(top: 16, bottom: 8),
+            decoration: BoxDecoration(
+              color: context.colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const _ComicSectionHeader(
+                  icon: Icons.view_list_rounded,
+                  title: 'Chapters',
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.info_outline,
+                              color: context.colorScheme.primary),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '这本本地漫画还没有任何章节'.tl,
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '导入图片即可作为章节阅读，也可以先设置封面。'.tl,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodyMedium
+                            ?.copyWith(color: context.colorScheme.outline),
+                      ),
+                      const SizedBox(height: 14),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 8,
+                        children: [
+                          FilledButton.icon(
+                            onPressed: () async {
+                              final updated = await showAddChapterDialog(
+                                  context, _localComic!);
+                              if (updated != null && mounted) update();
+                            },
+                            icon: const Icon(Icons.add),
+                            label: Text('添加章节'.tl),
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              final changed = await showManageChaptersDialog(
+                                  context, _localComic!);
+                              if (changed && mounted) update();
+                            },
+                            child: Text('管理章节'.tl),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ],

@@ -28,14 +28,35 @@ library;
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart' show Size;
+import 'package:flutter/material.dart' show Size, Navigator, showGeneralDialog, Colors;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
+import 'package:mangrove/foundation/consts.dart';
+import 'package:mangrove/foundation/js_engine.dart';
 import 'package:mangrove/foundation/log.dart';
+import 'package:mangrove/network/comix_browser.dart';
 import 'package:mangrove/network/proxy.dart';
+import 'package:mangrove/pages/webview.dart';
+
+// P-DL9 (2026-10-18)：全文件共享的 Chrome 伪装 headers
+// — 覆盖 WebView2 自动追加的 sec-ch-ua: "Edg";v=xxx
+const Map<String, String> chromeHeaders = {
+  'sec-ch-ua': '"Chromium";v="155", "Not_A Brand";v="24", "Google Chrome";v="155"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
+  'sec-fetch-site': 'none',
+  'sec-fetch-mode': 'navigate',
+  'sec-fetch-user': '?1',
+  'sec-fetch-dest': 'document',
+  'upgrade-insecure-requests': '1',
+  'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+  'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+  'cache-control': 'max-age=0',
+};
 
 class ComixClient {
   static const _baseUrl = "https://comix.to";
@@ -43,6 +64,10 @@ class ComixClient {
   static final ComixClient instance = ComixClient();
 
   final _worker = _ComixWorker.instance;
+
+  // P-DL9: 防并发验证 —— 多个请求同时检测到 CF challenge 时，
+  // 只有第一个会打开可见 WebView，后续请求 await 同一个 completer。
+  static Completer<bool>? _verifyGuard;
 
   /// 通过离屏 WebView 加载图片字节。
   ///
@@ -80,55 +105,123 @@ class ComixClient {
   /// 实现选择：导航到该 URL 后**同步**读 `document.documentElement.outerHTML`
   /// （不用页内 fetch）—— 既绕开 evaluateJavascript 不 await Promise 的坑
   /// （见 [evalAsyncResult]），又让 CF 挑战由浏览器自己过完再读。
-  Future<String> fetchPageHtml(String url) {
+  /// 通过 headless WebView 抓取 comix.to 页面 HTML（导航后直接读 DOM）。
+  ///
+  /// 🔴 2026-10-19：CDP 导航已由 [fetchPageSnapshot] 负责（且会在 503 熔断时
+  ///    直接返回 blocked，不再回落到这里）。本方法只做 WebView2 兜底，避免对
+  ///    同一 URL 二次 Page.navigate（连发文档导航会触发 comix 的第三方判定）。
+  Future<String> fetchPageHtml(String url) async {
+    // === headless WebView 路径 ===
     return _worker.enqueue(() async {
       final controller = await _worker.ensure();
       try {
         await controller.stopLoading();
       } catch (_) {}
-      await controller.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
 
-      final deadline = DateTime.now().add(const Duration(seconds: 25));
-      while (DateTime.now().isBefore(deadline)) {
-        await Future.delayed(const Duration(milliseconds: 400));
-        final state = unwrapEvalString(
-          await controller.evaluateJavascript(source: "document.readyState"),
-        );
-        if (state == 'complete') break;
-      }
-      // 挑战可能还在自动跑：页面 complete 但内容仍是挑战页，再等几轮。
-      String? lastHtml;
-      for (var attempt = 0; attempt < 3; attempt++) {
-        final html = unwrapEvalString(
-          await controller.evaluateJavascript(
-            source:
-                "(document.documentElement && document.documentElement.outerHTML) || ''",
-          ),
-        );
-        lastHtml = html;
-        if (html != null && html.isNotEmpty && !looksLikeChallengePage(html)) {
-          Log.info(
-            "ComixClient",
-            "fetchPageHtml: ${html.length} chars from $url",
+      Future<String?> safeEval(String js) async {
+        try {
+          return unwrapEvalString(
+            await controller.evaluateJavascript(source: js)
+                .timeout(const Duration(seconds: 5)),
           );
-          return html;
+        } catch (_) {
+          return null;
         }
-        await Future.delayed(const Duration(milliseconds: 2500));
       }
-      // P41：硬封禁页（Cloudflare 403 "Attention Required"）与"挑战还在跑"
-      // 对用户是完全不同的问题：前者是**出口 IP 被封**，等待无意义，必须换
-      // 节点/换网络。抛稳定错误码 COMIX_IP_BLOCKED，由 comix_to.js 翻译为
-      // 可操作提示（实测 2026-10-11：美国/印度节点与南京家宽被封，港日新等
-      // 31 个节点正常）。
-      if (lastHtml != null && looksLikeChallengePage(lastHtml)) {
+
+      Log.info("ComixClient", "fetchPageHtml: loading $url");
+      try {
+        await controller
+            .loadUrl(urlRequest: URLRequest(url: WebUri(url)))
+            .timeout(const Duration(seconds: 15));
+      } catch (e) {
         Log.warning(
           "ComixClient",
-          "fetchPageHtml: hard Cloudflare block for $url "
-          "(${lastHtml.length} chars, current proxy/direct exit is banned)",
+          "fetchPageHtml: loadUrl hung for $url → restarting worker: $e",
         );
-        throw "COMIX_IP_BLOCKED: hard Cloudflare block page for $url";
+        await _worker.restart();
+        final freshController = await _worker.ensure();
+        try {
+          await freshController
+              .loadUrl(urlRequest: URLRequest(url: WebUri(url)))
+              .timeout(const Duration(seconds: 15));
+        } catch (e2) {
+          await _worker.restart();
+          throw "COMIX_IP_BLOCKED: loadUrl hung for $url";
+        }
       }
-      throw "fetchPageHtml: no usable HTML for $url";
+
+      final readyDeadline = DateTime.now().add(const Duration(seconds: 15));
+      String? lastHtml;
+      while (DateTime.now().isBefore(readyDeadline)) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        final state = await safeEval("document.readyState");
+        if (state == null) {
+          Log.warning(
+            "ComixClient",
+            "fetchPageHtml: eval timeout (readyState) for $url",
+          );
+          await _worker.restart();
+          throw "COMIX_IP_BLOCKED: eval timeout on $url";
+        }
+        if (state == 'interactive' || state == 'complete') {
+          for (var sample = 0; sample < 2; sample++) {
+            await Future.delayed(Duration(milliseconds: sample == 0 ? 200 : 500));
+            final href = await safeEval('location.href');
+            final html = await safeEval(
+              "(document.documentElement && document.documentElement.outerHTML) || ''",
+            );
+            if (href == null && html == null) {
+              Log.warning(
+                "ComixClient",
+                "fetchPageHtml: both evals timed out (sample=$sample)",
+              );
+              await _worker.restart();
+              throw "COMIX_IP_BLOCKED: eval timeout on $url";
+            }
+            lastHtml = html;
+            final isWafHref = (href ?? '').contains('/@waf/challenge');
+            final isCfKeyword = html != null && looksLikeChallengePage(html);
+            final isTinyStub = html != null &&
+                html.length < 500 &&
+                !html.contains('initial-data');
+            if (isWafHref || isCfKeyword || isTinyStub) {
+              Log.warning(
+                "ComixClient",
+                "fetchPageHtml: challenge detected for $url "
+                "(href=$href, ${html?.length ?? 0} chars)",
+              );
+              await _worker.restart();
+              throw "COMIX_IP_BLOCKED: challenge page for $url";
+            }
+            if (html != null &&
+                html.length > 20000 &&
+                html.contains('initial-data')) {
+              Log.info(
+                "ComixClient",
+                "fetchPageHtml: ${html.length} chars from $url",
+              );
+              return html;
+            }
+          }
+        }
+      }
+
+      if (lastHtml != null && lastHtml.isNotEmpty) {
+        final isChallenge = looksLikeChallengePage(lastHtml) ||
+            (lastHtml.length < 500 && !lastHtml.contains('initial-data'));
+        if (isChallenge) {
+          Log.warning(
+            "ComixClient",
+            "fetchPageHtml: timeout → challenge page for $url "
+            "(${lastHtml.length} chars)",
+          );
+          await _worker.restart();
+          throw "COMIX_IP_BLOCKED: challenge page for $url";
+        }
+      }
+      await _worker.restart();
+      throw "fetchPageHtml: no usable HTML for $url (timeout, last=${lastHtml?.length ?? 0} chars)";
     }, timeout: const Duration(seconds: 60));
   }
 
@@ -157,10 +250,21 @@ class ComixClient {
     try {
       result = await _tryFetchChapters(hid, slug, url);
     } catch (e) {
-      // P45：出口 IP 被封时立刻把 COMIX_IP_BLOCKED 抛给上层（JS 源翻成
-      // 双语切节点提示），禁止「空结果重启 worker 重试」白等第二遍。
-      if (_isIpBlocked(e)) rethrow;
-      result = {};
+      if (_isIpBlocked(e)) {
+        // 🟢 自动触发 CF 验证（用户完全无感知）
+        Log.info("ComixClient", "fetchChapters: CF detected → auto verifyCloudflare()");
+        final verified = await verifyCloudflare(url: url);
+        if (verified) {
+          Log.info("ComixClient", "fetchChapters: CF passed → retrying...");
+          result = await _tryFetchChapters(hid, slug, url);
+        } else {
+          Log.warning("ComixClient", "fetchChapters: CF not passed → rethrow");
+          rethrow;
+        }
+      } else {
+        Log.error("ComixClient", "fetchChapters error: $e");
+        result = {};
+      }
     }
     if (result.isEmpty) {
       Log.warning(
@@ -173,11 +277,480 @@ class ComixClient {
     return result;
   }
 
+  /// 用 Chrome CDP 采集章节列表。
+  ///
+  /// 章节数据源优先级：
+  ///   1. **CDP 页面内 fetch API** — 最完整（API 返回所有章节所有 scanlation group）
+  ///   2. **DOM 解析 .mchap-row** — 兜底，需要先触发 SPA 加载所有分页才能拿全
+  ///
+  /// comix.to 站点变更记录：
+  ///   - 2026-10-18：initial-data 不再包含 chapters 字段，SSR 方案已废弃
+  Future<Map<String, List<Map<String, dynamic>>>> _parseChaptersFromSSR(
+    ComixCDPWorker cdp, String hid, String slug,
+  ) async {
+    // === 方案 A：CDP 页面内 fetch API（最新最完整）===
+    // 关键：API 需要 _=token 参数（SPA secure.js 生成），不能自己拼 URL
+    // 策略：先让 SPA 自己发请求（navigate 后已自动发），从 performance 里拿完整 URL
+    try {
+      final apiResult = await cdp.evaluate(r"""
+(async function(){
+  try {
+    var hid = '%s';
+    // 1. 先从 performance 找 SPA 已经发过的 chapters API（带 token）
+    var entries = performance.getEntriesByType('resource').filter(function(e){
+      return e.name.indexOf('/api/v1/manga/' + hid + '/chapters') >= 0 && e.name.indexOf('_=') >= 0;
+    });
+    var apiUrl = entries.length > 0 ? entries[entries.length-1].name : null;
+
+    // 2. 如果没找到（SPA 还没发请求），触发 SPA 翻页/点 tab
+    if(!apiUrl) {
+      // 点分页按钮或滚动触发懒加载
+      var btn = document.querySelector('[class*="pagination-next"], [class*="nav-pager-next"]');
+      if(btn) btn.click();
+      // 滚动 chapters section
+      var sec = document.querySelector('section.mpage__chapters, [class*="chapters"]');
+      if(sec) sec.scrollTop = sec.scrollHeight;
+      await new Promise(r => setTimeout(r, 1500));
+      entries = performance.getEntriesByType('resource').filter(function(e){
+        return e.name.indexOf('/api/v1/manga/' + hid + '/chapters') >= 0 && e.name.indexOf('_=') >= 0;
+      });
+      apiUrl = entries.length > 0 ? entries[entries.length-1].name : null;
+    }
+
+    if(!apiUrl) {
+      // 3. 还是没有 token URL — 试试直接 fetch 不带 token（可能返回空或错误）
+      apiUrl = '/api/v1/manga/' + hid + '/chapters?page=1&limit=100';
+    }
+
+    var allItems = [];
+    var seenUrls = new Set();  // 全局按 URL 去重（token invalid 可能返回重复页）
+    var page = 1;
+    var baseUrl = apiUrl.split('?')[0];
+    var qIdx = apiUrl.indexOf('?');
+    var queryParams = qIdx >= 0 ? apiUrl.substring(qIdx+1).split('&') : [];
+    var tokenPart = '';
+    for(var p of queryParams) { if(p.startsWith('_=')) { tokenPart = p; break; } }
+
+    while(true) {
+      // 保留原 query 里所有参数，只替换 page 和 limit
+      var newParams = [];
+      var hasPage = false, hasLimit = false;
+      for(var p of queryParams) {
+        if(p.startsWith('page=')) { newParams.push('page=' + page); hasPage = true; }
+        else if(p.startsWith('limit=')) { newParams.push('limit=100'); hasLimit = true; }
+        else { newParams.push(p); }
+      }
+      if(!hasPage) newParams.push('page=' + page);
+      if(!hasLimit) newParams.push('limit=100');
+      var url = baseUrl + '?' + newParams.join('&');
+
+      var resp = await fetch(url, {credentials:'include', headers:{'Accept':'application/json'}});
+      var text = await resp.text();
+      var data;
+      try { data = JSON.parse(text); } catch(e) { break; }
+      if(!data || !data.result) {
+        if(allItems.length > 0) break;
+        return JSON.stringify({error: 'API invalid: ' + text.substring(0,200), tokenFound: !!tokenPart, status: resp.status});
+      }
+      var items = data.result.items || [];
+      if(items.length === 0) break;
+      
+      // 按 URL 去重
+      var dupesThisPage = 0;
+      items.forEach(function(item){
+        var u = item.url || '';
+        var fullUrl = u.startsWith('http') ? u : 'https://comix.to' + u;
+        if(seenUrls.has(fullUrl)) { dupesThisPage++; return; }
+        seenUrls.add(fullUrl);
+        allItems.push(item);
+      });
+      if(dupesThisPage > 0) {
+        // 出现重复 = token 可能过期了（返回第一页数据）
+        // 继续下一页，但如果连续两页都重复就停
+      }
+      
+      if(!data.result.hasNextPage || items.length < 100) break;
+      page++;
+      if(page > 10) break;
+    }
+
+    var out = {};
+    var dupesInGroup = [];
+    allItems.forEach(function(item){
+      var num = item.number != null ? String(item.number) : '';
+      if(!num) return;
+      var group = (item.group && item.group.name) || '';
+      if(!out[num]) out[num] = [];
+      var entry = {
+        num: num,
+        title: item.name || '',
+        group: group,
+        url: item.url ? (item.url.startsWith('http') ? item.url : 'https://comix.to' + item.url) : ''
+      };
+      // 同 number+group+url 三字段完全相同才认为是真重复
+      var dupe = out[num].some(function(e){
+        return e.group === group && e.url === entry.url;
+      });
+      if(dupe) { dupesInGroup.push({num:num, group:group, url:entry.url}); return; }
+      out[num].push(entry);
+    });
+    return JSON.stringify({
+      totalItems: allItems.length, uniqueNums: Object.keys(out).length,
+      data: out, tokenUsed: !!tokenPart, tokenValue: tokenPart.substring(0, Math.min(20, tokenPart.length)),
+      pageCount: page, seenUrls: seenUrls.size,
+      dupesFiltered: dupesInGroup.length
+    });
+  } catch(e) {
+    return JSON.stringify({error: String(e)});
+  }
+})()
+""".replaceAll('%s', hid));
+      if (apiResult != null && apiResult is String) {
+        final parsed = jsonDecode(apiResult) as Map<String, dynamic>;
+        if (parsed.containsKey('data') && parsed['data'] is Map) {
+          final data = parsed['data'] as Map<String, dynamic>;
+          Log.info("ComixClient", "CDP API chapters: ${parsed['totalItems']} items → ${parsed['uniqueNums']} nums (token=${parsed['tokenUsed']}) ✅");
+          return data.map((k, v) => MapEntry(k, (v as List).cast<Map<String, dynamic>>()));
+        } else if (parsed.containsKey('error')) {
+          Log.warning("ComixClient", "CDP API fetch: ${parsed['error']}");
+        }
+      }
+    } catch (e) {
+      Log.warning("ComixClient", "CDP API fetch failed: $e");
+    }
+
+    // === 方案 B：DOM 解析 .mchap-row（兜底，分页采集）===
+    // comix.to 章节列表每页 20 条（503jz 全集 371 条 ≈ 19 页）。旧实现只读
+    // 当前页 → 371 条只拿到 20 条 → 只有 5 个话号（线上实证）。
+    // 这里用 `?page=N` 的**客户端路由**逐页采集：pushState 不触发文档导航，
+    // 不会再次触发 comix 的 third-party 拦截，也不消耗 CF 挑战次数。
+    const collectJs = r"""
+(function(){
+  var rows = document.querySelectorAll('.mchap-row');
+  var out = {};
+  rows.forEach(function(row){
+    var link = row.querySelector('.mchap-row__primary');
+    var numEl = row.querySelector('.mchap-row__ch');
+    var groupEl = row.querySelector('.mchap-row__group');
+    if(!link || !numEl) return;
+    var num = (numEl.textContent || '').replace(/[^0-9]/g,'');
+    var href = link.getAttribute('href') || '';
+    var group = groupEl ? (groupEl.textContent || '').trim() : '';
+    if(!num || !href) return;
+    var url = href.indexOf('http') === 0 ? href : 'https://comix.to' + href;
+    if(!out[num]) out[num] = [];
+    // 同话同组同 URL 才算重复（多组共存是正常的）
+    if(out[num].some(function(e){ return e.url === url; })) return;
+    out[num].push({num:num, title:link.textContent.trim(), group:group, url:url});
+  });
+  var sec = document.querySelector('SECTION.mpage__chapters');
+  var nums = sec ? Array.from(sec.querySelectorAll('button.npager__num'))
+      .map(function(b){ return parseInt((b.textContent||'').trim(), 10); })
+      .filter(function(n){ return n > 0; }) : [];
+  var active = sec ? sec.querySelector('button.npager__num.is-active') : null;
+  return JSON.stringify({
+    path: location.pathname,
+    search: location.search,
+    rows: rows.length,
+    pagerMax: nums.length ? Math.max.apply(null, nums) : 1,
+    active: active ? (active.textContent||'').trim() : null,
+    blocked: document.body ? document.body.innerText.indexOf('Third-party apps') >= 0 : false,
+    data: out
+  });
+})()
+""";
+
+    final out = <String, List<Map<String, dynamic>>>{};
+    final seenUrls = <String>{};
+    var path = '/';
+    var search = '';
+    var pagerMax = 1;
+
+    Future<bool> collectOnce() async {
+      final raw = await cdp.evaluate(collectJs);
+      if (raw is! String) return false;
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      if (m['blocked'] == true) {
+        Log.warning("ComixClient", "CDP DOM: comix returned Third-party page");
+        return false;
+      }
+      path = (m['path'] as String?) ?? path;
+      search = (m['search'] as String?) ?? search;
+      pagerMax = (m['pagerMax'] as num?)?.toInt() ?? pagerMax;
+      final data = m['data'];
+      if (data is Map) {
+        data.forEach((k, v) {
+          final num = '$k';
+          for (final raw in (v as List)) {
+            final e = Map<String, dynamic>.from(raw as Map);
+            final u = (e['url'] as String?) ?? '';
+            if (u.isEmpty || !seenUrls.add(u)) continue;
+            (out[num] ??= <Map<String, dynamic>>[]).add(e);
+          }
+        });
+      }
+      return true;
+    }
+
+    final ok = await collectOnce();
+    if (!ok) return {};
+    Log.info(
+      "ComixClient",
+      "CDP DOM: page 1 ${seenUrls.length} rows, pagerMax=$pagerMax",
+    );
+
+    if (pagerMax > 1) {
+      final deadline = DateTime.now().add(const Duration(seconds: 100));
+      var stale = 0;
+      for (var p = 2; p <= pagerMax && p <= 40; p++) {
+        if (DateTime.now().isAfter(deadline)) {
+          Log.info("ComixClient", "CDP DOM: paging budget exhausted at page $p");
+          break;
+        }
+        final before = seenUrls.length;
+        final next = Uri(
+          scheme: 'https',
+          host: 'comix.to',
+          path: path,
+          queryParameters: {
+            ...Uri.splitQueryString(search),
+            'page': '$p',
+          },
+        ).toString();
+        await cdp._pushState(next);
+        var gained = 0;
+        final waitUntil = DateTime.now().add(const Duration(seconds: 8));
+        while (DateTime.now().isBefore(waitUntil)) {
+          await Future.delayed(const Duration(milliseconds: 700));
+          if (!await collectOnce()) return out;
+          gained = seenUrls.length - before;
+          if (gained > 0) break;
+        }
+        Log.info(
+          "ComixClient",
+          "CDP DOM: page $p +$gained (cumulative=${seenUrls.length})",
+        );
+        if (gained == 0) {
+          if (++stale >= 2) break;
+        } else {
+          stale = 0;
+        }
+      }
+    }
+
+    if (out.isNotEmpty) {
+      Log.info(
+        "ComixClient",
+        "CDP DOM chapters: ${seenUrls.length} rows → ${out.length} chapter numbers",
+      );
+    }
+    return out;
+  }
+
+  /// 用 Chrome CDP 采集章节图片 URL — 并行 click seg 按钮 + 轮询 DOM。
+  ///
+  /// comix.to 章节页是 SPA：虚拟化渲染（同时只显示 3-5 张），
+  /// 但 105 个 .rpage-progress__seg 按钮每 click 一个 → SPA 内部预取下一张
+  /// → 我们并行 click 所有 seg（10ms 间隔）→ SPA 并行预取 → 2-3 秒收齐。
+  Future<List<String>> _fetchChapterImagesViaCDP(
+    ComixCDPWorker cdp, String chapterUrl,
+  ) async {
+    // 1. 导航到章节页
+    Log.info("ComixClient", "CDP navigate → $chapterUrl");
+    await cdp.navigate(chapterUrl);
+
+    // 2. 检查是否被 third-party 拦截
+    final hasThirdParty = await cdp.evaluate(
+      "document.body.innerText.indexOf('Third-party apps') >= 0",
+    );
+    if (hasThirdParty == true) {
+      throw Exception("CDP: comix.to blocked this Chrome instance — needs CF");
+    }
+
+    // 3. 清理透明广告层 + 装 MutationObserver + 并行 click 所有 seg
+    final setupJs = """
+(function(){
+  // 清广告层
+  var adSelectors = '[class*="ad-"],[class*="overlay"],[class*="modal"],[class*="popup"],[class*="interstitial"],[class*="shield"]';
+  document.querySelectorAll(adSelectors).forEach(function(el){ if(el.style) el.style.display='none'; });
+
+  // 收集已发现的图片
+  if(!window.__comixImgUrls) window.__comixImgUrls = new Set();
+  document.querySelectorAll('.rpage-page__img').forEach(function(img){ if(img.src) window.__comixImgUrls.add(img.src); });
+
+  // MutationObserver 监听新 img
+  if(!window.__comixImgObs){
+    window.__comixImgObs = new MutationObserver(function(mutations){
+      mutations.forEach(function(m){
+        m.addedNodes.forEach(function(n){
+          if(n.querySelectorAll){
+            n.querySelectorAll('.rpage-page__img').forEach(function(img){ if(img.src) window.__comixImgUrls.add(img.src); });
+          }
+          if(n.classList && n.classList.contains && n.classList.contains('rpage-page__img') && n.src){ window.__comixImgUrls.add(n.src); }
+        });
+      });
+    });
+    window.__comixImgObs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+  }
+
+  // 并行 click 所有 seg（10ms 间隔让 SPA 有时间处理）
+  var segs = document.querySelectorAll('.rpage-progress__seg');
+  var total = segs.length;
+  for(var i=0; i<segs.length; i++){
+    (function(seg, idx){ setTimeout(function(){ seg.click(); }, idx*10); })(segs[i], i);
+  }
+  return total;
+})()
+""";
+    final segTotal = await cdp.evaluate(setupJs);
+    Log.info("ComixClient", "CDP segs total: $segTotal");
+
+    // 4. 轮询收齐所有图片
+    final stopwatch = Stopwatch()..start();
+    var lastCount = 0;
+    var stableTicks = 0;
+    const maxWait = Duration(seconds: 15);
+
+    while (stopwatch.elapsed < maxWait) {
+      final urlsJson = await cdp.evaluate(
+        "JSON.stringify(Array.from(window.__comixImgUrls || new Set()))",
+      );
+      if (urlsJson != null && urlsJson is String) {
+        try {
+          final list = jsonDecode(urlsJson) as List;
+          if (list.length > lastCount) {
+            lastCount = list.length;
+            stableTicks = 0;
+            Log.info("ComixClient", "CDP images: ${list.length}");
+          } else {
+            stableTicks++;
+          }
+          // 收齐或连续 3 次没增长
+          if (segTotal != null && list.length >= (segTotal as int) - 1) break;
+          if (stableTicks >= 3) break;
+        } catch (_) {}
+      }
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
+    final finalUrls = await cdp.evaluate(
+      "JSON.stringify(Array.from(window.__comixImgUrls || new Set()))",
+    );
+    if (finalUrls != null && finalUrls is String) {
+      try {
+        final list = jsonDecode(finalUrls) as List;
+        Log.info("ComixClient", "CDP final images: ${list.length}");
+        return list.cast<String>();
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  /// 采集用的页面快照：**一次导航**同时拿到 HTML 与 DOM 元信息。
+  ///
+  /// 背景（2026-10-19）：详情页在 comix 上是 SPA 客户端路由渲染，**没有 SSR 的
+  /// `#initial-data`**（那是服务端渲染才注入的），所以 JS 源 `loadInfo` 会报
+  /// `no manga detail`。这里把 `og:*` / `h1` / 章节行数一起交上去，让 JS 源
+  /// 退化成「DOM 元信息 + 章节桥」继续建下载任务，而不是整体失败。
+  ///
+  /// 返回：`{status, blocked, html, meta}`。
+  Future<Map<String, dynamic>> fetchPageSnapshot(String url) async {
+    final cdp = ComixCDPWorker.instance;
+    try {
+      await cdp.navigate(url);
+    } catch (e) {
+      // 命中 503 熔断（COMIX_THIRD_PARTY）或死 CDP 超时：直接按封禁返回，
+      // 不再往下走 WebView 兜底——WebView 同样过不了 CF，还会触发自动验证死循环。
+      final s = e.toString();
+      Log.warning("ComixClient", "fetchPageSnapshot: navigate 失败 ($s) → 返回 blocked");
+      return <String, dynamic>{
+        'status': 503,
+        'blocked': true,
+        'html': '',
+        'meta': <String, dynamic>{},
+      };
+    }
+    if (cdp.blockedThirdParty) {
+      return <String, dynamic>{
+        'status': 503,
+        'blocked': true,
+        'html': '',
+        'meta': <String, dynamic>{},
+      };
+    }
+    try {
+      final html = await cdp.evaluate(
+        "document.documentElement ? document.documentElement.outerHTML : ''",
+      );
+      final meta = await cdp.pageMeta();
+      return <String, dynamic>{
+        'status': 200,
+        'blocked': false,
+        'html': html is String ? html : '',
+        'meta': meta,
+      };
+    } catch (e) {
+      Log.warning("ComixClient", "fetchPageSnapshot: 读 DOM 失败 ($e) → 返回 blocked");
+      return <String, dynamic>{
+        'status': 503,
+        'blocked': true,
+        'html': '',
+        'meta': <String, dynamic>{},
+      };
+    }
+  }
+
+  /// 503 Third-party 的处理策略（2026-10-19 二次取证后重写）。
+  ///
+  /// 上一轮这里是「清 cookie → 人过 CF → 重载首页 → 重试」，实证是**错的**：
+  ///   - 清 cookie 后 comix 仍 503（全新 profile 只导航一次首页就 503）；
+  ///   - 恢复流程本身要连发 2 次首页导航 + 2 次路由，直接把 503 从 1 次放大
+  ///     到 4 次（线上 16:53:47 成功 → 16:54:29 起全站 503）。
+  /// 所以现在只做一件事：**立刻停下**，把可操作信息抛给用户。
+  static const comixThirdPartyHint =
+      "comix.to 判定本次自动化会话为「第三方应用」（HTTP 503）。"
+      "这不是 Cloudflare 挑战，重试/清缓存都没用；请等待约 10 分钟冷却，"
+      "或换一个网络出口后，先点「验证 CF」再采集。";
+
   Future<Map<String, List<Map<String, dynamic>>>> _tryFetchChapters(
     String hid,
     String slug,
     String url,
   ) async {
+    // P-DL9 (2026-10-18)：优先走 Chrome CDP（TLS 指纹正确，不被 CF challenge）
+    final cdp = ComixCDPWorker.instance;
+    if (await cdp.isAvailable()) {
+      try {
+        Log.info("ComixClient", "fetchChapters(hid=$hid) via Chrome CDP SSR");
+        // 🔴 2026-10-19：**不再**把 cf_cookie.json 里的旧 cf_clearance 回注 CfT。
+        //    CfT 有自己的持久 profile，cookie 本来就在 jar 里；回注一个**过期/
+        //    已被标记**的 clearance 反而会让 comix 直接回 503 Third-party
+        //    （线上 16:44 日志：刚 bootstrap 首页就 `comix returned Third-party page`）。
+        //    保存 cookie 只服务于 JS 引擎直连路径，与 CfT 无关。
+        await cdp.navigate(url, waitForChapters: true);
+        if (cdp.blockedThirdParty) {
+          // 503 → 立刻停手（不再"清 cookie + 重载首页"放大封禁）。
+          Log.warning("ComixClient", "CDP hit Third-party 503 → abort (no retry)");
+          await cdp.dispose();
+          throw "COMIX_THIRD_PARTY: $comixThirdPartyHint";
+        } else {
+          final result = await _parseChaptersFromSSR(cdp, hid, slug);
+          if (result.isNotEmpty) {
+            Log.info("ComixClient", "CDP SSR returned ${result.length} chapters ✅");
+            return result;
+          }
+          Log.warning("ComixClient", "CDP SSR empty — falling back to headless WebView");
+          await cdp.dispose();
+        }
+      } catch (e) {
+        // 503 是硬阻断：不降级、不重试，直接把可操作提示抛给 UI。
+        if (e is String && e.contains('COMIX_THIRD_PARTY')) rethrow;
+        Log.warning("ComixClient", "CDP SSR failed: $e — falling back to headless");
+        await cdp.dispose();
+      }
+    }
+
+    // === 以下是 headless WebView 路径（CDP 不可用时 fallback） ===
     Log.info("ComixClient", "fetchChapters(hid=$hid) via headless worker");
 
     Map<String, List<Map<String, dynamic>>> result = {};
@@ -226,10 +799,22 @@ class ComixClient {
     try {
       urls = await _tryFetchImageUrls(chapterUrl);
     } catch (e) {
-      // P45：出口 IP 被封 —— 立刻把 COMIX_IP_BLOCKED 抛给 JS 源（双语切节点
-      // 提示），禁止「空结果重启 worker 重试」把 45s 等待翻倍成 90s。
-      if (_isIpBlocked(e)) rethrow;
-      urls = const [];
+      if (_isIpBlocked(e)) {
+        // 🟢 自动触发 CF 验证（和 fetchChapters 一致）
+        Log.info("ComixClient", "fetchImageUrls: CF detected → auto verifyCloudflare()");
+        final verified = await verifyCloudflare(url: chapterUrl);
+        if (verified) {
+          Log.info("ComixClient", "fetchImageUrls: CF passed → retrying...");
+          await _worker.restart();
+          urls = await _tryFetchImageUrls(chapterUrl);
+        } else {
+          Log.warning("ComixClient", "fetchImageUrls: CF not passed → rethrow");
+          rethrow;
+        }
+      } else {
+        Log.error("ComixClient", "fetchImageUrls error: $e");
+        urls = const [];
+      }
     }
     if (urls.isEmpty) {
       Log.warning(
@@ -243,6 +828,25 @@ class ComixClient {
   }
 
   Future<List<String>> _tryFetchImageUrls(String chapterUrl) async {
+    // P-DL9 (2026-10-18)：优先走 Chrome CDP（和 fetchChapters 同方案）
+    final cdp = ComixCDPWorker.instance;
+    if (await cdp.isAvailable()) {
+      try {
+        Log.info("ComixClient", "fetchImageUrls via Chrome CDP");
+        final urls = await _fetchChapterImagesViaCDP(cdp, chapterUrl);
+        if (urls.isNotEmpty) {
+          Log.info("ComixClient", "CDP returned ${urls.length} images ✅");
+          return urls;
+        }
+        Log.warning("ComixClient", "CDP images empty — falling back to headless");
+        await cdp.dispose();
+      } catch (e) {
+        Log.warning("ComixClient", "CDP images failed: $e — falling back to headless");
+        await cdp.dispose();
+      }
+    }
+
+    // === 以下是 headless WebView 路径（CDP 不可用时 fallback） ===
     List<String> urls = [];
     try {
       urls = await _worker.enqueue(
@@ -287,7 +891,6 @@ class ComixClient {
     int page = 1,
   }) async {
     Log.info("ComixClient", "browseManga($urlQuery, page=$page)");
-    // page/limit 直接放进 browse URL，SPA 会透传到 API 请求。
     final query = Map<String, String>.from(urlQuery);
     query['page'] = '$page';
     query['limit'] = '28';
@@ -299,17 +902,57 @@ class ComixClient {
         .join('&');
     final url = params.isEmpty ? "$_baseUrl/browse" : "$_baseUrl/browse?$params";
 
-    var result = await _route(() => _browseViaApi(url), const Duration(seconds: 90));
-    final apiItems = result['items'];
-    if (apiItems is List && apiItems.isNotEmpty) return result;
+    // P-DL9 (2026-10-18)：Chrome CDP 优先 — 绕过 CF 不被 challenge
+    final cdp = ComixCDPWorker.instance;
+    if (await cdp.isAvailable()) {
+      try {
+        Log.info("ComixClient", "browseManga via Chrome CDP → $url");
+        final cdpResult = await _browseViaCDP(cdp, url);
+        final cdpItems = cdpResult['items'];
+        if (cdpItems is List && cdpItems.isNotEmpty) {
+          Log.info("ComixClient", "CDP browse returned ${cdpItems.length} items ✅");
+          return cdpResult;
+        }
+        Log.warning("ComixClient", "CDP browse empty → fallback WebView");
+      } catch (e) {
+        Log.warning("ComixClient", "CDP browse failed: $e → fallback WebView");
+      }
+    }
 
-    // 🔴 2026-10-11 (Mangrove P42)：列表 API 的响应被站方加密（截获不到明文），
-    // 旧实现直接返回空 ⇒ 搜索"转圈后无结果"。改为读 SPA 渲染出的卡片 DOM。
-    Log.warning("ComixClient", "browse API empty — falling back to DOM scraping");
-    final dom = await _route(() => _browseByDom(url), const Duration(seconds: 120));
-    final domItems = dom['items'];
-    if (domItems is List && domItems.isNotEmpty) return dom;
-    return result;
+    // === headless WebView 路径（CDP 不可用时 fallback） ===
+    try {
+      var result = await _route(() => _browseViaApi(url), const Duration(seconds: 90));
+      final apiItems = result['items'];
+      if (apiItems is List && apiItems.isNotEmpty) return result;
+
+      Log.warning("ComixClient", "browse API empty — falling back to DOM scraping");
+      final dom = await _route(() => _browseByDom(url), const Duration(seconds: 120));
+      final domItems = dom['items'];
+      if (domItems is List && domItems.isNotEmpty) return dom;
+      return result;
+    } catch (e) {
+      // P-DL9c (2026-10-18)：browseManga 也要自动 CF 恢复！之前只 fetchChapters 有
+      if (_isIpBlocked(e)) {
+        Log.info("ComixClient", "browseManga: CF detected → auto verifyCloudflare()");
+        final verified = await verifyCloudflare(url: url);
+        if (verified) {
+          Log.info("ComixClient", "browseManga: CF passed → retrying...");
+          // 重启 worker（让新 cookie 生效）
+          await _worker.restart();
+          var result = await _route(() => _browseViaApi(url), const Duration(seconds: 90));
+          final apiItems = result['items'];
+          if (apiItems is List && apiItems.isNotEmpty) return result;
+          final dom = await _route(() => _browseByDom(url), const Duration(seconds: 120));
+          final domItems = dom['items'];
+          if (domItems is List && domItems.isNotEmpty) return dom;
+          return result;
+        } else {
+          Log.warning("ComixClient", "browseManga: CF not passed");
+          rethrow;
+        }
+      }
+      rethrow;
+    }
   }
 
   /// worker 队列 + 异常归一化：失败时返回空结果而不是把异常抛给调用方。
@@ -391,7 +1034,123 @@ class ComixClient {
 })()
 """;
 
-  /// 浏览/搜索的 DOM 兜底：列表 API 拿不到明文时，读 SPA 渲染出的卡片。
+  /// CDP browse：先到首页让 SPA bootstrap，然后在页面上下文里 fetch browse API。
+  ///
+  /// ⚠️ 不能直接 Page.navigate 到 /browse — SPA 路由没识别硬刷的 /browse URL，
+  ///     main.js 只发首页 API，不会触发 browse 卡片渲染。
+  /// 方案：首页 bootstrap → 直接 fetch /api/v1/manga API（SPA 会带 token+cookie）
+  /// → 解析 JSON items 返回。
+  Future<Map<String, dynamic>> _browseViaCDP(ComixCDPWorker cdp, String browseUrl) async {
+    // Step 1: navigate 到首页让 SPA 完整 bootstrap（main.js 加载 + 路由就绪）
+    final currentUrl = await cdp.currentUrl();
+    if (currentUrl == null || !currentUrl.contains('comix.to')) {
+      Log.info("ComixClient", "CDP browse: navigating to homepage first...");
+      await cdp.navigate('$_baseUrl/');
+      // 等 SPA bootstrap（API 请求出现）
+      for (var i = 0; i < 10; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        final ready = await cdp.evaluate(
+          "document.querySelectorAll('a.card').length > 0 || !!document.querySelector('#app-root')",
+        );
+        if (ready == true || ready == 'true') break;
+      }
+    }
+
+    // Step 2: 在页面上下文里 fetch browse API
+    // URL 参数映射：comix.to /browse?q=xxx → API /api/v1/manga?keyword=xxx&sort=xxx...
+    // 需要 SPA 的 token（__=），从 performance 里找 SPA 已发的首页 API 拿 token
+    final apiResult = await cdp.evaluate(r"""
+(async function(){
+  try {
+    // 从 browse URL 提取筛选参数
+    var browseUrl = '%s';
+    var qIdx = browseUrl.indexOf('?');
+    var params = {};
+    if(qIdx >= 0) {
+      browseUrl.substring(qIdx+1).split('&').forEach(function(p){
+        var kv = p.split('=');
+        if(kv.length === 2) params[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1]);
+      });
+    }
+    var page = parseInt(params['page']) || 1;
+    var limit = parseInt(params['limit']) || 28;
+
+    // 从 performance 找 SPA 已发的首页 API — 里面有 token
+    var entries = performance.getEntriesByType('resource').filter(function(e){
+      return e.name.indexOf('/api/v1/manga?') >= 0;
+    });
+    var token = null;
+    if(entries.length > 0) {
+      var lastApi = entries[entries.length-1].name;
+      var tIdx = lastApi.indexOf('&_=');
+      if(tIdx >= 0) token = lastApi.substring(tIdx);  // 包含 '&_=xxx'
+    }
+
+    // 构造 API URL
+    // comix.to browse → /api/v1/manga?order[xxx]=desc&keyword=xxx&sort=xxx&types=xxx...
+    var apiParams = [
+      'page=' + page,
+      'limit=' + limit,
+      'content_rating[]=safe',
+      'content_rating[]=suggestive'
+    ];
+    if(params['q']) apiParams.push('keyword=' + encodeURIComponent(params['q']));
+    if(params['sort']) apiParams.push('sort=' + encodeURIComponent(params['sort']));
+    if(params['types']) params['types'].split(',').forEach(function(t){ if(t) apiParams.push('types[]=' + encodeURIComponent(t)); });
+    if(params['statuses']) params['statuses'].split(',').forEach(function(s){ if(s) apiParams.push('statuses[]=' + encodeURIComponent(s)); });
+    if(params['demos']) params['demos'].split(',').forEach(function(d){ if(d) apiParams.push('demos[]=' + encodeURIComponent(d)); });
+    if(token) apiParams.push(token);
+
+    var apiUrl = '/api/v1/manga?' + apiParams.join('&');
+    var resp = await fetch(apiUrl, {credentials:'include', headers:{'Accept':'application/json'}});
+    var data = await resp.json();
+
+    if(!data || !data.result || !data.result.items) {
+      return JSON.stringify({error: 'no items', status: resp.status, tokenFound: !!token});
+    }
+    var items = data.result.items;
+    var out = items.map(function(it){
+      return {
+        url: it.url ? (it.url.startsWith('http') ? it.url : 'https://comix.to' + it.url) : '',
+        title: it.title || (it.hid ? (it.slug || it.hid) : ''),
+        poster: (it.poster && it.poster.url) || it.poster || ''
+      };
+    });
+    return JSON.stringify({
+      items: out,
+      total: data.result.total || out.length,
+      lastPage: data.result.pages || 1,
+      tokenFound: !!token,
+      apiUrl: apiUrl.substring(0, 120)
+    });
+  } catch(e) {
+    return JSON.stringify({error: String(e)});
+  }
+})()
+""".replaceAll('%s', browseUrl));
+
+    if (apiResult == null || apiResult is! String) {
+      return {'items': <dynamic>[], 'lastPage': 0};
+    }
+    try {
+      final parsed = jsonDecode(apiResult) as Map<String, dynamic>;
+      if (parsed.containsKey('error')) {
+        Log.warning("ComixClient", "CDP browse API error: ${parsed['error']} (token=${parsed['tokenFound']})");
+        return {'items': <dynamic>[], 'lastPage': 0};
+      }
+      final items = List<Map<String, dynamic>>.from(parsed['items'] ?? []);
+      Log.info("ComixClient", "CDP browse API: ${items.length} items (token=${parsed['tokenFound']}) ✅");
+      return {
+        'items': items,
+        'lastPage': parsed['lastPage'] ?? 1,
+      };
+    } catch (e) {
+      Log.warning("ComixClient", "CDP browse parse failed: $e");
+      return {'items': <dynamic>[], 'lastPage': 0};
+    }
+  }
+
+  /// WebView browse DOM 兜底。
   /// 字段与 API 路径对齐（`url`/`title`/`poster`），供 JS 源的 `_comixMapComic` 复用。
   Future<Map<String, dynamic>> _browseByDom(String url) async {
     final controller = await _worker.ensure();
@@ -444,6 +1203,39 @@ class ComixClient {
     await _drainCaptures(controller);
     await _drainPayloads(controller);
     await _navigate(controller, pageUrl);
+
+    // P-DL9c (2026-10-18): 诊断 — 等 SPA 发完 API 后检查 __comixApiLog
+    try {
+      await Future.delayed(const Duration(seconds: 5));
+      final diag = await controller.evaluateJavascript(source: r"""
+(function(){
+  var log = window.__comixApiLog || [];
+  var chapters = log.filter(function(e){ return /\/api\/v\d+\/manga\/[^/]+\/chapters/.test(String(e.url).split('?')[0]) && !String(e.url).indexOf('/user/')>=0; });
+  var browse = log.filter(function(e){ return /\/api\/v\d+\/manga(\?|$)/.test(String(e.url).split('?')[0]) && !String(e.url).indexOf('/chapters')>=0 && !String(e.url).indexOf('/user/')>=0; });
+  return JSON.stringify({
+    total: log.length,
+    chaptersCount: chapters.length,
+    chaptersStatuses: chapters.map(function(e){ return {status:e.status, url:e.url?String(e.url).substring(0,80):''}; }),
+    browseCount: browse.length,
+    browseStatuses: browse.map(function(e){ return {status:e.status, url:e.url?String(e.url).substring(0,80):''}; }),
+    ua: navigator.userAgent.substring(0,50),
+    hasWebview: navigator.userAgent.toLowerCase().indexOf('webview')>=0,
+    hasEdg: navigator.userAgent.toLowerCase().indexOf('edg')>=0
+  });
+})()
+""");
+      Log.info("ComixClient", "🔍 API DIAGNOSTIC: $diag");
+      // P-DL9c: 同时写文件（Start-Process 启动的进程 stdout 丢失）
+      try {
+        final f = File("${App.dataPath}\\comix_diagnostic.txt");
+        await f.writeAsString(
+          "${DateTime.now().toIso8601String()}\n$diag\n",
+          mode: FileMode.write,
+        );
+      } catch (_) {}
+    } catch (e) {
+      Log.warning("ComixClient", "🔍 API DIAGNOSTIC eval error: $e");
+    }
 
     // 章节列表端点：/api/v1/manga/{hid}/chapters —— 排除 /user/ 下的同名路径。
     bool isChaptersApi(String u) =>
@@ -920,6 +1712,104 @@ class ComixClient {
 })()
 """;
 
+  /// 阅读页 **并行 click + MutationObserver 极速采集**（2026-10-18 实测 105 页/2s）。
+  ///
+  /// 原理：
+  /// - 章节页有 105 个 `.rpage-progress__seg` 按钮（每个代表一页）
+  /// - SPA 虚拟化只渲染 3~5 张 `<img class="rpage-page__img">`
+  /// - 旧 React fiber/`<img>` 探针都抓不全（fiber 字段漂移+SPA 架构变，探针只有 3~5 张）
+  /// - **新方案**：MutationObserver 装上去监听所有 img src 变化 →
+  ///   一次性 click 所有 seg（10ms 间隔） → SPA 内部并行预取所有页 →
+  ///   MO 被动收集 src → 2s 收齐全量！
+  /// - 先清透明广告层（comix.to 有 floating ad overlay 挡 seg click）
+  static const _pagesFastCollectSetupJs = r"""
+(function(){
+  // 先清广告/遮罩/弹窗 (comix.to 透明广告层会挡 seg click)
+  var killSelectors = [
+    '[class*="ad-"]','[class*="Ad-"]','[class*="advertisement"]',
+    '[class*="overlay"]','[class*="Overlay"]','[class*="modal"]',
+    '[class*="popup"]','[class*="Popup"]','[class*="interstitial"]',
+    '[class*="shield"]','[class*="paywall"]','[id*="ad"]','[id*="popup"]'
+  ];
+  killSelectors.forEach(function(sel){
+    document.querySelectorAll(sel).forEach(function(el){
+      try { el.remove(); } catch(e) { el.style.display='none'; el.style.visibility='hidden'; }
+    });
+  });
+  // 清理全屏 fixed/absolute div (广告弹窗)
+  document.querySelectorAll('div').forEach(function(d){
+    try {
+      var cs = getComputedStyle(d);
+      if ((cs.position==='fixed'||cs.position==='absolute') &&
+          parseFloat(cs.width)>window.innerWidth*0.7 && parseFloat(cs.height)>window.innerHeight*0.5){
+        d.remove();
+      }
+    } catch(e){}
+  });
+
+  var collected = new Set();
+  document.querySelectorAll('.rpage-page__img').forEach(function(i){ if(i.src) collected.add(i.src); });
+
+  var obs = new MutationObserver(function(mutations){
+    mutations.forEach(function(m){
+      m.addedNodes.forEach(function(n){
+        if(n.nodeType===1){
+          if(n.classList && n.classList.contains('rpage-page__img') && n.src) collected.add(n.src);
+          if(n.querySelectorAll){
+            n.querySelectorAll('.rpage-page__img').forEach(function(img){ if(img.src) collected.add(img.src); });
+          }
+        }
+      });
+      if(m.attributeName==='src' && m.target && m.target.classList &&
+         m.target.classList.contains('rpage-page__img') && m.target.src){
+        collected.add(m.target.src);
+      }
+    });
+    window.__comixFastPages = Array.from(collected);
+  });
+  obs.observe(document.documentElement, {childList:true, subtree:true, attributes:true, attributeFilter:['src']});
+
+  var segs = document.querySelectorAll('.rpage-progress__seg');
+  for(var i=0;i<segs.length;i++){
+    (function(idx){
+      setTimeout(function(){ segs[idx].click(); }, idx * 10);
+    })(i);
+  }
+  window.__comixFastPages = Array.from(collected);
+  return JSON.stringify({ok:true, totalSegs: segs.length, initial: collected.size});
+})()
+""";
+
+  /// 轮询 `window.__comixFastPages` 直到收齐（20s 上限，稳定 3s 就停）。
+  Future<List<String>> _fastCollectPages(InAppWebViewController controller, int expectedTotal) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    var lastCount = -1, stable = 0;
+    List<String> best = const [];
+    while (DateTime.now().isBefore(deadline)) {
+      final raw = await controller.evaluateJavascript(source: "JSON.stringify({c: window.__comixFastPages?.length || 0})");
+      final map = _parseEvalMap(raw);
+      final count = (map?['c'] as num?)?.toInt() ?? 0;
+      if (count > lastCount) {
+        final delta = DateTime.now().difference(deadline).inSeconds.abs();
+        Log.info("ComixClient", "fastCollect: $count/$expectedTotal pages (t+${delta}s)");
+        lastCount = count; stable = 0;
+      } else {
+        stable++;
+      }
+      if (count >= expectedTotal && count > 0) break;
+      if (stable >= 6 && count > 0) break; // 3s 不变就停（已稳定）
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+    // 最终取完整数组
+    final raw = await controller.evaluateJavascript(source: "JSON.stringify(window.__comixFastPages || [])");
+    dynamic parsed;
+    try { parsed = jsonDecode(raw.toString()); } catch(_) {}
+    if (parsed is! List) return best;
+    final urls = parsed.map((u) => u.toString()).where((u) => u.isNotEmpty).toList();
+    Log.info("ComixClient", "fastCollect done: ${urls.length} pages");
+    return urls;
+  }
+
   /// 阅读页 **React fiber 挖取**：拿整章全量图片 URL。
   ///
   /// 🔴 为什么需要它（2026-10-11 P43 取证，reader chunk
@@ -1141,36 +2031,50 @@ class ComixClient {
     return _buildVersionedMapFromRows(allRows);
   }
 
-  /// 阅读页兜底：**React fiber 优先**，`<img>` 探针次之。
+  /// 阅读页 DOM fallback：**并行 click seg + MutationObserver 极速采集（首选，实测 105页/2s）**。
   ///
-  /// ⚠️ 阅读器是 **Swiper slides 虚拟化**（同时只渲染 3~5 张 slide），不是
-  /// 简单的懒加载——`<img>` 探针永远只拿到 3~5 张（旧实现"一有图就返回"
-  /// 只能拿到 4 张）。所以先用 fiber 挖 React 内存里的**整章页数组**
-  /// （见 [_pagesByReactJs]），拿不到才退回 `<img>` 轮询。
-  /// 它只是最后兜底：主路径是 API 截获（一章一次响应就有全部页）。
+  /// 优先级：
+  /// 1. **并行 click 所有 seg + MO 监听 img src** → 2s 收齐全量（2026-10-18 新方案）
+  /// 2. React fiber 挖整章页数组 → 字段漂移常返回空（保留作 fallback）
+  /// 3. `<img>` DOM 探针轮询 → 虚拟化下只有 3~5 张（最终兜底）
   Future<List<String>> _fetchPagesByDom(String chapterUrl) async {
     final controller = await _worker.ensure();
     await _navigate(controller, chapterUrl);
 
-    // 1) React fiber：整章全量页（首选）。
+    // 1) 极速并行采集（首选）：清广告层 + 装 MO + 并行 click 所有 seg
+    try {
+      final setup = _parseEvalMap(
+        await controller.evaluateJavascript(source: _pagesFastCollectSetupJs),
+      );
+      final totalSegs = (setup?['totalSegs'] as num?)?.toInt() ?? 0;
+      if (totalSegs > 0) {
+        Log.info("ComixClient", "DOM fastCollect: $totalSegs seg buttons detected");
+        final urls = await _fastCollectPages(controller, totalSegs);
+        if (urls.length >= (totalSegs * 0.5).toInt() && urls.length >= 3) {
+          Log.info("ComixClient", "DOM fastCollect SUCCESS: ${urls.length}/$totalSegs pages in ~2-3s");
+          return urls;
+        }
+        Log.warning("ComixClient", "DOM fastCollect only got ${urls.length}/$totalSegs, falling back");
+      } else {
+        Log.warning("ComixClient", "DOM: no seg buttons found (SPA not ready?)");
+      }
+    } catch (e) {
+      Log.warning("ComixClient", "DOM fastCollect error: $e");
+    }
+
+    // 2) React fiber（fallback，字段漂移常返回空）。
     final viaReact = await _pagesViaReact(controller);
     if (viaReact.length >= 2) {
-      Log.info(
-        "ComixClient",
-        "DOM: React fiber recovered ${viaReact.length} image(s) from reader state",
-      );
+      Log.info("ComixClient", "DOM: React fiber recovered ${viaReact.length} image(s)");
       return viaReact;
     }
 
-    // 2) `<img>` DOM 探针（旧兜底，虚拟化下通常只有 3~5 张）。
+    // 3) `<img>` DOM 探针（最终兜底，虚拟化下通常只有 3~5 张）。
     final deadline = DateTime.now().add(const Duration(seconds: 25));
-    var lastCount = -1;
-    var stable = 0;
+    var lastCount = -1, stable = 0;
     List<String> best = const [];
     while (DateTime.now().isBefore(deadline)) {
-      final snap = _parseEvalMap(
-        await controller.evaluateJavascript(source: _pagesProbeJs),
-      );
+      final snap = _parseEvalMap(await controller.evaluateJavascript(source: _pagesProbeJs));
       if (snap != null && snap['ready'] == true) {
         final urls = (snap['urls'] as List? ?? [])
             .map((u) => u.toString())
@@ -1178,25 +2082,12 @@ class ComixClient {
             .map((u) => u.startsWith('http') ? u : "$_baseUrl$u")
             .toList();
         if (urls.length > best.length) best = urls;
-        if (urls.length == lastCount) {
-          stable++;
-          if (stable >= 3) break;
-        } else {
-          stable = 0;
-          lastCount = urls.length;
-        }
+        if (urls.length == lastCount) { stable++; if (stable >= 3) break; }
+        else { stable = 0; lastCount = urls.length; }
       }
       await Future.delayed(const Duration(milliseconds: 800));
     }
-    if (best.isEmpty) {
-      Log.warning("ComixClient", "DOM: no reader images found");
-    } else {
-      Log.info(
-        "ComixClient",
-        "DOM fallback collected ${best.length} image(s) (virtualised reader, "
-            "count may be far below the real page count)",
-      );
-    }
+    Log.info("ComixClient", "DOM img probe collected ${best.length} image(s)");
     return best;
   }
 
@@ -1316,7 +2207,10 @@ class ComixClient {
     try {
       await controller.stopLoading();
     } catch (_) {}
-    await controller.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+    // P-DL9: loadUrl 可能挂起 → 15s timeout 保护
+    await controller
+        .loadUrl(urlRequest: URLRequest(url: WebUri(url)))
+        .timeout(const Duration(seconds: 15));
     await _throwIfOnChallenge(controller, url);
   }
 
@@ -1336,22 +2230,30 @@ class ComixClient {
     InAppWebViewController controller,
     String url,
   ) async {
-    for (var sample = 0; sample < 2; sample++) {
-      await Future.delayed(Duration(milliseconds: sample == 0 ? 700 : 900));
-      String? href;
-      String? html;
+    // P-DL9: eval timeout 保护 — CF Turnstile JS 会让 eval 永远不返回
+    Future<String?> safeEval(String js) async {
       try {
-        href = unwrapEvalString(
-          await controller.evaluateJavascript(source: 'location.href'),
-        );
-        html = unwrapEvalString(
-          await controller.evaluateJavascript(
-            source:
-                "(document.documentElement && document.documentElement.outerHTML) || ''",
-          ),
+        return unwrapEvalString(
+          await controller.evaluateJavascript(source: js)
+              .timeout(const Duration(seconds: 5)),
         );
       } catch (_) {
-        continue;
+        return null;
+      }
+    }
+
+    for (var sample = 0; sample < 2; sample++) {
+      await Future.delayed(Duration(milliseconds: sample == 0 ? 700 : 900));
+      final href = await safeEval('location.href');
+      final html = await safeEval(
+        "(document.documentElement && document.documentElement.outerHTML) || ''",
+      );
+      if (href == null && html == null) {
+        Log.warning(
+          "ComixClient",
+          "navigate → both evals timed out (sample=$sample, $url) → blocked",
+        );
+        throw "COMIX_IP_BLOCKED: eval timeout on $url";
       }
       final onChallenge =
           (href ?? '').contains('/@waf/challenge') ||
@@ -1387,9 +2289,11 @@ class ComixClient {
     while (DateTime.now().isBefore(deadline)) {
       attempt++;
       try {
-        final snap = _parseEvalMap(
-          await controller.evaluateJavascript(source: js),
-        );
+        // P-DL9: per-call 5s timeout，防止单个 eval 挂住整个 loop
+        final raw = await controller
+            .evaluateJavascript(source: js)
+            .timeout(const Duration(seconds: 5));
+        final snap = _parseEvalMap(raw);
         if (snap != null && snap['ready'] == true) {
           Log.info("ComixClient", "  eval attempt #$attempt: ready=true");
           return snap;
@@ -1694,6 +2598,317 @@ class ComixClient {
     }
     return 0;
   }
+
+  // ---------------------------------------------------------------------------
+  // P-DL9 (2026-10-17)：手动 Cloudflare 验证
+  // ---------------------------------------------------------------------------
+  // comix.to 的 Turnstile 现在必须真人点击 checkbox，任何自动化浏览器
+  // （WebView2 / nodriver headless / headful）都过不了。唯一的办法是
+  // 在可见 WebView 里让用户手动验证，然后 cf_clearance cookie 自动被
+  // 同 userDataFolder 的 headless worker 共享。
+  //
+  // 范围：一次验证 = 搜索 + 详情页 + 下载（三者共享 cookie store）。
+  // cookie 持久化在 WebView2 的 userDataFolder，重启 App 后仍有效
+  // （直到 Cloudflare 过期 cf_clearance）。
+  // ---------------------------------------------------------------------------
+
+  /// 手动 Cloudflare 验证总入口。
+  ///
+  /// 首选 **内置 CfT 窗口**（就是采集用的那个真实 Chrome 窗口）：用户在那个
+  /// 窗口里过一次 Turnstile，cookie 直接落在 CfT 的 jar 里，采集侧立刻可用。
+  /// 不再用 WebView2 中转 —— 2026-10-19 实测那条路会卡在
+  /// `opening AppWebview...` 之后再无回调（onLoadStop 不触发）。
+  ///
+  /// 返回 true = 已拿到 cf_clearance；false = 超时 / 用户没完成 / 无 CfT。
+  Future<bool> verifyCloudflare({
+    String url = "https://comix.to/",
+    Duration timeout = const Duration(minutes: 5),
+  }) async {
+    // 并发 guard —— 如果已经在验证，直接 await 已有的 future
+    if (_verifyGuard != null) {
+      Log.info("ComixClient", "verifyCloudflare: already in progress, awaiting...");
+      return _verifyGuard!.future;
+    }
+    final guard = Completer<bool>();
+    _verifyGuard = guard;
+
+    try {
+      final hasCft = ComixBrowserManager.instance.resolveChrome() != null;
+      bool ok;
+      if (hasCft) {
+        ok = await _verifyViaCfT(url: url, timeout: timeout);
+        if (!ok) {
+          Log.warning(
+            "ComixClient",
+            "verifyCloudflare: CfT path got no cf_clearance (timeout / not solved)",
+          );
+        }
+      } else {
+        Log.warning(
+          "ComixClient",
+          "verifyCloudflare: no bundled CfT → AppWebview fallback",
+        );
+        ok = await _verifyViaAppWebview(url: url, timeout: timeout);
+      }
+      if (!guard.isCompleted) guard.complete(ok);
+      return ok;
+    } catch (e, s) {
+      Log.error("ComixClient", "verifyCloudflare failed: $e\n$s");
+      if (!guard.isCompleted) guard.complete(false);
+      return false;
+    } finally {
+      if (_verifyGuard == guard) _verifyGuard = null;
+    }
+  }
+
+  /// 在**内置 CfT 窗口**里完成人机验证（真实 Chrome，用户看得见、点得到）。
+  ///
+  /// 步骤（顺序不可调换）：
+  /// 1. 清 comix cookie —— 503 Third-party 是**会话级标记**，钉在 comix 自己的
+  ///    cookie 上，删掉才会退回 CF 挑战（A07c 实验 E）；
+  /// 2. `Page.navigate` 硬开首页（首页是唯一允许的文档导航；这时的 403/503
+  ///    就是 CF 挑战页，用户可以过）；
+  /// 3. `Page.bringToFront` 把浏览器窗口提到最前，并 toast 提示；
+  /// 4. 每 2s 读一次 CfT 的 cookie jar，出现 `cf_clearance` 即成功 → 持久化。
+  Future<bool> _verifyViaCfT({
+    required String url,
+    required Duration timeout,
+  }) async {
+    final cdp = ComixCDPWorker.instance;
+    if (!await cdp.isAvailable()) {
+      Log.warning("ComixClient", "verifyViaCfT: no CDP / CfT available");
+      return false;
+    }
+    Log.info("ComixClient", "verifyViaCfT: hard-navigate homepage (CF challenge expected)");
+    // 🔴 2026-10-19 二次取证：**不再先清 cookie**。清完照样 503，却要额外发一次
+    //    文档导航（清 cookie 会连带删掉 __cf_bm / session），反而加重判定。
+    // 🔴 死锁修复：forceHome 现在返回 bool —— 若 CDP 已死或首页仍 503（墙没退），
+    //    继续在死 / 封页面上轮询 cf_clearance 毫无意义（用户根本过不了 CF，
+    //    每个 comixCookies() 还空等），直接放弃，避免对话框卡死数分钟。
+    final homeOk = await cdp.forceHome();
+    if (!homeOk) {
+      Log.warning(
+        "ComixClient",
+        "verifyViaCfT: forceHome 失败（CDP 死 / 仍 503）—— 放弃验证",
+      );
+      try {
+        App.rootContext.showMessage(
+          message: cdp.blockedThirdParty
+              ? 'comix.to 仍判定为第三方应用（503）。'
+                  '若你平时用本机 Chrome 能正常打开 comix.to，请先用它浏览一页，'
+                  '再重启本 App（会自动同步 Chrome 的登录态后再试）。'
+              : '内置浏览器不可用，无法完成验证。',
+        );
+      } catch (_) {}
+      return false;
+    }
+    await cdp.bringToFront();
+    try {
+      App.rootContext.showMessage(
+        message: '请在弹出的内置浏览器窗口中完成人机验证（Cloudflare）',
+      );
+    } catch (_) {}
+
+    final deadline = DateTime.now().add(timeout);
+    var i = 0;
+    while (DateTime.now().isBefore(deadline)) {
+      await Future.delayed(const Duration(seconds: 2));
+      i++;
+      final cookies = await cdp.comixCookies();
+      // 轮询期间若页面被重定向到 503（墙突然又起）→ 立刻放弃，避免死循环。
+      if (cdp.blockedThirdParty) {
+        Log.warning("ComixClient", "verifyViaCfT: 轮询中页面翻回 503 → 放弃");
+        return false;
+      }
+      final cf = cookies['cf_clearance'];
+      if (cf != null && cf.isNotEmpty) {
+        Log.info("ComixClient", "verifyViaCfT: ✅ cf_clearance len=${cf.length}");
+        await _saveCfCookie(cf);
+        JsEngine.reloadCfClearance();
+        // 🔴 取到 cf_clearance 后，**确认 comix 墙是否也退了**：墙退（首页能正常
+        //    加载）才是真成功；墙没退（首页仍 503）则如实返回 false + 提示，
+        //    不再伪造「验证成功」误导用户（用户原话：「验证 CF 成功却仍 503」）。
+        if (cdp.blockedThirdParty) {
+          Log.warning(
+            "ComixClient",
+            "verifyViaCfT: CF 已过但 comix 自家 503 墙仍在 —— 如实返回失败",
+          );
+          try {
+            App.rootContext.showMessage(
+              message: 'Cloudflare 已通过，但 comix.to 仍封锁本机（503）。'
+                  '请先用本机 Chrome 正常打开 comix.to 浏览一页，再重启本 App 同步登录态。',
+            );
+          } catch (_) {}
+          return false;
+        }
+        // 墙已退：清掉 503 熔断，标记本次会话可用。
+        cdp.clearBreaker();
+        return true;
+      }
+      if (i % 5 == 0) {
+        Log.info("ComixClient", "verifyViaCfT: waiting for user... (${i * 2}s)");
+      }
+    }
+    Log.info("ComixClient", "verifyViaCfT: TIMEOUT — no cf_clearance");
+    return false;
+  }
+
+  /// 【历史方案 / 兜底】打开可见 AppWebview 让用户手动过 CF Turnstile。
+  ///
+  /// ⚠️ 2026-10-19 实证：本机点「验证 CF」后日志只到 `opening AppWebview...`，
+  /// 页面能建出来（UA 探针写入成功）但 **`onLoadStop` 永不触发**，于是
+  /// 5 分钟超时定时器根本没启动 → 外层的 `_verifyGuard` 永不释放，
+  /// 后续每次点击都只打印 `already in progress, awaiting...`（死锁）。
+  /// 现在只在**找不到内置 CfT** 时才走这里，并且超时改为在方法级兜底。
+  Future<bool> _verifyViaAppWebview({
+    String url = "https://comix.to/",
+    Duration timeout = const Duration(minutes: 5),
+  }) async {
+    final guard = Completer<bool>();
+
+    try {
+      // 🔴 必须 dispose 所有 headless WebView 才能打开可见 AppWebview！
+      // WebView2 不允许同一进程内 HeadlessInAppWebView 和 InAppWebview 并存
+      // （之前 P-DL9 简化代码移除了 dispose，导致 AppWebview 静默失败——
+      //  用户点"验证 CF"按钮后什么都没发生！）。
+      // dispose 后不立刻重建（避免旧卡死）—— 下次请求 ensure() 会自动重建。
+      Log.info("ComixClient", "verifyCloudflare: disposing headless workers first...");
+      try { await _ComixImageWorker.instance.disposeAll(); } catch(e) { Log.warning("ComixClient", "disposeAll failed: $e"); }
+      try { await _worker.restart(); } catch(e) { Log.warning("ComixClient", "worker restart failed: $e"); }
+      try { if (_worker._environment != null) { await _worker._environment!.dispose(); _worker._environment = null; } } catch(e) {}
+      // 额外释放 AppWebview 可能残留的 environment
+      try { if (AppWebview.webViewEnvironment != null) { await AppWebview.webViewEnvironment!.dispose(); AppWebview.webViewEnvironment = null; } } catch(e) {}
+      await Future.delayed(const Duration(milliseconds: 800));
+      Log.info("ComixClient", "verifyCloudflare: workers disposed, opening AppWebview...");
+
+      // 不再用 showDialog（PopScope + barrierDismissible: false 会死锁）。
+      // 直接 push MaterialPageRoute — 任何页面都能弹出，不卡 UI。
+      final completer = Completer<bool>();
+      var verified = false;
+
+      print("[CF] verifyCloudflare: opening AppWebview with Chrome UA for $url");
+
+      // 🔴 showGeneralDialog 完全不参与 Hero 动画！
+      // MaterialPageRoute / PageRouteBuilder 都会触发 Flutter Hero 检查，
+      // 如果主页面上 cover533825623 等 tag 已重复 → nav.push 直接抛异常静默失败。
+      // showGeneralDialog 走 OverlayEntry，完全绕过 Hero — CF 验证页秒弹！
+      // showGeneralDialog 返回 void（不是 OverlayEntry）。
+      // 关闭方式：barrierDismissible=true 让用户点白色背景关闭；
+      // 程序关闭用 Navigator.pop（Flutter dialog 内部在 root navigator 注册了 route）
+      showGeneralDialog(
+          context: App.rootContext,
+          barrierColor: Colors.white,
+          barrierDismissible: true,
+          barrierLabel: "Cloudflare Verification",
+          transitionDuration: const Duration(milliseconds: 200),
+          pageBuilder: (context, animation, secondaryAnimation) => AppWebview(
+            initialUrl: url,
+            singlePage: true,
+            // 轮询检测 cf_clearance cookie — 用户手动过 Turnstile 后自动触发
+            onLoadStop: (controller) async {
+              int checks = 0;
+              Timer? timer;
+              timer = Timer.periodic(const Duration(seconds: 2), (_) async {
+                checks++;
+                if (checks > 150) { timer?.cancel(); return; } // 最多等 5 分钟
+                try {
+                  final cookies = await controller.getCookies(url);
+                  final hasCf =
+                      cookies?.any((c) => c.name.toLowerCase() == 'cf_clearance') ?? false;
+                  if (hasCf) {
+                    timer?.cancel();
+                    final cf = cookies!.firstWhere(
+                      (c) => c.name.toLowerCase() == 'cf_clearance',
+                    );
+                    Log.info(
+                      "ComixClient",
+                      "verifyCloudflare: ✅ cf_clearance detected (len=${cf.value.length})",
+                    );
+                    await _saveCfCookie(cf.value);
+                    JsEngine.reloadCfClearance();
+                    // 同步注入内置 CfT，让采集侧复用这次验证会话。
+                    try {
+                      await ComixCDPWorker.instance
+                          .setCookie(name: 'cf_clearance', value: cf.value);
+                    } catch (_) {}
+                    verified = true;
+                    if (!completer.isCompleted) completer.complete(true);
+                    // 自动关闭验证页（showGeneralDialog 走 root navigator route）
+                    Future.delayed(const Duration(milliseconds: 500), () {
+                      try { Navigator.of(App.rootContext).pop(); } catch(_) {}
+                    });
+                  } else if (checks % 10 == 0) {
+                    Log.info(
+                      "ComixClient",
+                      "verifyCloudflare: waiting for Turnstile... ($checks checks)",
+                    );
+                  }
+                } catch (e) {
+                  Log.warning("ComixClient", "cookie check error: $e");
+                }
+              });
+              // 超时取消 timer
+              Future.delayed(timeout).then((_) {
+                timer?.cancel();
+                if (!completer.isCompleted) completer.complete(verified);
+              });
+            },
+            ),
+          );
+
+      // 🔴 方法级超时兜底：旧实现把 5 分钟定时器放在 `onLoadStop` 里，
+      //    页面若根本不触发 load stop（本机实测如此），就永远不超时 → 死锁。
+      final result = await completer.future.timeout(
+        timeout + const Duration(seconds: 15),
+        onTimeout: () {
+          Log.warning(
+            "ComixClient",
+            "verifyViaAppWebview: hard timeout, no callback from WebView",
+          );
+          return verified;
+        },
+      );
+
+      // 清理 AppWebview 的 environment（让下次重建不冲突）
+      try {
+        if (AppWebview.webViewEnvironment != null) {
+          await AppWebview.webViewEnvironment!.dispose();
+          AppWebview.webViewEnvironment = null;
+        }
+      } catch (_) {}
+
+      if (result) {
+        Log.info("ComixClient", "verifyCloudflare: SUCCESS — cookie saved");
+      } else {
+        Log.info("ComixClient", "verifyCloudflare: TIMEOUT — no cf_clearance detected");
+      }
+
+      guard.complete(result);
+      return result;
+    } catch (e, s) {
+      Log.error("ComixClient", "verifyCloudflare failed: $e\n$s");
+      guard.complete(false);
+      return false;
+    } finally {
+      if (_verifyGuard == guard) _verifyGuard = null;
+    }
+  }
+
+  // P-DL9: 把 AppWebview 里拿到的 cf_clearance 存到 cf_cookie.json
+  static Future<void> _saveCfCookie(String cfClearance) async {
+    try {
+      final cookieFile = File("${App.dataPath}\\cf_cookie.json");
+      final data = {
+        "cf_clearance": cfClearance,
+        "domain": ".comix.to",
+        "savedAt": DateTime.now().toIso8601String(),
+      };
+      await cookieFile.writeAsString(jsonEncode(data));
+      Log.info("ComixClient", "✅ cf_cookie.json saved (len=${cfClearance.length})");
+    } catch (e) {
+      Log.warning("ComixClient", "_saveCfCookie failed: $e");
+    }
+  }
 }
 
 /// 常驻 HeadlessInAppWebView Worker。
@@ -1736,6 +2951,65 @@ class _ComixWorker {
     _webview = null;
   }
 
+  // ---------------------------------------------------------------------------
+  // P-DL9: cf_clearance cookie 注入
+  // ---------------------------------------------------------------------------
+
+  static Future<void> _injectCfClearance() async {
+    Log.info("ComixWorker", "_injectCfClearance() called, App.dataPath=${App.dataPath}");
+    try {
+      final cookieFile = File("${App.dataPath}\\cf_cookie.json");
+      Log.info("ComixWorker", "cookieFile path=${cookieFile.path}, exists=${cookieFile.existsSync()}");
+      if (!cookieFile.existsSync()) {
+        Log.info("ComixWorker", "cf_cookie.json not found — skip WebView cookie injection (Dio path handles it)");
+        return;
+      }
+
+      final content = cookieFile.readAsStringSync();
+      final Map<String, dynamic> data = jsonDecode(content);
+      final cfValue = data["cf_clearance"] as String?;
+      Log.info("ComixWorker", "cf_clearance value present: ${cfValue != null && cfValue.isNotEmpty}, len=${cfValue?.length ?? 0}");
+      if (cfValue == null || cfValue.isEmpty) {
+        Log.info("ComixWorker", "cf_clearance empty — skip");
+        return;
+      }
+
+      // flutter_inappwebview 的 CookieManager.setCookie 接受 Cookie 类
+      final uri = WebUri("https://comix.to");
+      Log.info("ComixWorker", "CookieManager.instance().setCookie() for comix.to...");
+      await CookieManager.instance().setCookie(
+        url: uri,
+        name: "cf_clearance",
+        value: cfValue,
+        domain: ".comix.to",
+        path: "/",
+        isHttpOnly: true,
+        isSecure: true,
+      );
+      Log.info("ComixWorker", "CookieManager.setCookie cf_clearance done");
+
+      // 同时注入 cf_chl_rc_ni（如果有的话）
+      final all = data["all_cookies"] as Map<String, dynamic>?;
+      if (all != null) {
+        for (final entry in all.entries) {
+          if (entry.key == "cf_clearance") continue;
+          Log.info("ComixWorker", "injecting extra cookie ${entry.key}...");
+          await CookieManager.instance().setCookie(
+            url: uri,
+            name: entry.key,
+            value: entry.value.toString(),
+            domain: ".comix.to",
+            path: "/",
+          );
+        }
+      }
+
+      Log.info("ComixWorker", "✅ cf_clearance cookie injected into WebView2 (len=${cfValue.length})");
+    } catch (e, s) {
+      Log.warning("ComixWorker", "_injectCfClearance failed: $e\n$s");
+    }
+  }
+
   /// 确保 worker 就绪，返回控制器。
   Future<InAppWebViewController> ensure() async {
     if (_isAlive) {
@@ -1755,25 +3029,169 @@ class _ComixWorker {
       final webview = HeadlessInAppWebView(
         webViewEnvironment: _environment,
         initialSize: const Size(1280, 2000),
-        // document-start 注入 API 截获钩子，抢在 SPA 发请求之前。
+        // P-DL9 (2026-10-18)：Chrome 伪装全方案 v2！
+        // 核心问题：WebView2 runtime 会在导航请求里自动追加 sec-ch-ua: "Edg";v=xxx
+        // 这些 HTTP headers 在 JS 之上，JS 拦截不了 — comix.to 后端看到 Edg 特征
+        // 就直接返回 "Third-party apps are not supported" 页面，SPA 根本不加载！
+        // 所以：① initialUrlRequest 带假 Chrome sec-ch-ua headers
+        //      ② 后续所有 controller.loadUrl(urlRequest: ...) 也手动带 headers
+        //      ③ AT_DOCUMENT_START JS 反检测（SPA 加载后第二层防御）
+        initialSettings: InAppWebViewSettings(
+          isInspectable: true,
+          userAgent: _realChromeUA,
+        ),
+        // document-start 注入反检测 + API 截获钩子
         initialUserScripts: UnmodifiableListView<UserScript>([
+          UserScript(
+            source: _antiDetectJs,
+            injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+          ),
           UserScript(
             source: _captureHookJs,
             injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
           ),
         ]),
-        initialSettings: InAppWebViewSettings(isInspectable: true),
-        initialUrlRequest: URLRequest(url: WebUri("https://comix.to/")),
+        // 初始导航也带假 Chrome headers（覆盖 WebView2 默认 Edg headers）
+        initialUrlRequest: URLRequest(
+          url: WebUri("about:blank"),
+          headers: chromeHeaders,
+        ),
       );
       _webview = webview;
       await webview.run();
       Log.info("ComixWorker", "headless webview started");
+
+      // P-DL9 (2026-10-17)：注入 cf_clearance cookie！
+      // 从 App.dataPath 下的 cf_cookie.json 读取（由 grab_cookie.py 或手动
+      // 验证流程写入）。绕过 WebView2 TLS 指纹被 CF 识别的问题 — 直接
+      // 把 Playwright 过验证拿到的 cookie 注入到 WebView2 的 cookie store。
+      await _injectCfClearance();
     });
     return _webview!.webViewController!;
   }
 
+  // ---------------------------------------------------------------------------
+  // P-DL9 (2026-10-18)：Chrome 伪装常量 + 反检测 JS
+  // ---------------------------------------------------------------------------
+
+  /// 真实 Chrome 155 Windows UA — 不含 Edg / WebView 特征。
+  /// P-DL9c (2026-10-18)：从 131 更新到 155，匹配用户当前 Chrome 版本
+  static const _realChromeUA =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36";
+
+  /// AT_DOCUMENT_START 注入的反检测脚本。
+  ///
+  /// comix.to SPA 反爬 JS 会检测以下 WebView2 特征（实测触发
+  /// "Third-party apps are not supported" 弹窗）：
+  ///
+  /// ① navigator.userAgentData.brands 含 "Edg" / "WebView2"
+  ///    → Object.defineProperty 覆盖 brands 数组
+  /// ② navigator.webdriver === true
+  ///    → Object.defineProperty 强制 false
+  /// ③ window.chrome 对象不完整
+  ///    → 创建带 runtime / cookies / storage 属性的假 chrome 对象
+  /// ④ sec-ch-ua / sec-ch-ua-platform Client Hints 带 Edg 特征
+  ///    → 通过 override navigator.userAgentData 的 toJSON
+  /// ⑤ WebGL renderer 含 "ANGLE" / "DirectComposition" 标识
+  ///    → 在 getParameter 里做二次修改（可选，WebGL 是异步的先跳过）
+  ///
+  /// ⚠️ 此脚本必须在 AT_DOCUMENT_START 执行，比 comix.to SPA 的反爬 JS 更早！
+  static const _antiDetectJs = r"""
+(function(){
+  if (window.__comixAntiDetectInstalled) return;
+  window.__comixAntiDetectInstalled = true;
+
+  // ① navigator.userAgent — 已通过 initialSettings.userAgent 设置，
+  //    但还要确保 navigator.userAgent 同步覆盖（部分 WebView2 版本会返回原值）
+  try {
+    Object.defineProperty(navigator, 'userAgent', {
+      get: function(){
+        return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36';
+      },
+      configurable: true
+    });
+  } catch(e) {}
+
+  // ② navigator.webdriver — Chrome 131+ 这个值是 false，WebView2 可能是 true
+  try {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: function(){ return false; },
+      configurable: true
+    });
+  } catch(e) {}
+
+  // ③ window.chrome — WebView2 缺少 chrome.runtime / chrome.cookies 等
+  try {
+    if (!window.chrome) {
+      window.chrome = {};
+    }
+    if (!window.chrome.runtime) {
+      window.chrome.runtime = {
+        connect: function(){},
+        sendMessage: function(){},
+        onConnect: { addListener: function(){} },
+        onMessage: { addListener: function(){} },
+        id: undefined
+      };
+    }
+    if (!window.chrome.cookies) {
+      window.chrome.cookies = {
+        get: function(details, callback){ if(callback) callback(null); },
+        getAll: function(details, callback){ if(callback) callback([]); },
+        set: function(details, callback){ if(callback) callback(null); },
+        remove: function(details, callback){ if(callback) callback(true); }
+      };
+    }
+    // Chrome devtools detector: 伪造 __REACT_DEVTOOLS_GLOBAL_HOOK__ 不存在即可
+  } catch(e) {}
+
+  // ④ navigator.userAgentData.brands — WebView2 这里会带 "Edg" / "WebView2"
+  try {
+    var fakeBrands = [
+      { brand: 'Chromium', version: '131' },
+      { brand: 'Not_A Brand', version: '24' },
+      { brand: 'Google Chrome', version: '131' }
+    ];
+    var fakeHighEntropy = {
+      brands: fakeBrands,
+      mobile: false,
+      platform: 'Windows'
+    };
+    if (navigator.userAgentData) {
+      Object.defineProperty(navigator.userAgentData, 'brands', {
+        get: function(){ return fakeBrands; },
+        configurable: true
+      });
+      Object.defineProperty(navigator.userAgentData, 'mobile', {
+        get: function(){ return false; },
+        configurable: true
+      });
+      Object.defineProperty(navigator.userAgentData, 'platform', {
+        get: function(){ return 'Windows'; },
+        configurable: true
+      });
+      // 覆盖 toJSON()（有的反爬用这个）
+      navigator.userAgentData.toJSON = function(){
+        return fakeHighEntropy;
+      };
+      // getHighEntropyValues
+      navigator.userAgentData.getHighEntropyValues = function(hints){
+        return Promise.resolve(fakeHighEntropy);
+      };
+    }
+  } catch(e) {}
+
+  // ⑤ fetch / XHR 的 Client Hints — 由 _captureHookJs 的 fetch/XHR 包装统一处理
+  //    （在 _captureHookJs 里去掉 sec-ch-ua / sec-ch-ua-platform 等 headers）
+
+  window.__comixAntiDetectReady = true;
+})();
+""";
+
   /// document-start 注入的截获钩子：包装 fetch / XMLHttpRequest，
   /// 把所有 /api/ 响应记录到 window.__comixApiLog 供 Dart 侧轮询。
+  /// 同时过滤 sec-ch-ua* Client Hints headers（WebView2 暴露 WebView 特征）
   static const _captureHookJs = r"""
 (function(){
   if (window.__comixHookInstalled) return;
@@ -1799,6 +3217,21 @@ class _ComixWorker {
       var args = arguments;
       var u = (typeof args[0] === 'string') ? args[0] : (args[0] && args[0].url) || '';
       var isApi = String(u).indexOf('/api/') !== -1;
+      // P-DL9 (2026-10-18)：过滤 sec-ch-ua* Client Hints（WebView2 暴露 WebView 特征）
+      try {
+        if (args[1] && args[1].headers) {
+          var _fh = args[1].headers;
+          if (_fh instanceof Headers) {
+            var _fh2 = new Headers();
+            _fh.forEach(function(v, k){ var lk = k.toLowerCase(); if (lk.indexOf('sec-ch-ua') !== 0) _fh2.set(k, v); });
+            args[1].headers = _fh2;
+          } else if (typeof _fh === 'object') {
+            var _fh3 = {};
+            for (var _fk in _fh) { if (_fk.toLowerCase().indexOf('sec-ch-ua') !== 0) _fh3[_fk] = _fh[_fk]; }
+            args[1].headers = _fh3;
+          }
+        }
+      } catch(_) {}
       return of.apply(this, args).then(function(res) {
         try {
           if (isApi) {
@@ -1936,6 +3369,19 @@ class _ComixImageWorker {
 
   static const laneCount = 3;
   final _lanes = List.generate(laneCount, (_) => _ImageLane());
+
+  // P-DL9: dispose 所有 ImageLane（verifyCloudflare 需要释放 WebView2 environment lock）
+  Future<void> disposeAll() async {
+    Log.info("ComixImageWorker", "disposeAll() — disposing ${_lanes.length} lanes...");
+    for (final lane in _lanes) {
+      try {
+        await lane.reset();
+      } catch (e) {
+        Log.warning("ComixImageWorker", "lane reset failed: $e");
+      }
+    }
+    Log.info("ComixImageWorker", "disposeAll() done");
+  }
 
   /// 主机封锁检测（S12 整体强化）：comix.to 把不同章节的图片分发到不同宿主，
   /// 部分"轮换域"（`*.site`，如 DivaScans 章节）的 WebView 导航直接落地
@@ -2766,6 +4212,13 @@ Future<WebViewEnvironment> _getSharedWebViewEnvironment() {
       Log.warning("ComixClient", "webview proxy args failed: $e");
     }
 
+    // P-DL9 (2026-10-18)：关键！禁用 WebView2 自动追加的 Client Hints headers
+    // (sec-ch-ua: "Edg";v=xxx / sec-ch-ua-platform / sec-ch-ua-mobile 等)
+    // comix.to 后端看到这些 Edg 特征 → 直接返回 "Third-party apps are not supported"
+    // Chrome flag: --disable-features=SecCHUserAgent 禁用 UA Client Hints
+    extraArgs = '${extraArgs ?? ''}--disable-features=SecCHUserAgent,EnableClientHintsUserAgentHeaders';
+    Log.info("ComixClient", "webview extraBrowserArgs: $extraArgs");
+
     _sharedWebViewEnvironment ??= await WebViewEnvironment.create(
       settings: WebViewEnvironmentSettings(
         userDataFolder: "${App.dataPath}\\webview",
@@ -2789,5 +4242,657 @@ Future<T> _withWebviewStartupLock<T>(Future<T> Function() action) async {
     return await action();
   } finally {
     completer.complete();
+  }
+}
+
+// ============================================================================
+// P-DL9 (2026-10-18)：Chrome CDP 客户端 — 替代 headless WebView2
+// ============================================================================
+
+/// HttpOverrides 让所有 HttpClient 跳过环境变量代理（HTTP_PROXY），
+/// 直接连接目标主机。用于 CDP localhost 请求（不能走 Clash）。
+class _DirectHttpOverrides extends HttpOverrides {
+  static final instance = _DirectHttpOverrides();
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)..findProxy = (_) => 'DIRECT';
+  }
+}
+
+class ComixCDPWorker {
+  static const _cdpPort = 9222;
+  static const _cdpHost = 'localhost';
+
+  WebSocket? _ws;
+  int _nextId = 0;
+  final _pending = <int, Completer<Map<String, dynamic>>>{};
+  String? _pageWsUrl;
+
+  /// 上一次 navigate 结束时页面是否是 comix 的 Third-party 拦截页。
+  ///
+  /// 2026-10-19 二次取证修正（推翻上一轮的「cookie 会话标记」结论）：
+  ///   - 全新 profile + 只导航一次首页 → 立刻 503（cookie 不是变量）；
+  ///   - 换代理出口 → 仍 503（IP 不是唯一变量）；
+  ///   - 连 `Sec-CH-UA` 一起伪装成正式版 Chrome → 仍 503（品牌不是变量）；
+  ///   - 16:53:47 单次导航成功，16:54:29 起**连发 4 次**文档导航后全站 503。
+  /// 唯一能复现的规律是「短时间多次文档导航 → 进 503」。所以对策是
+  /// **少发请求 + 命中即熔断**，而不是清 cookie 后反复重试（那只会延长封禁）。
+  bool blockedThirdParty = false;
+
+  /// 熔断截止时间：命中 Third-party 后这段时间内不再发任何 comix 请求。
+  DateTime? _blockedUntil;
+
+  /// 上一次**首页硬导航**的时间，用于限速（避免重载风暴触发 comix 的判定）。
+  DateTime? _lastHomeNavAt;
+
+  static final ComixCDPWorker instance = ComixCDPWorker._();
+  ComixCDPWorker._();
+
+  /// 检查 Chrome CDP 是否可用
+  ///
+  /// 关键：必须禁用环境变量代理（HTTP_PROXY/HTTPS_PROXY），
+  /// 否则 Dart HttpClient 会把 localhost 请求发给 Clash 代理，
+  /// 导致 isAvailable() 永远返回 false，CDP 路径被跳过。
+  Future<bool> isAvailable() async {
+    // 2026-10-19：优先复用已监听的 CDP；没有则拉起随 App 分发的内置
+    // Chrome for Testing（绿色版，不依赖系统 Chrome）。外部手动 Chrome
+    // 仍然兼容：只要 9222 上已有 CDP，ensureRunning 会直接探活成功。
+    if (await ComixBrowserManager.instance.ensureRunning()) return true;
+    Log.warning(
+      "ComixCDP",
+      "isAvailable failed: no CDP on $_cdpHost:$_cdpPort and no bundled chrome",
+    );
+    return false;
+  }
+
+  /// 把 cf_clearance 注入内置浏览器（CDP Network.setCookie）。
+  ///
+  /// 背景：`verifyCloudflare` 用 AppWebview 拿到 cookie 后只存在文件/JS 引擎里，
+  /// 内置 CfT 的 cookie jar 并不知道它。这里通过 CDP 把同一个 cf_clearance
+  /// 写进 CfT（同一 UA/IP 下 Cloudflare 认可），采集才能复用验证会话。
+  Future<bool> setCookie({
+    required String name,
+    required String value,
+    String domain = '.comix.to',
+    String path = '/',
+  }) async {
+    try {
+      await _send('Network.enable', {});
+      final resp = await _send('Network.setCookie', {
+        'name': name,
+        'value': value,
+        'domain': domain,
+        'path': path,
+        'secure': true,
+        'httpOnly': false,
+        'sameSite': 'None',
+      });
+      final ok = resp['result']?['success'] == true;
+      Log.info("ComixCDP", "setCookie $name -> $ok");
+      return ok;
+    } catch (e) {
+      Log.warning("ComixCDP", "setCookie failed: $e");
+      return false;
+    }
+  }
+
+  /// 从 `cf_cookie.json` 读取 cf_clearance 并注入内置浏览器。
+  Future<void> injectSavedCfCookie() async {
+    try {
+      final f = File("${App.dataPath}\\cf_cookie.json");
+      if (!f.existsSync()) return;
+      final data = jsonDecode(f.readAsStringSync());
+      final v = data is Map ? data['cf_clearance'] as String? : null;
+      if (v != null && v.isNotEmpty) {
+        await setCookie(name: 'cf_clearance', value: v);
+      }
+    } catch (e) {
+      Log.warning("ComixCDP", "injectSavedCfCookie failed: $e");
+    }
+  }
+
+  /// 连接 CDP WebSocket
+  Future<WebSocket> _connect() async {
+    // 🔴 2026-10-19（第十一轮）：浏览器被 ComixBrowserManager.closeExisting()
+    //    重启后，旧 `_ws` 虽然非 null 但已 closed。若直接返回它，第一次导航
+    //    会往死 socket 写命令 → 超时/异常 → 被上层误判成 comix 503。
+    //    这里必须按 readyState 判定，并把陈旧连接彻底丢弃后重连新 target。
+    if (_ws != null && _ws!.readyState == WebSocket.open) return _ws!;
+    if (_ws != null) {
+      try {
+        await _ws!.close();
+      } catch (_) {}
+      _ws = null;
+      _pageWsUrl = null;
+      _pending.clear();
+    }
+
+    // 1. 获取 page target 的 WS URL（同样禁用代理）
+    final client = HttpClient()..findProxy = (_) => 'DIRECT';
+    final req = await client.getUrl(Uri.parse('http://$_cdpHost:$_cdpPort/json'));
+    final res = await req.close();
+    final body = await res.transform(utf8.decoder).join();
+    client.close();
+
+    final targets = jsonDecode(body) as List;
+    // 优先找 comix.to 的 page，否则找第一个 page
+    final pageTarget = targets.firstWhere(
+      (t) => t['type'] == 'page',
+      orElse: () => throw Exception('No page target in CDP'),
+    );
+    _pageWsUrl = pageTarget['webSocketDebuggerUrl'] as String?;
+    if (_pageWsUrl == null) throw Exception('No webSocketDebuggerUrl');
+
+    // 2. 连 WebSocket
+    // WebSocket.connect 内部也用 HttpClient，同样被 HTTP_PROXY 环境变量拦截。
+    // 临时设置 HttpOverrides.global 让所有 HttpClient 直连，连完恢复。
+    final oldOverrides = HttpOverrides.current;
+    HttpOverrides.global = _DirectHttpOverrides.instance;
+    try {
+      _ws = await WebSocket.connect(_pageWsUrl!);
+    } finally {
+      if (oldOverrides != null) HttpOverrides.global = oldOverrides;
+    }
+    _ws!.listen((raw) {
+      try {
+        final msg = jsonDecode(raw as String) as Map<String, dynamic>;
+        final id = msg['id'];
+        if (id != null && _pending.containsKey(id)) {
+          final c = _pending.remove(id)!;
+          c.complete(msg);
+        }
+      } catch (_) {}
+    });
+
+    return _ws!;
+  }
+
+  /// 发 CDP 命令，等响应。
+  ///
+  /// 🔴 2026-10-19 死锁修复：旧实现固定 `c.future.timeout(15s)` 且往死 socket
+  /// 写不抛错 —— 浏览器被杀 / 页面 target 卡死时，每个命令空等 15s、连发多条
+  /// （forceHome / bringToFront / comixCookies）把「创建下载任务」对话框卡死
+  /// 数分钟。现在：短超时（8s）+ 发送前检查 socket 是否仍 open + 写失败立即抛。
+  static const _sendTimeout = Duration(seconds: 8);
+
+  Future<Map<String, dynamic>> _send(
+    String method,
+    Map<String, dynamic> params, {
+    Duration? timeout,
+  }) async {
+    final t = timeout ?? _sendTimeout;
+    WebSocket ws;
+    try {
+      ws = await _connect();
+    } catch (e) {
+      Log.warning("ComixCDP", "_send($method): connect failed — $e");
+      rethrow;
+    }
+    if (ws.readyState != WebSocket.open) {
+      Log.warning(
+        "ComixCDP",
+        "_send($method): socket not open (state=${ws.readyState}) — fail fast",
+      );
+      _ws = null;
+      _pending.clear();
+      throw StateError("CDP socket not open");
+    }
+    _nextId++;
+    final id = _nextId;
+    final c = Completer<Map<String, dynamic>>();
+    _pending[id] = c;
+    try {
+      ws.add(jsonEncode({'id': id, 'method': method, 'params': params}));
+    } catch (e) {
+      _pending.remove(id);
+      Log.warning("ComixCDP", "_send($method): write failed — $e");
+      rethrow;
+    }
+    return c.future.timeout(t, onTimeout: () {
+      _pending.remove(id);
+      throw TimeoutException("CDP $method 超时 ${t.inSeconds}s", t);
+    });
+  }
+
+  /// Runtime.evaluate — 在 Chrome 里执行 JS
+  Future<dynamic> evaluate(String expression, {bool awaitPromise = true}) async {
+    final resp = await _send('Runtime.evaluate', {
+      'expression': expression,
+      'returnByValue': true,
+      'awaitPromise': awaitPromise,
+    });
+    final result = resp['result'] as Map<String, dynamic>?;
+    final value = result?['result']?['value'];
+    return value;
+  }
+
+  /// Page.navigate — 导航
+  ///
+  /// 关键：Chrome navigate 后可能重建 page target（特别是跨域或新 URL），
+  /// 旧 WebSocket 连接会变成 stale（收不到消息或直接断连）。
+  /// 所以 navigate 后必须断开旧 WS，下次 evaluate 会自动重连新 target。
+  // P-DL9b: CDP 反检测 —— 极简、可逆、不破坏原生指纹。
+  //
+  // 🔴 2026-10-19（第十一轮）修正：旧实现把 navigator.plugins 覆盖成
+  // `[1,2,3,4,5]`（数字数组，非真实 Plugin 对象）、并改写 languages/platform/
+  // hardwareConcurrency/deviceMemory —— 在正式版 Chrome 里反而是**明显的指纹
+  // 异常**（真实 Chrome 的 plugins 是带 name 的 Plugin 列表）。既然现在改用
+  // 正式版 Chrome + 用户真实 profile，**最好的反检测就是不动原生值**：只把
+  // navigator.webdriver 收敛为 false（与未被自动化控制的 Chrome 一致），其余一概不动。
+  static const _antiDetectJs = r'''
+(function(){
+  try { Object.defineProperty(navigator, 'webdriver', {get: () => false, configurable: true}); } catch(e){}
+})();
+''';
+
+  /// P-DL9b: 智能导航
+  ///
+  /// comix.to 服务器对所有非首页的 Page.navigate 返回 Third-party 页面，
+  /// 只能用客户端路由 history.pushState + PopStateEvent 触发 SPA 内部跳转。
+  /// 对 comix.to URL：pushState 方案；对外部 URL：Page.navigate 方案。
+  Future<void> navigate(String url, {bool waitForChapters = false}) async {
+    if (url.contains('comix.to')) blockedThirdParty = false;
+    if (!url.contains('comix.to')) {
+      // 外部 URL — Page.navigate
+      await _doPageNavigate(url);
+      await Future.delayed(const Duration(seconds: 4));
+      try { await evaluate(_antiDetectJs); } catch (_) {}
+      return;
+    }
+
+    // 熔断：命中 503 后短期内不再发任何 comix 请求。
+    final until = _blockedUntil;
+    if (until != null && DateTime.now().isBefore(until)) {
+      blockedThirdParty = true;
+      final left = until.difference(DateTime.now()).inSeconds;
+      throw "COMIX_THIRD_PARTY: comix 判定本次自动化会话为第三方应用（503）。"
+          "请 ${left}s 后再试（越重试冷却越久），或换一个网络出口";
+    }
+
+    // 反检测注入（每次 evaluate 前都做）
+    try { await evaluate(_antiDetectJs); } catch (_) {}
+
+    final cur = await _currentHref();
+    if (!cur.contains('comix.to')) {
+      // 还没连接到有效的 comix.to 页面 — 先硬开首页 bootstrap。
+      // 🔴 首页是唯一「允许的文档导航」；之后所有跳转一律走 pushState。
+      Log.info("ComixCDP", "navigate: bootstrapping homepage first");
+      await _homeNavigate();
+      try { await evaluate(_antiDetectJs); } catch (_) {}
+    }
+
+    // 🔴 pushState 到**同一个 URL** 是 no-op：SPA 不会重新渲染，
+    //    章节区仍是上一次的（或空的）。
+    final hrefNow = await _currentHref();
+    if (_samePath(hrefNow, url)) {
+      Log.info("ComixCDP", "navigate: same url — bounce via home to force re-render");
+      await _pushState('https://comix.to/');
+      await Future.delayed(const Duration(seconds: 2));
+    }
+
+    Log.info("ComixCDP", "navigate: pushState → $url");
+    final ready = await _waitRoute(url, expectChapters: waitForChapters);
+    try { await evaluate(_antiDetectJs); } catch (_) {}
+
+    // 🔴 2026-10-19：Round 9 实证 —— comix 墙退后，直接 Page.navigate 到干净详情
+    //    URL（不带 ?page）3 秒即可完整渲染；pushState 在个别情况下不触发 SPA
+    //    重渲染（旧 `no manga detail` 病根）。若 pushState 后路由仍未就绪且未处
+    //    503 熔断，则补一次直接文档导航（仅一次，避免连发导航触发 comix 判定）。
+    if (!ready && !blockedThirdParty) {
+      final want = Uri.tryParse(url);
+      final clean = (want != null && want.query.isNotEmpty)
+          ? 'https://comix.to${want.path}'
+          : url;
+      Log.info("ComixCDP", "navigate: pushState 未就绪，补直接文档导航 → $clean");
+      await _doPageNavigate(clean);
+      await _waitRoute(clean, expectChapters: waitForChapters);
+      try { await evaluate(_antiDetectJs); } catch (_) {}
+    }
+  }
+
+  /// 当前页面 href（失败返回空串）。
+  Future<String> _currentHref() async {
+    try {
+      final v = await evaluate('location.href');
+      return v is String ? v : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// 硬导航到首页，并做**限速**：45s 内已经刷过就复用当前页面。
+  ///
+  /// comix 的 503 只和「短时间内的文档导航次数」相关（同一次运行里连发 4 次
+  /// 首页导航就被全站 503），所以绝不能一失败就重刷首页。
+  Future<void> _homeNavigate() async {
+    final last = _lastHomeNavAt;
+    final now = DateTime.now();
+    if (last != null && now.difference(last) < const Duration(seconds: 45)) {
+      Log.info("ComixCDP", "navigate: homepage loaded ${now.difference(last).inSeconds}s ago — reuse (throttled)");
+      return;
+    }
+    _lastHomeNavAt = now;
+    await _doPageNavigate('https://comix.to/');
+    await _waitRoute('https://comix.to/');
+  }
+
+  /// 两个 URL 是否指向同一路径 + 同一 query。
+  bool _samePath(String a, String b) {
+    final ua = Uri.tryParse(a);
+    final ub = Uri.tryParse(b);
+    if (ua == null || ub == null) return false;
+    return ua.path == ub.path && ua.query == ub.query;
+  }
+
+  /// 客户端路由跳转（comix.to 对直接文档导航返回 Third-party 页）。
+  Future<void> _pushState(String url) async {
+    final jsonUrl = jsonEncode(url);
+    try {
+      await _send('Runtime.evaluate', {
+        'expression': '''
+(function(){
+  try {
+    history.pushState({spa:true}, '', $jsonUrl);
+    window.dispatchEvent(new PopStateEvent('popstate', {state:{spa:true}}));
+    return 'ok';
+  } catch(e) { return 'error: ' + e.message; }
+})()
+''',
+        'returnByValue': true,
+        'awaitPromise': true,
+      });
+    } catch (e) {
+      Log.warning("ComixCDP", "pushState failed: $e");
+    }
+  }
+
+  /// 单次探针：页面关键状态一次读齐（避免多次 evaluate 拉长时序）。
+  Future<Map<String, dynamic>?> _pageProbe() async {
+    try {
+      final s = await evaluate(r"""JSON.stringify({
+  href: location.href,
+  t: document.title || '',
+  body: document.body ? document.body.innerText.slice(0,200) : '',
+  rows: document.querySelectorAll('.mchap-row').length,
+  sec: !!document.querySelector('SECTION.mpage__chapters, section.mpage__chapters'),
+  detail: !!document.querySelector('meta[property="og:title"]'),
+  ready: document.readyState
+})""");
+      if (s is! String) return null;
+      return jsonDecode(s) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 等客户端路由**真正生效**；顺带识别 CF 挑战页 / Third-party 拦截页。
+  ///
+  /// 🔴 2026-10-19 修：旧实现只要 `document.readyState === 'complete'` 就返回。
+  /// 但 pushState 之后旧文档的 readyState 本来就是 complete，于是 855ms 就
+  /// 把**首页 DOM**（620KB）当成详情页交出去 → JS 源报 `no manga detail`。
+  /// 现在必须同时满足「location 的 path/query 已经切到目标」+「内容确实换了」。
+  Future<bool> _waitRoute(
+    String url, {
+    bool expectChapters = false,
+    Duration timeout = const Duration(seconds: 25),
+  }) async {
+    final want = Uri.tryParse(url);
+    final wantPath = want?.path ?? '';
+    final wantQuery = want?.query ?? '';
+    var prevTitle = '';
+    try {
+      final t = await evaluate('document.title');
+      if (t is String) prevTitle = t;
+    } catch (_) {}
+
+    final deadline = DateTime.now().add(timeout);
+    var sawChallenge = false;
+    while (DateTime.now().isBefore(deadline)) {
+      await Future.delayed(const Duration(milliseconds: 700));
+      final m = await _pageProbe();
+      if (m == null) continue;
+      final body = (m['body'] ?? '') as String;
+      final title = (m['t'] ?? '') as String;
+      final ready = (m['ready'] ?? '') as String;
+      final rows = (m['rows'] as num? ?? 0).toInt();
+      final sec = m['sec'] == true;
+
+      if (body.contains('Third-party apps')) {
+        Log.warning("ComixCDP", "navigate: comix returned Third-party page");
+        blockedThirdParty = true;
+        final before = _blockedUntil;
+        final until = DateTime.now().add(const Duration(minutes: 10));
+        if (before == null || until.isAfter(before)) _blockedUntil = until;
+        Log.warning(
+          "ComixCDP",
+          "navigate: 熔断 10 分钟 —— 连续重试只会延长 comix 的判定，请不要反复点",
+        );
+        return false;
+      }
+      if (title.contains('请稍候') ||
+          title.contains('Just a moment') ||
+          body.contains('正在进行安全验证')) {
+        if (!sawChallenge) {
+          Log.info("ComixCDP", "navigate: CF challenge in page, waiting…");
+          sawChallenge = true;
+        }
+        continue;
+      }
+
+      // 首页：只要加载完且不是挑战/拦截页即可。
+      if (wantPath == '/' || wantPath.isEmpty) {
+        if (ready == 'complete') return true;
+        continue;
+      }
+
+      final href = (m['href'] ?? '') as String;
+      final u = Uri.tryParse(href);
+      final pathOk = u != null &&
+          u.path == wantPath &&
+          (wantQuery.isEmpty || u.query == wantQuery);
+      if (!pathOk) continue; // 客户端路由还没生效
+
+      if (expectChapters) {
+        if (rows > 0 || sec) return true;
+        continue;
+      }
+      // 非章节场景（详情页 HTML 快照）：等内容真的换掉再读。
+      if (title != prevTitle || rows > 0 || sec) return true;
+    }
+    Log.warning(
+      "ComixCDP",
+      "navigate: route not ready within ${timeout.inSeconds}s (path=$wantPath)",
+    );
+    return false;
+  }
+
+  /// 读详情页 DOM 元信息（`og:*` 在 Nuxt 客户端路由后会同步更新）。
+  ///
+  /// 用途：客户端路由出来的详情页**没有 SSR 的 `#initial-data`**，JS 源的
+  /// `loadInfo` 因此报 `no manga detail`。把 og 元信息一并交给 JS 源，
+  /// 让它能退化成「DOM 元信息 + 章节桥」继续建任务。
+  Future<Map<String, dynamic>> pageMeta() async {
+    try {
+      final s = await evaluate(r"""(function(){
+  var og = function(p){
+    var el = document.querySelector('meta[property="' + p + '"]')
+          || document.querySelector('meta[name="' + p + '"]');
+    return el ? (el.getAttribute('content') || '') : '';
+  };
+  var h1 = document.querySelector('h1');
+  return JSON.stringify({
+    href: location.href,
+    path: location.pathname || '',
+    title: og('og:title') || (h1 ? (h1.innerText || '').trim() : '') || document.title || '',
+    image: og('og:image'),
+    desc: og('og:description'),
+    docTitle: document.title || '',
+    rows: document.querySelectorAll('.mchap-row').length,
+    sec: !!document.querySelector('SECTION.mpage__chapters, section.mpage__chapters')
+  });
+})()""");
+      if (s is String) return jsonDecode(s) as Map<String, dynamic>;
+    } catch (e) {
+      Log.warning("ComixCDP", "pageMeta failed: $e");
+    }
+    return <String, dynamic>{};
+  }
+
+  Future<void> _doPageNavigate(String url) async {
+    await _send('Page.navigate', {'url': url});
+    await Future.delayed(const Duration(milliseconds: 500));
+    await _ws?.close();
+    _ws = null;
+    _pageWsUrl = null;
+    _pending.clear();
+  }
+
+  /// 获取当前 Chrome tab 的 URL（从 /json/list）。
+  Future<String?> currentUrl() async {
+    try {
+      final client = HttpClient()..findProxy = (_) => 'DIRECT';
+      final req = await client.getUrl(Uri.parse('http://$_cdpHost:$_cdpPort/json/list'));
+      final res = await req.close();
+      final body = await res.transform(utf8.decoder).join();
+      client.close();
+      final pages = jsonDecode(body) as List;
+      for (final p in pages) {
+        if (p is Map && p['type'] == 'page') {
+          return p['url'] as String?;
+        }
+      }
+      return null;
+    } catch (e) {
+      Log.warning("ComixCDP", "currentUrl failed: $e");
+      return null;
+    }
+  }
+
+  /// 断开连接
+  Future<void> dispose() async {
+    await _ws?.close();
+    _ws = null;
+    _pending.clear();
+  }
+
+  /// 清空 comix.to 的所有 cookie（含 cf_clearance）。
+  ///
+  /// ⚠️ 2026-10-19 二次取证后**不建议在失败重试里调用**：全新 profile 只导航
+  ///    一次首页依然 503，说明 503 并不是「钉在 cookie 上的标记」；清 cookie
+  ///    反而要多发一次文档导航，加剧 comix 的判定。保留此方法仅作手动排障。
+  ///
+  /// 🔴 CDP 的 `Network.deleteCookies` **必须带 `name`**，只给 domain 会报
+  ///    "Invalid parameters"（旧实现就是这样，全程删不掉任何 cookie）。
+  ///    这里先 `Network.getCookies` 枚举，再逐个 name+domain+path 删。
+  Future<bool> clearComixCookies() async {
+    try {
+      await _send('Network.enable', {});
+      final resp = await _send('Network.getCookies', {
+        'urls': ['https://comix.to/', 'https://comix.to'],
+      });
+      final list = resp['result']?['cookies'];
+      var deleted = 0;
+      if (list is List) {
+        for (final c in list) {
+          if (c is! Map) continue;
+          final name = c['name'];
+          final domain = c['domain'];
+          if (name is! String || domain is! String) continue;
+          final path = (c['path'] as String?) ?? '/';
+          try {
+            await _send('Network.deleteCookies', {
+              'name': name,
+              'domain': domain,
+              'path': path,
+            });
+            deleted++;
+          } catch (_) {}
+        }
+      }
+      Log.info("ComixCDP", "clearComixCookies: deleted $deleted comix cookies");
+      return true;
+    } catch (e) {
+      Log.warning("ComixCDP", "clearComixCookies failed: $e");
+      return false;
+    }
+  }
+
+  /// 硬导航回首页（`Page.navigate`，不是 pushState）。
+  ///
+  /// 为什么不能复用 [navigate]：CF 挑战页 / 503 页**没有 SPA 运行时**，
+  /// pushState 在那种页面上是纯 no-op，页面不会重新请求服务器，挑战页也不会
+  /// 出现。人机验证必须真正重新发一次首页文档请求。
+  ///
+  /// 返回 `true` = 首页成功加载（非 503、CDP 可用）；`false` = 仍 503 或 CDP 不可用。
+  /// 🔴 2026-10-19：旧实现返回 void，调用方无法区分「CDP 死」与「首页正常」，
+  ///    导致 `_verifyViaCfT` 在死 CDP 上傻等 5 分钟。现在用 bool 让上层快速放弃。
+  Future<bool> forceHome() async {
+    blockedThirdParty = false;
+    _blockedUntil = null;
+    _lastHomeNavAt = DateTime.now();
+    try {
+      await _doPageNavigate('https://comix.to/');
+      await _waitRoute('https://comix.to/');
+      try {
+        await evaluate(_antiDetectJs);
+      } catch (_) {}
+      return !blockedThirdParty;
+    } catch (e) {
+      Log.warning("ComixCDP", "forceHome failed: $e");
+      return false;
+    }
+  }
+
+  /// 清除 503 熔断（验证成功 / 探测到墙已退时调用）。
+  void clearBreaker() {
+    _blockedUntil = null;
+    blockedThirdParty = false;
+  }
+
+  /// 硬刷回 comix.to 首页（应用当前 cookie、清掉停留在 503 页的停滞 DOM）。
+  Future<void> resetToHome() async {
+    blockedThirdParty = false;
+    _lastHomeNavAt = DateTime.now();
+    try {
+      await _doPageNavigate('https://comix.to/');
+      await _waitRoute('https://comix.to/');
+    } catch (e) {
+      Log.warning("ComixCDP", "resetToHome failed: $e");
+    }
+  }
+
+  /// 读取 CfT cookie jar 里 comix.to 的全部 cookie（小写名 → 值）。
+  ///
+  /// 用途：人在 CfT 窗口里过完 CF 后，**cookie 本来就已经在同一个 jar 里**，
+  /// 不需要再用 `Network.setCookie` 回注；只要把它读出来存到 `cf_cookie.json`，
+  /// 供 JS 引擎 / WebView 路径复用即可。
+  Future<Map<String, String>> comixCookies() async {
+    final out = <String, String>{};
+    try {
+      await _send('Network.enable', {});
+      final resp = await _send('Network.getCookies', {
+        'urls': ['https://comix.to/', 'https://comix.to'],
+      });
+      final list = resp['result']?['cookies'];
+      if (list is List) {
+        for (final c in list) {
+          if (c is Map && c['name'] is String && c['value'] is String) {
+            out[(c['name'] as String).toLowerCase()] = c['value'] as String;
+          }
+        }
+      }
+    } catch (e) {
+      Log.warning("ComixCDP", "comixCookies failed: $e");
+    }
+    return out;
+  }
+
+  /// 把内置浏览器窗口提到最前（人机验证必须让用户看见那个窗口）。
+  Future<void> bringToFront() async {
+    try {
+      await _send('Page.bringToFront', {});
+    } catch (e) {
+      Log.warning("ComixCDP", "bringToFront failed: $e");
+    }
   }
 }

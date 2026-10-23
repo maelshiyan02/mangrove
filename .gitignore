@@ -18,6 +18,10 @@ Ballonstranslator_store/
 Mangrove-portable/
 ComicLibrary/
 builds/
+# 第三方参考仓库的克隆（comix-downloader 等，232 MB，自带嵌套 .git）。
+# 它是**取证用的只读参考**，不是本项目源码；进了仓库只会让 clone 变成一次
+# 大规模下载，而且嵌套 .git 会让 git 把它当 gitlink/submodule 处理。
+_reference/
 # 应用运行时数据目录（P-DL7：默认在 exe 同级 data/，本机覆盖到项目根 data/）。
 # 含 appdata.json / 各 db / 漫画缓存 / webview 等用户数据，不进 git。
 /data/

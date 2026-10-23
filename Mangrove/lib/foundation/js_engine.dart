@@ -62,6 +62,11 @@ class JsEngine with _JSEngineApi, JsUiApi, Init {
 
   Dio? _dio;
 
+  // P-DL9: cf_clearance 缓存（comix.to HTTP 请求自动注入）
+  static String? _cachedCfClearance;
+  static DateTime? _cfCookieLoadedAt;
+  static const _cfCookieCacheTtl = Duration(minutes: 10);
+
   static void reset() {
     _cache = null;
     _cache?.dispose();
@@ -75,6 +80,47 @@ class JsEngine with _JSEngineApi, JsUiApi, Init {
         validateStatus: (status) => true,
       ),
     );
+  }
+
+  // P-DL9: 从 cf_cookie.json 加载 cf_clearance（带缓存 TTL）
+  static String? getCfClearance() {
+    try {
+      // 缓存还新鲜
+      if (_cachedCfClearance != null &&
+          _cfCookieLoadedAt != null &&
+          DateTime.now().difference(_cfCookieLoadedAt!) < _cfCookieCacheTtl) {
+        return _cachedCfClearance;
+      }
+      final cookieFile = File("${App.dataPath}\\cf_cookie.json");
+      if (!cookieFile.existsSync()) {
+        Log.info("JsEngine", "cf_cookie.json not found at ${App.dataPath}\\cf_cookie.json");
+        _cachedCfClearance = null;
+        return null;
+      }
+      final content = cookieFile.readAsStringSync();
+      final Map<String, dynamic> data = jsonDecode(content);
+      final cfValue = data["cf_clearance"] as String?;
+      if (cfValue != null && cfValue.isNotEmpty) {
+        _cachedCfClearance = cfValue;
+        _cfCookieLoadedAt = DateTime.now();
+        Log.info("JsEngine", "cf_clearance loaded (len=${cfValue.length})");
+        return cfValue;
+      } else {
+        _cachedCfClearance = null;
+        return null;
+      }
+    } catch (e) {
+      Log.warning("JsEngine", "getCfClearance failed: $e");
+      _cachedCfClearance = null;
+      return null;
+    }
+  }
+
+  // P-DL9: 强制刷新 cf_clearance（verifyCloudflare 成功后调用）
+  static void reloadCfClearance() {
+    _cachedCfClearance = null;
+    _cfCookieLoadedAt = null;
+    getCfClearance();
   }
 
   static Uint8List? _jsInitCache;
@@ -235,11 +281,41 @@ class JsEngine with _JSEngineApi, JsUiApi, Init {
               page: (message["page"] as num?)?.toInt() ?? 1,
             );
           case "comix_fetch_html":
-            // 整站 CF challenge 后 dio 拿不到 comix.to 的 SSR HTML，
-            // JS 源 loadInfo 降级走常驻 WebView 页内同源 fetch。
-            return ComixClient()
-                .fetchPageHtml(message["url"].toString())
-                .then((body) => {"status": 200, "body": body});
+            // P-DL9 (2026-10-18)：Chrome CDP 优先 — 真实 Chrome TLS 指纹绕过 CF
+            final url = message["url"].toString();
+            return Future.sync(() async {
+              try {
+                final cdp = ComixCDPWorker.instance;
+                if (await cdp.isAvailable()) {
+                  final snap = await ComixClient.instance.fetchPageSnapshot(url);
+                  final html = snap['html']?.toString() ?? '';
+                  if (snap['blocked'] == true) {
+                    Log.warning(
+                      "JsEngine",
+                      "comix_fetch_html: comix 返回 Third-party 503（不重试）",
+                    );
+                    return {
+                      "status": 503,
+                      "body": html,
+                      "meta": {"blocked": true},
+                    };
+                  }
+                  if (html.length > 2000) {
+                    Log.info(
+                      "JsEngine",
+                      "comix_fetch_html via CDP: ${html.length} chars ✅",
+                    );
+                    return {"status": 200, "body": html, "meta": snap['meta']};
+                  }
+                  Log.warning("JsEngine", "CDP HTML too small → fallback WebView");
+                }
+              } catch (e) {
+                Log.warning("JsEngine", "CDP failed: $e → fallback WebView");
+              }
+              // fallback: headless WebView
+              final body = await ComixClient().fetchPageHtml(url);
+              return {"status": 200, "body": body};
+            });
         }
       }
       return null;
@@ -259,6 +335,29 @@ class JsEngine with _JSEngineApi, JsUiApi, Init {
       if (headers["user-agent"] == null && headers["User-Agent"] == null) {
         headers["User-Agent"] = webUA;
       }
+
+      // P-DL9: comix.to URL 自动注入 cf_clearance cookie（绕过 Cloudflare challenge）
+      final urlStr = req["url"]?.toString() ?? "";
+      if (urlStr.contains("comix.to")) {
+        final cfCookie = getCfClearance();
+        if (cfCookie != null) {
+          final existingCookie = headers["Cookie"]?.toString() ?? "";
+          final existingCookie2 = headers["cookie"]?.toString() ?? "";
+          final currentCookie = existingCookie.isNotEmpty
+              ? existingCookie
+              : existingCookie2;
+          if (!currentCookie.contains("cf_clearance")) {
+            final newCookie = currentCookie.isNotEmpty
+                ? "$currentCookie; cf_clearance=$cfCookie"
+                : "cf_clearance=$cfCookie";
+            headers["Cookie"] = newCookie;
+            Log.info("JsEngine", "_http: injected cf_clearance for $urlStr");
+          }
+        } else {
+          Log.warning("JsEngine", "_http: comix.to request but no cf_clearance available for $urlStr");
+        }
+      }
+
       var dio = _dio;
       if (headers['http_client'] == "dart:io") {
         dio = Dio(

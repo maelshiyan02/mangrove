@@ -64,6 +64,12 @@ class ComicSourceManager with ChangeNotifier, Init {
   /// of the settings, so the arrangement travels between devices.
   static const orderKey = 'comicSourceOrder';
 
+  /// 软件内封禁的源 key：在 [doInit] 的脚本扫描里直接跳过注册，因此不会出现在
+  /// 搜索 / 探索 / 下载等任何入口。当前封禁 `comix_to` —— 该站点对自动化访问强
+  /// 拦截、源采集基本不可行，用户决策（2026-10-19）暂时不在 Mangrove 内做它的
+  /// 在线阅读与下载。源脚本文件不删除，待采集方案成熟后可移出本集合恢复。
+  static const Set<String> _bannedSourceKeys = {'comix_to'};
+
   List<ComicSource> all() => List.from(_sources);
 
   /// key -> position in the stored order. Empty when the user never arranged
@@ -258,6 +264,16 @@ class ComicSourceManager with ChangeNotifier, Init {
               await entity.readAsString(),
               entity.absolute.path,
             );
+            // 🔴 软件内封禁 comix.to 的在线阅读与下载（用户决策，2026-10-19）。
+            // 该站点对自动化/短时无头访问强拦截（CF + 自研 Third-party 判定），
+            // 源配置采集基本不可行，故 Mangrove 内部暂不做它的在线功能。把它从
+            // 注册环节直接跳过：搜索/探索/下载入口都不会再出现它，且不删除源
+            // 脚本文件（等 WebView2 采集修复后可随时放开）。
+            if (_bannedSourceKeys.contains(source.key)) {
+              Log.info("ComicSource",
+                  "Skipping banned source: ${source.key}");
+              continue;
+            }
             _addParsedSource(source, entity.name);
           } catch (e, s) {
             if (e is ComicSourceParseException && e.isRecoverable) {

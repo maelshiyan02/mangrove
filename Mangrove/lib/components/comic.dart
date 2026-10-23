@@ -816,9 +816,13 @@ class ComicTile extends StatelessWidget {
           ),
         );
 
-        if (heroID != null) {
-          image = Hero(tag: "cover$heroID", child: image);
-        }
+        // 🔴 TEMP FIX: 禁用 Hero 动画 — heroID 在同一 PageRoute subtree 内重复
+        // (历史记录+搜索结果同时渲染同一个 comic) 导致 cover533825623 tag 冲突崩溃。
+        // 2026-10-18 紧急修复：移除 Hero，cover 无平滑过渡但不再崩溃。
+        // 后续应改为按 widget 类型加后缀 (cover${heroID}_list / _grid / _detail)。
+        // if (heroID != null) {
+        //   image = Hero(tag: "cover$heroID", child: image);
+        // }
 
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -895,9 +899,13 @@ class ComicTile extends StatelessWidget {
           child: buildImage(context),
         );
 
-        if (heroID != null) {
-          image = Hero(tag: "cover$heroID", child: image);
-        }
+        // 🔴 TEMP FIX: 禁用 Hero 动画 — heroID 在同一 PageRoute subtree 内重复
+        // (历史记录+搜索结果同时渲染同一个 comic) 导致 cover533825623 tag 冲突崩溃。
+        // 2026-10-18 紧急修复：移除 Hero，cover 无平滑过渡但不再崩溃。
+        // 后续应改为按 widget 类型加后缀 (cover${heroID}_list / _grid / _detail)。
+        // if (heroID != null) {
+        //   image = Hero(tag: "cover$heroID", child: image);
+        // }
 
         return InkWell(
           borderRadius: BorderRadius.circular(8),
@@ -3443,9 +3451,9 @@ class SimpleComicTile extends StatelessWidget {
       child: cover,
     );
 
-    if (heroID != null) {
-      child = Hero(tag: "cover$heroID", child: child);
-    }
+    // if (heroID != null) {
+    //   child = Hero(tag: "cover$heroID", child: child);
+    // }
 
     child = AnimatedTapRegion(
       borderRadius: 8,

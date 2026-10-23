@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mangrove/foundation/appdata.dart';
+import 'package:mangrove/network/comix_client.dart';
 import 'package:mangrove/pages/categories_page.dart';
 import 'package:mangrove/pages/comic_details_page/comic_page.dart';
 import 'package:mangrove/pages/random_comic_draw_dialog.dart';
@@ -98,6 +99,37 @@ class _MainPageState extends State<MainPage> {
               to(() => const SearchPage(), preventDuplicate: true);
             },
           ),
+        // P-DL9 (2026-10-17): comix.to 手动 Cloudflare 验证按钮
+        // 常驻侧栏，任何时候都可以点 — 特别是在 comix.to 报"需要手动验证"之后。
+        PaneActionEntry(
+          icon: Icons.shield,
+          label: "验证 CF / Verify CF",
+          onTap: () async {
+            try {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("正在打开 Cloudflare 验证页面...")),
+              );
+              final ok = await ComixClient.instance.verifyCloudflare();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      ok
+                          ? "✅ CF 验证成功！现在可以重新打开 comix.to 漫画了。"
+                          : "❌ 验证未完成。如仍报错请再次点击此按钮。",
+                    ),
+                  ),
+                );
+              }
+            } catch (e) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text("验证失败: $e")),
+                );
+              }
+            }
+          },
+        ),
         PaneActionEntry(
           icon: Icons.style_outlined,
           label: 'Draw a comic'.tl,

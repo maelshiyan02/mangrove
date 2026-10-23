@@ -36,11 +36,15 @@ extension AppTranslation on String {
     };
   }
 
-  /// Translate a string using specified comic source
+  /// Translate a string using specified comic source.
+  /// 若 source 无自定义翻译（comicSource.translations == null），
+  /// 自动 fallback 到全局 translation.json（.tl），让通用 key
+  /// （如 "Sort by"/"Types"）也能生效。
   String ts(String sourceKey) {
     var comicSource = ComicSource.find(sourceKey);
     if (comicSource == null || comicSource.translations == null) {
-      return this;
+      // P-DL9 (2026-10-17)：fallback 到全局翻译表
+      return _translate();
     }
     var locale = App.locale;
     var lc = locale.languageCode;
@@ -48,7 +52,7 @@ extension AppTranslation on String {
     var key = "$lc${cc == null ? "" : "_$cc"}";
     return (comicSource.translations![key] ??
             comicSource.translations![lc])?[this] ??
-        this;
+        _translate();
   }
 }
 

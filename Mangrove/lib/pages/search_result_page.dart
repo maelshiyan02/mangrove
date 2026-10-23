@@ -176,12 +176,21 @@ class _SearchResultPageState extends State<SearchResultPage> {
       loadPage: searchData.loadPage == null
           ? null
           : (i) {
-              return searchData.loadPage!(text, i, options);
+              // P-DL9c: 高级筛选关闭时传空 options（默认值），不传用户之前选的
+              final advancedEnabled = appdata.settings['enableAdvancedSearchFilters'] == true;
+              final effectiveOptions = advancedEnabled
+                  ? options
+                  : (_searchData?.searchOptions?.map((e) => e.defaultValue).toList() ?? const <String>[]);
+              return searchData.loadPage!(text, i, effectiveOptions);
             },
       loadNext: searchData.loadNext == null
           ? null
           : (i) {
-              return searchData.loadNext!(text, i, options);
+              final advancedEnabled = appdata.settings['enableAdvancedSearchFilters'] == true;
+              final effectiveOptions = advancedEnabled
+                  ? options
+                  : (_searchData?.searchOptions?.map((e) => e.defaultValue).toList() ?? const <String>[]);
+              return searchData.loadNext!(text, i, effectiveOptions);
             },
     );
   }
@@ -519,6 +528,13 @@ class _SearchSettingsDialogState extends State<_SearchSettingsDialog> {
   }
 
   Widget buildSearchOptions() {
+    // P-DL9c (2026-10-18): comix.to 反自动化拦截高级筛选 API，默认关闭。
+    // 设置开关 enableAdvancedSearchFilters 控制是否显示高级筛选 UI。
+    final advancedEnabled = appdata.settings['enableAdvancedSearchFilters'] == true;
+    if (!advancedEnabled) {
+      return const SizedBox();
+    }
+
     var children = <Widget>[];
 
     final searchOptions =
