@@ -89,6 +89,31 @@ String chapterDisplayName(String directoryName) {
   return '第$number话$suffix';
 }
 
+/// 章节 chip 的**主标题**：只留「第N话」（P16，2026-10-24）。
+///
+/// 章节列表的格子只有 44px 高、宽不到 220px，塞进
+/// `11 [Rokari Comics] [comix.to]` 会被截成 `11 [Rokari C…`，连话号都读不全。
+/// 组名和站点名是**分类标识**（分组 tab / 次要标签），不该占主标题。
+///
+/// 与 [chapterDisplayName] 的区别：那个会拼 ` · 组名` 供文字列表用，
+/// 这里**只出话号**。两者都不改 key，改的只是显示。
+///
+/// - `11 [Rokari Comics] [comix.to]` → `第11话`
+/// - `第49话 · Rokari Comics`（已经是显示名）→ `第49话`
+/// - `116 [comix.to]` → `第116话`
+/// - `12.5` → `第12.5话`
+/// - 非数字开头（`番外`）→ 原样返回
+String chapterNumberLabel(String keyOrTitle) {
+  final name = keyOrTitle.trim();
+  if (name.isEmpty) return name;
+  // 已经是显示名（域库里存的历史数据），剥掉后缀即可，别再包一层。
+  final already = RegExp(r'^第\s*(\d+(?:\.\d+)?)\s*话').firstMatch(name);
+  if (already != null) return '第${already.group(1)}话';
+  final match = RegExp(r'^(\d+(?:\.\d+)?)[\s_]*(.*)$').firstMatch(name);
+  if (match == null) return name;
+  return '第${match.group(1)}话';
+}
+
 /// 已知源 key → 目录名里用的站点标签（D1，2026-10-24）。
 ///
 /// 目录名要能**独立说明这一话是谁翻的、从哪抓的**。标签用**稳定的网站名**

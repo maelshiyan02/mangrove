@@ -13,7 +13,7 @@ import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/chapter_download_status.dart';
-import 'package:mangrove/foundation/chapter_title_parser.dart';
+import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/chapter_duplicates.dart';
 import 'package:mangrove/foundation/comic_collection_store.dart';
 import 'package:mangrove/foundation/comic_details_cache.dart';

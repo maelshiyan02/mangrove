@@ -1,0 +1,57 @@
+{
+ "9lmnj//error-the-echo": {
+  "dir": "Error the Echo",
+  "hid": "9lmnj",
+  "title": "回声错误",
+  "subtitle": "作者未标注",
+  "tags": ["奇幻", "恐怖", "惊悚"],
+  "description": "一个在游戏里死亡就等于现实中死亡的恐怖游戏。但我是唯一一个死不了的人。",
+  "status": "连载中",
+  "update_time": "1–9 话",
+  "chapters_file": "comix_echo"
+ },
+ "503jz//i-will-save-my-father": {
+  "dir": "I will save my father",
+  "hid": "503jz",
+  "title": "我要救爸爸",
+  "subtitle": "Rogang、ma'am 原作 · Piyo (II) 作画",
+  "tags": ["奇幻", "恋爱"],
+  "description": "从没见过的豪华马车、大到分不清是宅邸还是城堡的房子。我七岁的人生，本来只是和父亲在乡下安稳度日，直到极其富有的特拉维尔伯爵终于找到了他离家出走的次子——那是我父亲。我爸爸是贵族？我还有个有钱的爷爷？！可父亲离家六年后回来，亲戚们并没有给他温暖的欢迎。",
+  "status": "连载中",
+  "update_time": "1–38 话",
+  "chapters_file": "comix_father"
+ },
+ "gm28k//my-dragon-girlfriend-has-returned": {
+  "dir": "My Dragon Girlfriend Has Returned",
+  "hid": "gm28k",
+  "title": "龙女友回归",
+  "subtitle": "LICO、Three sections 原作 · Tuntan 作画",
+  "tags": ["喜剧", "奇幻", "恋爱"],
+  "description": "在「门之破裂」中被卷入、本以为已经死去的女友诗雅，一年后化作龙回来了。但喜悦只是短暂的——与诗雅越是亲密，敏俊的性命就越危险。想活下来并延续这份爱，唯一的方法是完整地掌握龙的力量。敏俊能否跨越种族的界限，守住与诗雅炽热的爱情？",
+  "status": "连载中",
+  "update_time": "1–10 话",
+  "chapters_file": "comix_probe"
+ },
+ "4": {
+  "dir": "The Archvillain's Dying Nanny",
+  "hid": "mnm90",
+  "title": "黑幕男主的限时保姆",
+  "subtitle": "Lee Seorae 原作 · CHOKAM 作画",
+  "tags": ["剧情", "奇幻", "历史", "恋爱", "日常"],
+  "description": "她成了黑化男主克劳德的保姆——那个将来会毁灭世界的男人。再这样下去，她会被男主身上的诅咒之力杀死。于是她决定把爱倾注给这个即将黑化的孩子，阻止他堕落，也扶起孩子的自尊，让公爵学着做一个像样的父亲。她以为孩子的脸色渐渐明朗、公爵也慢慢学会了爱，却不知道是不是因为自己太努力了……",
+  "status": "已完结",
+  "update_time": "1–116 话",
+  "chapters_file": "comix_arch"
+ },
+ "5": {
+  "dir": "The Perks of Being a Villainess",
+  "hid": "7zdxe",
+  "title": "做个恶女好安逸",
+  "subtitle": "Mango Kim（망고킴）、Sudal（수달）原作 · Yoteh（요테）作画",
+  "tags": ["喜剧", "剧情", "奇幻", "异世界", "恋爱"],
+  "description": "度熙一辈子逆来顺受，凄惨地死去，又重生到小说里成了臭名昭著的恶女。没想到新生活并非没有好处——黛博拉·西摩还是世上最有钱的恶女。如今她只想过得低调自在……偏偏黛博拉注定要被送进修道院！这个曾经的受气包能否找到脱身的办法？",
+  "status": "连载中",
+  "update_time": "1–110 话",
+  "chapters_file": "comix_perks"
+ }
+}

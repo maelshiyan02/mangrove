@@ -373,7 +373,47 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
   Set<String> get selectableKeys =>
       visible.map((i) => (i + 1).toString()).toSet();
 
+  /// 章节格子的翻译组小字（P16）。取不到返回 null，整块不渲染。
+  ///
+  /// 版本化章节直接问版本矩阵；扁平本地漫画的组名藏在目录名里
+  /// （`6 [DivaScans] [comix.to]`），只能从 key 反解。注意用**原始**
+  /// [chapters] 而不是 [_displayChapters] 算判别集合——一旦按组筛选，
+  /// _displayChapters 里只剩一个组，就再也看不出"这号有两个组"了。
+  String? _chapterGroupLabel(int i, String key) {
+    if (_displayChapters.isVersioned) {
+      final group = _displayChapters.scanlationGroupAt(i);
+      if (group != null) return group;
+    }
+    final ref = parseChapterDirectoryName(key);
+    if (ref == null || ref.groups.isEmpty) return null;
+    final label = ref.groups.join(' ');
+    return _ambiguousGroups.contains(label) ? label : null;
+  }
+
+  /// 全书「同一话号存在多个翻译组」时涉及的组名集合，只决定小字出现与否。
+  Set<String> get _ambiguousGroups =>
+      _ambiguousCache ??= _computeAmbiguousGroups();
+
+  Set<String>? _ambiguousCache;
+
+  Set<String> _computeAmbiguousGroups() {
+    final byNumber = <String, Set<String>>{};
+    for (final key in chapters.allVersionKeys) {
+      final ref = parseChapterDirectoryName(key);
+      if (ref == null || ref.groups.isEmpty) continue;
+      byNumber.putIfAbsent(ref.number, () => <String>{}).add(
+        ref.groups.join(' '),
+      );
+    }
+    final ambiguous = <String>{};
+    for (final groups in byNumber.values) {
+      if (groups.length > 1) ambiguous.addAll(groups);
+    }
+    return ambiguous;
+  }
+
   void _computeVisible() {
+    _ambiguousCache = null;
     _computeDisplayChapters();
     // duplicateChapterIndices are flat indices into the FULL chapters list.
     // When a scanlation-group filter is active, _displayChapters is a
@@ -577,7 +617,7 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                parseChapterTitle(value).displayTitle,
+                                chapterNumberLabel(value),
                                 maxLines: 1,
                                 textAlign: TextAlign.center,
                                 overflow: TextOverflow.ellipsis,
@@ -590,10 +630,9 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
                                                 : null),
                                 ),
                               ),
-                              if (_displayChapters.isVersioned &&
-                                  _displayChapters.scanlationGroupAt(i) != null)
+                              if (_chapterGroupLabel(i, key) case final label?)
                                 Text(
-                                  _displayChapters.scanlationGroupAt(i)!,
+                                  label,
                                   maxLines: 1,
                                   textAlign: TextAlign.center,
                                   overflow: TextOverflow.ellipsis,
@@ -816,7 +855,45 @@ class _GroupedComicChaptersState extends State<_GroupedComicChapters>
       final group = chapters.scanlationGroupAt(i);
       if (group != null) return group;
     }
-    return _memberLocalComic?.groupAt(i + 1);
+    final fromCollection = _memberLocalComic?.groupAt(i + 1);
+    if (fromCollection != null) return fromCollection;
+    // 扁平本地漫画（磁盘目录就是章节）：组名藏在目录名里
+    // （`6 [DivaScans] [comix.to]`）。但整本同一个组时不显示——
+    // 50 章全挂一行 "Rokari Comics" 是纯噪音，读者从话号就能认出是第几话。
+    // 只有「同一话号真的存在多个组」时，组名才有区分价值（MDGH 的第 6 话
+    // 既有 Asura 又有 Diva，不标出来就是两个一模一样的「第6话」）。
+    if (index >= chapters.groupCount) return null;
+    final keys = chapters.getGroupByIndex(index).keys;
+    if (i >= keys.length) return null;
+    final ref = parseChapterDirectoryName(keys.elementAt(i));
+    if (ref == null || ref.groups.isEmpty) return null;
+    final label = ref.groups.join(' ');
+    return _ambiguousGroups.contains(label) ? label : null;
+  }
+
+  /// 全书「同一话号存在多个翻译组」时，涉及的组名集合。
+  ///
+  /// 只用来决定次要标签要不要出现，不参与任何 key / 路径计算。
+  /// 缓存一次，`_computeVisible()` 每次重算前清掉（下载新章后可能新增重复话号）。
+  Set<String>? _ambiguousCache;
+
+  Set<String> get _ambiguousGroups =>
+      _ambiguousCache ??= _computeAmbiguousGroups();
+
+  Set<String> _computeAmbiguousGroups() {
+    final byNumber = <String, Set<String>>{};
+    for (final key in chapters.allVersionKeys) {
+      final ref = parseChapterDirectoryName(key);
+      if (ref == null || ref.groups.isEmpty) continue;
+      byNumber.putIfAbsent(ref.number, () => <String>{}).add(
+        ref.groups.join(' '),
+      );
+    }
+    final ambiguous = <String>{};
+    for (final groups in byNumber.values) {
+      if (groups.length > 1) ambiguous.addAll(groups);
+    }
+    return ambiguous;
   }
 
   /// 0-based flat index of the first chapter in the current group.
@@ -837,6 +914,7 @@ class _GroupedComicChaptersState extends State<_GroupedComicChapters>
   /// per group, so a title repeated across tabs ("英文版"/"西班牙语" both having
   /// "第一话") is never touched.
   void _computeVisible() {
+    _ambiguousCache = null;
     if (chapters.groupCount == 0) {
       visible = const [];
       return;
@@ -1131,7 +1209,7 @@ class _GroupedComicChaptersState extends State<_GroupedComicChapters>
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                parseChapterTitle(value).displayTitle,
+                                chapterNumberLabel(value),
                                 maxLines: 1,
                                 textAlign: TextAlign.center,
                                 overflow: TextOverflow.ellipsis,
