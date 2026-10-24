@@ -53,6 +53,36 @@ int? coverSeasonOf(String fileName) {
   return int.tryParse(match.group(1) ?? '');
 }
 
+/// 从封面文件名里读单行本卷号：`[KR][cover]vol(3).jpg` → 3（P18，2026-10-24）。
+///
+/// 为什么除 season 之外还要有 vol：网络连载版的主视觉按**季**换（`season(1)`），
+/// 而韩文原版、日文版这类纸质单行本的封面按**卷**出（第 1~4 卷各一张）。两种
+/// 编号都是"越新越大"，但语义不同，不能混写进 season 里——否则日后真出现
+/// 第二季，`season(2)` 与 `vol(4)` 谁更新就说不清了。认 `vol(3)` / `vol 3` /
+/// `volume3` / 全角括号。
+int? coverVolumeOf(String fileName) {
+  final match = RegExp(
+    r'(?:vol|volume)\s*[\(（]?\s*(\d+)\s*[\)）]?',
+    caseSensitive: false,
+  ).firstMatch(fileName);
+  if (match == null) return null;
+  return int.tryParse(match.group(1) ?? '');
+}
+
+/// 封面的"新旧序号"：季号与卷号取较大者，都没有返回 null。
+///
+/// 排序只认这一个数。若把季、卷当两个维度比较，同一本漫画里
+/// `[CN][cover]season(1)` 会永远压住 `[KR][cover]vol(4)`，读者看到的是旧的
+/// 网络版主视觉，而不是最新的单行本封面。合成一维后"谁大谁新"，
+/// 语言只在**新旧相同时**才参与决胜（见 [coverLanguageRank]）。
+int? coverVersionOf(String fileName) {
+  final season = coverSeasonOf(fileName);
+  final volume = coverVolumeOf(fileName);
+  if (season == null) return volume;
+  if (volume == null) return season;
+  return season > volume ? season : volume;
+}
+
 /// 已知源站标签的样子：`comix.to` 这种"带点的域名"，不含空格。
 ///
 /// 只用来决定**显示时要不要露面**，不影响目录名本身——目录名里保留源站是为了

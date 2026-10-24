@@ -30,8 +30,9 @@ Future<String?> showCoverPickerDialog(
           width: 460,
           child: Text(
             "这本漫画还没有封面池。在漫画目录下建一个 cover 文件夹，把图片放进去"
-                "（建议命名 [cover]season(1).jpg、[cover]season(2).jpg），"
-                "再回来就能在这里切换。"
+                "（按季换的命名 [KR][cover]season(1).jpg，按单行本卷换的命名"
+                " [KR][cover]vol(1).jpg，前面的 [KR]/[CN]/[EN]/[JP] 是封面上的"
+                "文字语言），再回来就能在这里切换。"
                 .tl,
           ),
         ),
