@@ -6,8 +6,11 @@ import 'package:mangrove/utils/io.dart';
 /// 封面候选池的 IO 层（P12，2026-10-24）。
 ///
 /// 一本漫画因季度更新会有多张封面，全部放在 `<漫画目录>/cover/` 里，文件名
-/// 带语义：按季换的写 `[LANG][cover]season(1).jpg`，按单行本卷换的写
-/// `[LANG][cover]vol(3).jpg`（P18 补的第二种；见 [coverVersionOf]）。
+/// 带语义，三种写法并存（P19，2026-10-24）：
+/// - `[LANG][cover]season(1).jpg` —— 韩漫的**季**（季度完结制，一季一张）；
+/// - `[LANG][cover]vol(3).jpg`    —— 日漫的**单行本卷**；
+/// - `[LANG][cover]event(chuseok).jpg` —— 节日贺图/特别插画，不算新的一季。
+/// 详见 [coverSeasonOf] / [coverVolumeOf] / [coverEventOf]。
 ///
 /// 为什么单独一个文件而不是塞进 `local_comic_edit.dart`：那个文件已经是
 /// 1900+ 行的"本地漫画写操作总汇"，而封面池是**只读的候选枚举**，两边职责
@@ -20,14 +23,19 @@ bool _isCoverImage(File file) {
   return dot >= 0 && _coverImageExtensions.contains(name.substring(dot + 1));
 }
 
-/// 排序：封面"新旧序号"从大到小（季号与卷号统一比较，见 [coverVersionOf]）；
-/// 同序号内按语言优先级（KR > CN > EN > JP，P17）；都相同时按文件名。
+/// 排序：正篇封面（`season(N)` 韩漫 / `vol(N)` 日漫）按序号从大到小，
+/// 贺图（`event(名)`）整体排在正篇之后；同序号内按语言优先级
+/// （KR > CN > EN > JP，P17）；都相同时按文件名。
 ///
-/// 为什么序号要合并季与卷：一本漫画的 cover/ 里现在同时躺着网络版季封面
+/// 为什么序号要合并季与卷：一本漫画的 cover/ 里可能同时躺着网络版季封面
 /// （`season(1)`）和单行本各卷封面（`vol(1)..vol(4)`）。只比 season 的话，
 /// 没有 season 段的卷封面会被整体判成"无季度"排到最后，读者看到的是旧的
-/// 网络版主视觉；只比 vol 又会让季节封面全部落到后面。合成一个数后，
-/// "最新的那张"才真的排第一。
+/// 网络版主视觉；只比 vol 又会让季节封面全部落到后面。注意这不是说两种
+/// 编号属于同一套体系——它们是韩漫/日漫各自的维度（见 [coverSeasonOf] 与
+/// [coverVolumeOf]），合算只是为了排出"哪张最新"。
+///
+/// 贺图没有版本号，因此永远落在正篇后面：默认封面不该被一张愚人节或秋夕
+/// 的活动图顶掉（见 [coverEventOf]）。
 int _compareCover(File a, File b) {
   final versionA = coverVersionOf(a.name);
   final versionB = coverVersionOf(b.name);

@@ -40,10 +40,14 @@ const coverDirectoryName = 'cover';
 bool isCoverDirectoryName(String name) =>
     name.trim().toLowerCase() == coverDirectoryName;
 
-/// 从封面文件名里读季度序号：`[cover]season(1).jpg` → 1。
+/// 从封面文件名里读**季度**序号：`[cover]season(1).jpg` → 1。
+///
+/// 这是**韩漫**的封面维度。韩国网漫把长连载切成"季"（시즌），一季几十话，
+/// 季末标注 Season Finale，休载几个月再开下一季，每开一季平台就换一张主视觉。
+/// 所以韩漫封面按 `season(N)` 编号——N 是季，不是卷。
 ///
 /// 认 `season(1)` / `season 1` / `Season1` / 全角括号；读不出返回 null
-/// （贺图、特典之类没有季度概念的文件走文件名兜底排序）。
+/// （贺图、特典之类没有季度概念的文件走文件名兜底排序，见 [coverEventOf]）。
 int? coverSeasonOf(String fileName) {
   final match = RegExp(
     r'season\s*[\(（]?\s*(\d+)\s*[\)）]?',
@@ -53,13 +57,17 @@ int? coverSeasonOf(String fileName) {
   return int.tryParse(match.group(1) ?? '');
 }
 
-/// 从封面文件名里读单行本卷号：`[KR][cover]vol(3).jpg` → 3（P18，2026-10-24）。
+/// 从封面文件名里读**单行本卷号**：`[KR][cover]vol(3).jpg` → 3（P18，2026-10-24）。
 ///
-/// 为什么除 season 之外还要有 vol：网络连载版的主视觉按**季**换（`season(1)`），
-/// 而韩文原版、日文版这类纸质单行本的封面按**卷**出（第 1~4 卷各一张）。两种
-/// 编号都是"越新越大"，但语义不同，不能混写进 season 里——否则日后真出现
-/// 第二季，`season(2)` 与 `vol(4)` 谁更新就说不清了。认 `vol(3)` / `vol 3` /
-/// `volume3` / 全角括号。
+/// 这是**日漫**的封面维度。日本漫画按单行本（単行本）出版，一卷一张新封面，
+/// 而且卷封面往往和杂志连载时的彩页完全不是一张图，所以要单独成一系列。
+///
+/// 和 season 是两套体系，不是一条时间轴上的两个刻度：韩漫极少出单行本
+/// （Kakao 上 `[단행본]` 基本都是原著**小说**的单行本，不是漫画），日漫
+/// 也基本不按季换主视觉。一本漫画正常只会用其中一种；真出现混用时按
+/// [coverVersionOf] 取较大者，语言仅在相同时决胜。
+///
+/// 认 `vol(3)` / `vol 3` / `volume3` / 全角括号。
 int? coverVolumeOf(String fileName) {
   final match = RegExp(
     r'(?:vol|volume)\s*[\(（]?\s*(\d+)\s*[\)）]?',
@@ -69,12 +77,44 @@ int? coverVolumeOf(String fileName) {
   return int.tryParse(match.group(1) ?? '');
 }
 
-/// 封面的"新旧序号"：季号与卷号取较大者，都没有返回 null。
+/// 封面是不是**节日贺图 / 特别插画**：`[KR][cover]event(chuseok).jpg`
+/// → `chuseok`（P19，2026-10-24）。
+///
+/// 为什么要单独一类，而不是塞进 season：韩国网漫平台每逢节日会**整批换掉
+/// 连载作品的缩略图**，这些图不是"新的一季"，只是当期活动的视觉。已核实的
+/// 例子（Naver 官方新闻稿）：
+/// - 2026-04-01 愚人节：约 900 部连载作品缩略图换成 SNS 概念版，500 部最新
+///   免费话次追加作者手绘的愚人节特别画面；
+/// - 2025-04-30 黄金连休（5/1~5/5，含儿童节）：约 900 部换成"连休主角也放假"
+///   主题缩略图，配最新话次特别插画；
+/// - 2021-02-11 春节：游戏角色穿韩服的"설맞이 축전"。
+/// 秋夕（추석）同理，画面符号是韩服 + 柿子树 + 月兔 + 满月。
+///
+/// 用 `season(N)` 编码贺图有两个坏处：把"换活动图"误读成"推进了一季"，
+/// 且默认封面会被一张兔子图顶掉。所以贺图单独成 `event(名)`，排序时整体
+/// 排在正篇封面之后（没有版本号 → [coverVersionOf] 返回 null）。
+///
+/// 认 `event(chuseok)` / `event chuseok` / `event=chuseok`，大小写不敏感，
+/// 名字取 `[a-z0-9-_]`。
+String? coverEventOf(String fileName) {
+  final match = RegExp(
+    r'event\s*[\(（=:]\s*([a-z0-9_-]+)',
+    caseSensitive: false,
+  ).firstMatch(fileName);
+  if (match == null) return null;
+  final tag = match.group(1)?.trim().toLowerCase() ?? '';
+  return tag.isEmpty ? null : tag;
+}
+
+/// 封面的"新旧序号"：季号与卷号取较大者；贺图与无名文件返回 null（排最后）。
 ///
 /// 排序只认这一个数。若把季、卷当两个维度比较，同一本漫画里
 /// `[CN][cover]season(1)` 会永远压住 `[KR][cover]vol(4)`，读者看到的是旧的
 /// 网络版主视觉，而不是最新的单行本封面。合成一维后"谁大谁新"，
 /// 语言只在**新旧相同时**才参与决胜（见 [coverLanguageRank]）。
+///
+/// 贺图刻意没有版本号：它是当期活动图（见 [coverEventOf]），不是连载推进，
+/// 默认封面应当是正篇主视觉，读者想用贺图自己去封面选择器里挑。
 int? coverVersionOf(String fileName) {
   final season = coverSeasonOf(fileName);
   final volume = coverVolumeOf(fileName);
@@ -192,6 +232,44 @@ int coverLanguageRank(String? code) {
   if (code == null) return order.length;
   final index = order.indexOf(code.toUpperCase());
   return index < 0 ? order.length : index;
+}
+
+/// 封面候选池里给每张图配的短标签（P19，2026-10-24）。
+///
+/// 文件名本身就是元数据，但 `[KR][cover]event(cherry-blossom).jpg` 这种
+/// 塞不进网格卡片，缩略图下只能显示成 `[KR][cover]e…`。所以抽成
+/// 「第3季 · 韩」「贺图 · 秋夕」这样的短语，让读者一眼分清**哪张是正篇季
+/// 封面、哪张只是当期活动图**——这正是分 season/vol/event 三类的原因。
+///
+/// 未知写法返回 null，卡片就不显示标签（不猜）。
+String? coverBadgeOf(String fileName) {
+  const langNames = {'CN': '中', 'EN': '英', 'KR': '韩', 'JP': '日'};
+  final lang = langNames[coverLanguageOf(fileName)];
+  final event = coverEventOf(fileName);
+  if (event != null) {
+    const names = {
+      'chuseok': '秋夕',
+      'seollal': '春节',
+      'april-fools': '愚人节',
+      'cherry-blossom': '樱花季',
+      'christmas': '圣诞',
+      'halloween': '万圣节',
+      'valentine': '情人节',
+      'holiday': '连休',
+    };
+    final label = '贺图 · ${names[event] ?? event}';
+    return lang == null ? label : '$label · $lang';
+  }
+  String? version;
+  final season = coverSeasonOf(fileName);
+  if (season != null) {
+    version = '第$season季';
+  } else {
+    final volume = coverVolumeOf(fileName);
+    if (volume != null) version = '第$volume卷';
+  }
+  if (version == null) return lang;
+  return lang == null ? version : '$version · $lang';
 }
 
 /// 已知源 key → 目录名里用的站点标签（D1，2026-10-24）。

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:mangrove/components/components.dart';
+import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/context.dart';
 import 'package:mangrove/utils/cover_pool.dart';
 import 'package:mangrove/utils/io.dart';
@@ -30,9 +31,9 @@ Future<String?> showCoverPickerDialog(
           width: 460,
           child: Text(
             "这本漫画还没有封面池。在漫画目录下建一个 cover 文件夹，把图片放进去"
-                "（按季换的命名 [KR][cover]season(1).jpg，按单行本卷换的命名"
-                " [KR][cover]vol(1).jpg，前面的 [KR]/[CN]/[EN]/[JP] 是封面上的"
-                "文字语言），再回来就能在这里切换。"
+                "（韩漫按季换的命名 [KR][cover]season(1).jpg，日漫按单行本卷换的"
+                "命名 [KR][cover]vol(1).jpg，节日贺图用 [KR][cover]event(chuseok).jpg，"
+                "前面的 [KR]/[CN]/[EN]/[JP] 是封面上的文字语言），再回来就能在这里切换。"
                 .tl,
           ),
         ),
@@ -121,7 +122,9 @@ class _CoverPickerDialog extends StatelessWidget {
                         vertical: 4,
                       ),
                       child: Text(
-                        file.name,
+                        // 有语义标签就显示「第3季 · 韩」「贺图 · 秋夕」，
+                        // 读不出写法的老文件退回原始文件名。
+                        coverBadgeOf(file.name) ?? file.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
