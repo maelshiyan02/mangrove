@@ -386,13 +386,19 @@ class ImagesDownloadTask extends DownloadTask with _TransferSpeedMixin {
   /// Directory name a chapter's pages are stored in. Empty for comics without
   /// chapters, where pages live directly in the comic root.
   ///
-  /// 规则本体在 [chapterDirectoryName]（版本化且带组名时为 `<话号> [组名]`），
-  /// 读取侧 `LocalManager.getImagesForComic` 调的是同一个函数 —— 两侧绝不
-  /// 能各写一份，否则"下载完读不到"。
+  /// 规则本体在 [chapterDirectoryName]（版本化且带组名时为 `<话号> [组名]`，
+  /// D1 起再补 `[站点]`），读取侧 `LocalManager.getImagesForComic` 调的是同一个
+  /// 函数 —— 两侧绝不能各写一份，否则"下载完读不到"。
+  ///
+  /// 新下载一律写**全套信息**：`49 [Rokari Comics] [comix.to]`。
   String _chapterDirectoryName(String chapterKey) {
     final chapters = comic?.chapters;
     if (chapters == null) return '';
-    return chapterDirectoryName(chapters, chapterKey);
+    return chapterDirectoryName(
+      chapters,
+      chapterKey,
+      siteTag: sourceSiteTag(source.key),
+    );
   }
 
   /// 本次任务要下载的章节 key 序列。
@@ -1287,6 +1293,11 @@ class ImagesDownloadTask extends DownloadTask with _TransferSpeedMixin {
       comicType: comicType,
       downloadedChapters: chapters ?? comic?.chapters?.ids.toList() ?? [],
       createdAt: DateTime.now(),
+      // D1（2026-10-24）：本地记录里也写下「来源站点」与「更新时间」。
+      // 以前这两列对网络下载恒为空，导致迁移脚本无从判断一本漫画从哪个站
+      // 下的、只能干瞪眼。目录名带站标是同一条信息的磁盘侧投影。
+      source: sourceSiteTag(source.key),
+      updateTime: comic?.updateTime ?? '',
     );
   }
 
@@ -1809,6 +1820,9 @@ class ArchiveDownloadTask extends DownloadTask {
       comicType: ComicType(source.key.hashCode),
       downloadedChapters: [],
       createdAt: DateTime.now(),
+      // D1：与 ImagesDownloadTask 一致，网络下载一律写上来源站点。
+      source: sourceSiteTag(source.key),
+      updateTime: comic.updateTime ?? '',
     );
   }
 }

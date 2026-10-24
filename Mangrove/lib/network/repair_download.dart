@@ -294,11 +294,28 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
         : null;
     final chapters = comic?.chapters;
     final keyByDir = <String, String>{};
+    final keyByNumberGroup = <String, String>{};
+    final keyByNumber = <String, String>{};
     if (chapters != null) {
       for (final key in chapters.allVersionKeys) {
         final name = chapterDirectoryName(chapters, key);
-        if (name.isNotEmpty) keyByDir.putIfAbsent(name, () => key);
+        if (name.isEmpty) continue;
+        keyByDir.putIfAbsent(name, () => key);
+        // D1 兼容：缺页表里的 chapterId 可能是带/不带 `[站点]` 的任一写法。
+        final ref = parseChapterDirectoryName(name);
+        if (ref == null) continue;
+        keyByNumberGroup.putIfAbsent('${ref.number}|${ref.groupKey}', () => key);
+        keyByNumber.putIfAbsent(ref.number, () => key);
       }
+    }
+
+    String? keyOfChapterId(String chapterId) {
+      final exact = keyByDir[chapterId];
+      if (exact != null) return exact;
+      final ref = parseChapterDirectoryName(chapterId);
+      if (ref == null) return null;
+      return keyByNumberGroup['${ref.number}|${ref.groupKey}'] ??
+          keyByNumber[ref.number];
     }
 
     final cache = <String, List<String>>{};
@@ -306,7 +323,7 @@ class RepairDownloadTask extends DownloadTask with _RepairSpeedMixin {
     for (final i in blanks) {
       if (!_isRunning) return false;
       final entry = targets[i];
-      final chapterKey = keyByDir[entry.chapterId];
+      final chapterKey = keyOfChapterId(entry.chapterId);
       if (chapterKey == null) {
         unresolved++;
         continue;

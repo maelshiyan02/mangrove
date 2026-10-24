@@ -64,6 +64,7 @@
 | **A16** | 运营坑与取证工具（agent-browser 卡 Chromium 下载→curl 兜底；收藏页 "Not login" 是框架登录拦截非 bug） | 需网页取证、或见收藏/详情页 "Not login" 鉴别诊断时 |
 | **A17** | comix 批量下载 · 🔴 假缺页（HTTP2 失败≠广告页）· `py -3.12` · 日志块缓冲 · 章节命名与 `chapterDirectoryName` 耦合 | 跑 `comix_browser_dl.py`、见到某话少页、改章节文件夹命名之前 |
 | **A18** | 本地覆盖层（`comic_field_overrides`）· per-comic 模式 · 封面池 `cover/[cover]season(N)` · 章节显示名 · 🔴 构建工装 python 在 `envs/default` | 碰详情页模式开关/封面/章节显示名、要"本地改网络漫画信息"之前 |
+| **A19** | 🔴 章节目录命名规范 D1（话号+组+站）· 兼容读取三条腿 · 迁移脚本六个坑 · 哪些目录绝不能改名 · 章节自然排序 | 改章节命名、写迁移脚本、见"有图读不到"、章节乱序之前 |
 
 ## 2. 工作日志索引
 

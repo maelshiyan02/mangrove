@@ -199,8 +199,9 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
     final local = LocalManager().find(reader.widget.cid, reader.type);
     if (local == null) return 0;
     // 与下载侧同一个函数：目录名规则分叉会让"缺页"标记永远查不到。
+    // 语义匹配（D1）兼容目录名带/不带 `[站点]` 两种写法。
     final dir = chapterDirectoryName(reader.widget.chapters, reader.eid);
-    return MissingPages.peek(local.baseDir)?.countOfChapter(dir) ?? 0;
+    return MissingPages.peek(local.baseDir)?.countOfChapterFuzzy(dir) ?? 0;
   }
 
   /// One-time, dismissible notice shown when the reader opens an incomplete

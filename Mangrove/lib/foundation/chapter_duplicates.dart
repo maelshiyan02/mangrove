@@ -149,6 +149,32 @@ abstract class ChapterOrderPrefs {
     return groups is Map ? groups[group] : null;
   }
 
+  /// 从章节 key 里读前导话号：`49 [Rokari Comics] [comix.to]` → 49。
+  ///
+  /// 本地漫画的章节 key 就是磁盘目录名，直接按字符串排序会得到
+  /// `1,2,3,4,48,49,5,6,7` 这种荒唐顺序（用户 P14 报的就是这个）。所以凡是
+  /// 没有用户自定义顺序的章节，一律按**话号数值**自然排序。
+  static double? _leadingChapterNumber(String key) {
+    final match = RegExp(r'^\s*(\d+(?:\.\d+)?)').firstMatch(key);
+    if (match == null) return null;
+    return double.tryParse(match.group(1)!);
+  }
+
+  /// 章节 key 的自然比较：有数字按数字比，没数字的排在有数字的后面。
+  static int _compareChapterKeys(String a, String b) {
+    final na = _leadingChapterNumber(a);
+    final nb = _leadingChapterNumber(b);
+    if (na != null && nb != null) {
+      final cmp = na.compareTo(nb);
+      if (cmp != 0) return cmp;
+    } else if (na != null) {
+      return -1;
+    } else if (nb != null) {
+      return 1;
+    }
+    return a.compareTo(b);
+  }
+
   static List<int> _orderedIndices(List<String> ids, dynamic stored) {
     final indexById = <String, int>{};
     for (var i = 0; i < ids.length; i++) {
@@ -162,9 +188,13 @@ abstract class ChapterOrderPrefs {
         if (index != null && used.add(index)) result.add(index);
       }
     }
+    // 剩余章节按话号自然排序追加 —— 不再沿用 `ids` 的原始（字符串）次序。
+    final rest = <int>[];
     for (var i = 0; i < ids.length; i++) {
-      if (used.add(i)) result.add(i);
+      if (!used.contains(i)) rest.add(i);
     }
+    rest.sort((x, y) => _compareChapterKeys(ids[x], ids[y]));
+    result.addAll(rest);
     return result;
   }
 

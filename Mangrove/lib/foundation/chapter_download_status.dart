@@ -53,8 +53,9 @@ ChapterDownloadStatus chapterDownloadStatusFor({
   // 缺页（红色）最高优先级：已知不完整的章节优先于下载中/已下载。
   if (local != null) {
     final dir = chapterDirectoryName(chapters, chapterKey);
+    // 语义匹配（D1）：目录名可能带 `[站点]` 也可能不带，字面比对会漏掉。
     final missing =
-        MissingPages.peek(local.baseDir)?.countOfChapter(dir) ?? 0;
+        MissingPages.peek(local.baseDir)?.countOfChapterFuzzy(dir) ?? 0;
     if (missing > 0) return ChapterDownloadStatus.missing;
   }
   // 队列里的任务：出错→红，下载中→黄，待命→浅绿。同一章有多只任务时

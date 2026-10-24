@@ -1228,12 +1228,30 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
             icon: const Icon(Icons.photo_library_outlined),
             tooltip: 'Choose Cover'.tl,
           ),
-        // 本地模式下允许编辑「本地覆盖层」（P11 §5.3）：网络漫画的信息来自
-        // 站点、不能在源头改，但可以盖一层自己的。网络模式不给这个入口——
-        // 那时你看到的就是源头内容，改它没有意义，也无处可存。
-        if (displayMode == ComicDisplayMode.local && comic.sourceKey != 'local')
+        // 本地模式下允许编辑漫画详细信息（P11 §5.3 / P14 修）。
+        //
+        // 🔴 P14（2026-10-24）此前这里写了 `comic.sourceKey != 'local'`，
+        // 本意是"纯本地漫画的信息本来就存在本地记录里，不需要覆盖层"，
+        // 但结果是把**纯本地漫画的编辑入口整块删掉了** —— 而它们恰恰是
+        // 最需要手填信息的一类（没有源站可抓）。现在按身份分流：
+        //   纯本地漫画 → 直接改 LocalComic 本身（标题/作者/来源/标签/简介）
+        //   网络漫画   → 写「本地覆盖层」，网络原文保留、随时可恢复
+        // 网络模式仍不给入口：那时看到的就是站点原文，改了也无处可存。
+        if (displayMode == ComicDisplayMode.local)
           IconButton(
             onPressed: () async {
+              final local = _localComic;
+              if (comic.sourceKey == 'local' && local != null) {
+                final updated = await showEditLocalComicInfoDialog(
+                  App.rootContext,
+                  local,
+                );
+                if (updated == null) return;
+                // 与换封面同理：必须走 refreshLocalComic 重建 `data`，
+                // 只 update() 的话页面上还是旧标题/旧简介。
+                refreshLocalComic();
+                return;
+              }
               final changed = await showComicOverrideDialog(
                 App.rootContext,
                 comicId: overrideComicId,

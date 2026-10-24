@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/utils/io.dart';
 
@@ -156,6 +157,19 @@ class MissingPagesTable {
 
   int countOfChapter(String chapterId) {
     return entries.where((e) => e.chapterId == chapterId).length;
+  }
+
+  /// 按**目录名语义**统计缺页，兼容 D1 新老命名（`[站点]` 有无）。
+  ///
+  /// 缺页表的 key 就是章节目录名。目录名规则升级后，同一条目在新旧两种写法
+  /// 下字面不相等（`49 [Rokari Comics]` vs `49 [Rokari Comics] [comix.to]`），
+  /// 精确比对会让"红标"凭空消失——明明有缺页却显示完整，比报错更坑。
+  int countOfChapterFuzzy(String chapterId) {
+    final exact = entries.where((e) => e.chapterId == chapterId).length;
+    if (exact > 0) return exact;
+    return entries
+        .where((e) => chapterDirectoryMatchScore(e.chapterId, chapterId) >= 0)
+        .length;
   }
 
   Set<int> indexesOfChapter(String chapterId) {

@@ -1031,13 +1031,20 @@ Future<List<String>> getImagesForComic(LocalComic comic, Object ep) async {
       // 必须与下载侧同一个函数：目录名规则一旦分叉就"下完读不到"。
       var dirName = chapterDirectoryName(comic.chapters, cid);
       var dirPath = FilePath.join(directory.path, dirName);
-      // 容错：用户可能**手动**把文件夹复制进漫画目录，其名未必等于规范目录名
-      // （如 "Chapter 5" 会被解析成 "5"）。在**不改动磁盘**的前提下，回退到按
-      // 章节 key 的原始名找目录，避免读不到页、显示空白或报错。
       if (!Directory(dirPath).existsSync()) {
-        final alt =
-            FilePath.join(directory.path, sanitizePathSegment(cid));
-        if (Directory(alt).existsSync()) dirPath = alt;
+        // 兼容读取（D1）：磁盘上可能是旧规范 `49 [Rokari Comics]`（少一个
+        // 站点标签）或新规范多带站标，语义对齐才算同一话——见
+        // [resolveChapterDirectoryName]。这一步只读目录，不改名。
+        final resolved = resolveChapterDirectoryName(directory.path, dirName);
+        if (resolved != null) {
+          dirPath = FilePath.join(directory.path, resolved);
+        } else {
+          // 再退一步：用户可能**手动**把文件夹复制进漫画目录，其名未必等于
+          // 规范目录名（如 "Chapter 5" 会被解析成 "5"）。在**不改动磁盘**的
+          // 前提下，回退到按章节 key 的原始名找目录，避免读不到页。
+          final alt = FilePath.join(directory.path, sanitizePathSegment(cid));
+          if (Directory(alt).existsSync()) dirPath = alt;
+        }
       }
       directory = Directory(dirPath);
     }
@@ -1619,9 +1626,12 @@ Future<List<String>> getImagesForComic(LocalComic comic, Object ep) async {
     for (var chapter in chapters) {
       // [chapters] 里放的是 chapterKey（不是目录名），目录名必须现算，
       // 否则带组目录的章节永远删不掉（dir.existsSync() 恒 false）。
-      var dir = Directory(
-        FilePath.join(c.baseDir, chapterDirectoryName(c.chapters, chapter)),
-      );
+      final dirName = chapterDirectoryName(c.chapters, chapter);
+      // 兼容读取（D1）：磁盘上可能是旧/新任一规范的目录名。删错目录是不可
+      // 逆的，所以这里**只认语义完全对齐**的结果（组名不一致一律不删）。
+      final resolved =
+          resolveChapterDirectoryName(c.baseDir, dirName) ?? dirName;
+      final dir = Directory(FilePath.join(c.baseDir, resolved));
       if (dir.existsSync()) {
         shouldRemovedDirs.add(dir);
       }
@@ -1973,10 +1983,30 @@ Future<List<String>> getImagesForComic(LocalComic comic, Object ep) async {
 
     // 目录名 → chapterKey。与下载侧、读取侧共用 `chapterDirectoryName`
     // （唯一真相），所以这里反查出的 key 一定和 UI 判据用的是同一个。
+    //
+    // D1 兼容：磁盘目录可能比规范名多一个 `[站点]`（新下的）或少一个（旧下的）。
+    // 字面相等只是第一层，第二层按「话号 + 翻译组」语义匹配，第三层退到只看
+    // 话号。三层都不中才算 unmapped——宁可留着不登记，也不猜成别的一话。
     final keyByDir = <String, String>{};
+    final keyByNumberGroup = <String, String>{};
+    final keyByNumber = <String, String>{};
     for (final key in chapters.allVersionKeys) {
       final name = chapterDirectoryName(chapters, key);
-      if (name.isNotEmpty) keyByDir.putIfAbsent(name, () => key);
+      if (name.isEmpty) continue;
+      keyByDir.putIfAbsent(name, () => key);
+      final ref = parseChapterDirectoryName(name);
+      if (ref == null) continue;
+      keyByNumberGroup.putIfAbsent('${ref.number}|${ref.groupKey}', () => key);
+      keyByNumber.putIfAbsent(ref.number, () => key);
+    }
+
+    String? keyOfDirectory(String name) {
+      final exact = keyByDir[name];
+      if (exact != null) return exact;
+      final ref = parseChapterDirectoryName(name);
+      if (ref == null) return null;
+      return keyByNumberGroup['${ref.number}|${ref.groupKey}'] ??
+          keyByNumber[ref.number];
     }
 
     final known = <String>{
@@ -1991,7 +2021,9 @@ Future<List<String>> getImagesForComic(LocalComic comic, Object ep) async {
       // 最后一段恒为空串，且真实名字是百分号编码的。用扩展的 `name`。
       final name = entity.name;
       if (name.isEmpty || name.startsWith('.')) continue;
-      final key = keyByDir[name];
+      // 封面池不是章节（P12）：`cover/` 里放的是多季封面，别登记成"已下载"。
+      if (isCoverDirectoryName(name)) continue;
+      final key = keyOfDirectory(name);
       if (key == null) {
         // 目录在磁盘上，但章节矩阵里没有对应版本（矩阵被冲掉、或该版本已从
         // 源上下架）。不猜、不删、不登记，只留一条可诊断的日志。
