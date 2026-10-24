@@ -979,7 +979,15 @@ class LocalManager with ChangeNotifier {
   }
 
   /// Lists local pages without looking the comic up again in the database.
-  Future<List<String>> getImagesForComic(LocalComic comic, Object ep) async {
+  static const _comicImageExts = {'jpg', 'jpeg', 'png', 'webp', 'gif', 'jpe'};
+
+bool _isComicImageFile(File file) {
+  final dot = file.name.lastIndexOf('.');
+  return dot >= 0 &&
+      _comicImageExts.contains(file.name.substring(dot + 1).toLowerCase());
+}
+
+Future<List<String>> getImagesForComic(LocalComic comic, Object ep) async {
     if (ep is! String && ep is! int) {
       throw "Invalid ep";
     }
@@ -989,8 +997,17 @@ class LocalManager with ChangeNotifier {
           ? comic.effectiveChapters!.ids.elementAt(ep - 1)
           : (ep as String);
       // 必须与下载侧同一个函数：目录名规则一旦分叉就"下完读不到"。
-      cid = chapterDirectoryName(comic.chapters, cid);
-      directory = Directory(FilePath.join(directory.path, cid));
+      var dirName = chapterDirectoryName(comic.chapters, cid);
+      var dirPath = FilePath.join(directory.path, dirName);
+      // 容错：用户可能**手动**把文件夹复制进漫画目录，其名未必等于规范目录名
+      // （如 "Chapter 5" 会被解析成 "5"）。在**不改动磁盘**的前提下，回退到按
+      // 章节 key 的原始名找目录，避免读不到页、显示空白或报错。
+      if (!Directory(dirPath).existsSync()) {
+        final alt =
+            FilePath.join(directory.path, sanitizePathSegment(cid));
+        if (Directory(alt).existsSync()) dirPath = alt;
+      }
+      directory = Directory(dirPath);
     }
     var files = <File>[];
     await for (var entity in directory.list()) {
@@ -1002,6 +1019,12 @@ class LocalManager with ChangeNotifier {
         }
         //Hidden file in some file system
         if (entity.name.startsWith('.')) {
+          continue;
+        }
+        // 🔴 阅读器**只显示图片**：手动丢进来的文件夹里可能有视频/压缩包等
+        // 非图片文件，列出它们会让阅读器尝试当成页图打开而报错/空白。这里按
+        // 扩展名过滤，且**绝不删除**原始文件 —— 只认图、不破坏磁盘完整性。
+        if (!_isComicImageFile(entity)) {
           continue;
         }
         files.add(entity);

@@ -552,6 +552,33 @@ Future<FileSelectResult?> selectFile({required List<String> ext}) async {
   }
 }
 
+/// 选择**多张**图片文件（不限制数量）。返回选中文件的路径列表；取消返回 null。
+///
+/// 与 [selectFile]（单选）对应，专供"添加章节 → 导入多张图片"使用。按扩展名
+/// 过滤只让图片可选，非图片文件在选择器里就不可选 —— 不破坏来源完整性。
+///
+/// 跨平台走 `file_selector.openFiles`；macOS/iOS 因 UTI 限制不传扩展名（与
+/// [selectFile] 行为一致）。Windows 为该功能的重点测试平台。
+Future<List<String>?> selectImages({required List<String> ext}) async {
+  IO._isSelectingFiles = true;
+  try {
+    final extensions = App.isMacOS || App.isIOS ? null : ext;
+    final typeGroup = file_selector.XTypeGroup(
+      label: 'images',
+      extensions: extensions,
+    );
+    final files = await file_selector.openFiles(
+      acceptedTypeGroups: [typeGroup],
+    );
+    if (files.isEmpty) return null;
+    return files.map((f) => f.path).toList();
+  } finally {
+    Future.delayed(const Duration(milliseconds: 100), () {
+      IO._isSelectingFiles = false;
+    });
+  }
+}
+
 Future<String?> selectDirectory() async {
   IO._isSelectingFiles = true;
   try {

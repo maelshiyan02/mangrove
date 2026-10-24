@@ -213,17 +213,22 @@ mixin _ChapterSelectionMixin<T extends StatefulWidget> on State<T> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // P8（2026-10-23）：本地漫画的章节标题行**常驻**「添加章节」入口。
+          // P8（2026-10-23）：本地漫画的章节标题行**常驻**「添加章节」「刷新章节」入口。
           // 之前只在 `chapters==null`（空漫画）时由 buildChapters 的空状态引导
           // 提供该按钮；一旦加了章节，常规章节列表里就再没有任何「添加章节」
           // 入口，用户无法继续加章。这里挂在标题行 trailing，空/非空都可见，
           // 且只对本地漫画显示（网络漫画的章节来自源站，不在此处添加）。
           //
-          // 🔴 P6：**成品（`ft_`）不给这个按钮** —— 成品是导出结果，往它的目录里
-          // 加章，下次导出同一本就会被覆盖（用户加的章无声消失）。成品该有的
+          // 🔴 P6：**成品（`ft_`）不给这两个按钮** —— 成品是导出结果，往它的目录里
+          // 加章/刷新加章，下次导出同一本就会被覆盖（用户加的章无声消失）。成品该有的
           // 是「只读」提示，而不是编辑入口。
-          if (pageState.comic.comicType == ComicType.local &&
-              !pageState._isProduct)
+          //
+          // 🔴 **用 `_localComic` 而非 `comic as LocalComic`**：`pageState.comic` 是
+          // `ComicDetails`（详情页统一数据形态），而 `LocalComic` 并不继承
+          // `ComicDetails`，强转会抛 CastError —— 这正是「添加章节按钮点了没反应」
+          // 的根因（详情页加载后 `data` 是 ComicDetails，空状态那次能用是因为
+          // 它走的是单独的 `_localComic`）。
+          if (pageState._localComic != null && !pageState._isProduct) ...[
             Tooltip(
               message: "添加章节".tl,
               child: IconButton(
@@ -231,12 +236,20 @@ mixin _ChapterSelectionMixin<T extends StatefulWidget> on State<T> {
                 onPressed: () async {
                   final updated = await showAddChapterDialog(
                     context,
-                    pageState.comic as LocalComic,
+                    pageState._localComic!,
                   );
                   if (updated != null) pageState.update();
                 },
               ),
             ),
+            Tooltip(
+              message: "刷新章节".tl,
+              child: IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: () => _refreshChapters(context),
+              ),
+            ),
+          ],
           Tooltip(
             message: "Batch manage".tl,
             child: IconButton(
@@ -265,6 +278,32 @@ mixin _ChapterSelectionMixin<T extends StatefulWidget> on State<T> {
         ],
       ),
     );
+  }
+
+  /// 刷新章节：扫描漫画根目录下的子文件夹，把"磁盘上有、矩阵里没有"的章节补登。
+  ///
+  /// 主要用于支持"用户事先手动把文件夹复制进漫画目录"的场景 —— 点一下就能识别
+  /// 新增章，不必走「添加章节」重新挑文件夹。去重以**目录名**为准（规范名 + 原始
+  /// key 名都排除），重复点不会重复建章；且**绝不删除任何文件/目录**，只注册。
+  Future<void> _refreshChapters(BuildContext context) async {
+    final comic = pageState._localComic;
+    if (comic == null) return;
+    final controller = showLoadingDialog(
+      context,
+      message: "刷新章节…".tl,
+      barrierDismissible: false,
+    );
+    final added = await refreshLocalComicChapters(comic);
+    controller.close();
+    if (!mounted) return;
+    if (added > 0) {
+      pageState.update();
+      context.showMessage(
+        message: "新增 @n 个章节".tlParams({'n': added}),
+      );
+    } else {
+      context.showMessage(message: "没有新增章节".tl);
+    }
   }
 }
 

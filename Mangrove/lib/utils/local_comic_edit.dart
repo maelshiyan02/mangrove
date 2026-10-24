@@ -17,11 +17,18 @@ import 'package:mangrove/utils/local_comic_scanner.dart';
 /// `cover*` 优先、否则首章首图的规则从磁盘识别。
 const _imgExtensions = {'jpg', 'jpeg', 'png', 'webp', 'gif', 'jpe'};
 
-bool _isImage(File file) {
-  final dot = file.name.lastIndexOf('.');
+/// 判断文件名是否为漫画图片（供导入过滤与阅读器读取共用同一扩展名集合）。
+///
+/// 导入（[addChapterToLocalComic] / [refreshLocalComicChapters]）与阅读器
+/// （[getImagesForComic]）都只认这些扩展名，视频 / 压缩包等一律忽略、绝不删除，
+/// 从而保持磁盘完整性。
+bool isComicImageFile(String name) {
+  final dot = name.lastIndexOf('.');
   return dot >= 0 &&
-      _imgExtensions.contains(file.name.substring(dot + 1).toLowerCase());
+      _imgExtensions.contains(name.substring(dot + 1).toLowerCase());
 }
+
+bool _isImage(File file) => isComicImageFile(file.name);
 
 /// 在库根下新建一本空白本地漫画（**无网源链接**）。
 ///
@@ -137,6 +144,19 @@ Future<void> _copyImages(Directory src, Directory dst) async {
   }
 }
 
+/// 把 [files] 里**是图片**的文件拷进 [dst]（忽略非图片，绝不删源文件）。
+///
+/// 供"添加章节 → 导入多张图片"使用：用户在文件选择器里挑了若干文件，这里只认
+/// 图片、跳过其它（如顺手选中的 txt），且只做复制、不触碰来源。
+Future<void> _copyImageFiles(List<File> files, Directory dst) async {
+  for (final f in files) {
+    if (!isComicImageFile(f.name)) continue;
+    final target = File(FilePath.join(dst.path, f.name));
+    await target.create();
+    await target.writeAsBytes(await f.readAsBytes());
+  }
+}
+
 /// 把一本（可能扁平/分组/版本化/空的）漫画的章节矩阵，转成我们要维护的
 /// 版本化 [Map<String, List<ComicChapterVersion>>]。
 ///
@@ -174,20 +194,28 @@ Map<String, List<ComicChapterVersion>> _toVersionedMap(
   return map;
 }
 
-/// 给一本漫画新增（或合并）一个章节：选图片文件夹 + 话号 + 翻译组。
+/// 给一本漫画新增（或合并）一个章节：来源是**图片文件夹**或**多张图片文件**，
+/// 配 话号 + 翻译组。
 ///
 /// - 维护版本化章节矩阵（带组名 → 目录名 `<话号> [组名]`）；
-/// - 图片拷贝进章节目录；
+/// - 图片拷贝进章节目录（只认图片，忽略视频 / 压缩包，不删来源）；
 /// - 自动补封面（根无 cover 时取首章首图）；
 /// - 把该章计入 `downloadedChapters`（已是已下载）。
 ///
 /// 若 [chapterNumber]+[group] 已在矩阵里，则只把图片合并进既有目录、不重复登记。
+///
+/// [imagesFolder] 与 [imageFiles] 二选一：前者为"导入图片文件夹"，后者为
+/// "导入多张图片文件"（[selectImages] 选出来的路径列表）。
 Future<LocalComic?> addChapterToLocalComic(
   LocalComic comic, {
   required String chapterNumber,
   String? group,
-  required Directory imagesFolder,
+  Directory? imagesFolder,
+  List<File>? imageFiles,
 }) async {
+  if (imagesFolder == null && (imageFiles == null || imageFiles.isEmpty)) {
+    return null;
+  }
   final g = (group != null && group.trim().isNotEmpty) ? group.trim() : null;
   final key = g != null
       ? sanitizePathSegment('$chapterNumber [$g]')
@@ -206,7 +234,11 @@ Future<LocalComic?> addChapterToLocalComic(
   final dirName = chapterDirectoryName(newChapters, key);
   final chapterDir = Directory(FilePath.join(comic.baseDir, dirName));
   await chapterDir.create(recursive: true);
-  await _copyImages(imagesFolder, chapterDir);
+  if (imagesFolder != null) {
+    await _copyImages(imagesFolder, chapterDir);
+  } else if (imageFiles != null) {
+    await _copyImageFiles(imageFiles, chapterDir);
+  }
 
   final cover = await deriveCover(comic.baseDir, newChapters);
   final downloaded = <String>{
@@ -230,6 +262,106 @@ Future<LocalComic?> addChapterToLocalComic(
   // [add] 会合并 downloadedChapters 且不会缩小矩阵（我们在变大），可安全复用。
   LocalManager().add(updated, comic.id);
   return updated;
+}
+
+/// 刷新一本本地漫画的章节：扫描其根目录下的子文件夹，把未被登记的章节补登。
+///
+/// ## 为什么需要
+///
+/// 用户可能**事先手动**把文件夹复制进漫画目录（而不是走「添加章节」挑文件夹）。
+/// 这种场景下磁盘上已经有章、但矩阵里没有 ⇒ 阅读器看不到。点「刷新章节」即可识别新增。
+///
+/// ## 不破坏完整性
+///
+/// - **绝不删除任何文件/目录**，只注册；非图片文件（视频/压缩包）原样保留。
+/// - 与导入逻辑一致：只把"有图"的文件夹认作章节，避免把无关目录登记成空章。
+///
+/// ## 幂等去重（"记录表"）
+///
+/// 已登记的章节以**目录名**为准排除（规范名 `chapterDirectoryName` + 原始 key 名都纳
+/// 入），重复点刷新不会重复建章 —— 这正是 P2 那次"刷新后漫画翻倍"的根因同类问题，这里
+/// 用目录名集合做幂等闸门。对每个待登记文件夹，同时按"规范名"和"原始名"比对，避免
+/// "Chapter 5" 与 "5" 这类被解析成同一话号却不同目录名的重复识别。
+///
+/// 返回新登记的章节数（0 = 没有新增）。
+Future<int> refreshLocalComicChapters(LocalComic comic) async {
+  final base = Directory(comic.baseDir);
+  if (!base.existsSync()) return 0;
+
+  // 已知目录名集合（小写）：规范名 + 原始 key 名都纳入，确保幂等、不重复识别。
+  final knownDirNames = <String>{};
+  final existing = comic.chapters;
+  if (existing != null) {
+    for (final key in existing.allVersionKeys) {
+      knownDirNames.add(chapterDirectoryName(existing, key).toLowerCase());
+      knownDirNames.add(sanitizePathSegment(key).toLowerCase());
+    }
+  }
+
+  final map = _toVersionedMap(existing);
+  final List<String> newKeys = [];
+  var added = 0;
+  await for (final entry in base.list()) {
+    if (entry is! Directory) continue;
+    if (entry.name.startsWith('.')) continue;
+    final rawName = sanitizePathSegment(entry.name).toLowerCase();
+    // 幂等闸门：该文件夹（按规范名或原始名）已登记过 ⇒ 跳过，重复刷新不重复建章。
+    final canonicalName = sanitizePathSegment(
+      chapterDirectoryName(existing, sanitizePathSegment(entry.name)),
+    ).toLowerCase();
+    if (knownDirNames.contains(rawName) ||
+        knownDirNames.contains(canonicalName)) {
+      continue;
+    }
+    // 只认"有图"的文件夹，避免把无关目录登记成空章。
+    if (!await _directoryHasImage(entry)) continue;
+    final key = sanitizePathSegment(entry.name);
+    if (map.containsKey(key)) continue;
+    map.putIfAbsent(key, () => []).add(ComicChapterVersion(
+          scanlationGroup: null,
+          title: entry.name,
+          chapterKey: key,
+        ));
+    newKeys.add(key);
+    added++;
+  }
+  if (added == 0) return 0;
+
+  final newChapters = ComicChapters.versioned(map);
+  final downloaded = <String>{
+    ...comic.downloadedChapters,
+    ...newKeys,
+  }.toList();
+  final cover = await deriveCover(comic.baseDir, newChapters);
+  final updated = LocalComic(
+    id: comic.id,
+    title: comic.title,
+    subtitle: comic.subtitle,
+    tags: comic.tags,
+    directory: comic.directory,
+    chapters: newChapters,
+    cover: cover,
+    comicType: comic.comicType,
+    downloadedChapters: downloaded,
+    createdAt: comic.createdAt,
+    description: comic.description,
+  );
+  // `add` 会合并 downloadedChapters 且不会缩小矩阵（我们在变大），可安全复用。
+  LocalManager().add(updated, comic.id);
+  return added;
+}
+
+/// 目录是否包含至少一张图片（仅看直接子文件，不递归 —— 与阅读器的读取口径一致：
+/// 阅读器也只列章节目录的直接图片文件，嵌套子目录里的图不会被当页读出来）。
+Future<bool> _directoryHasImage(Directory dir) async {
+  try {
+    await for (final e in dir.list()) {
+      if (e is File && _isImage(e)) return true;
+    }
+  } catch (_) {
+    return false;
+  }
+  return false;
 }
 
 /// 列出一本漫画当前的章节目录名（从磁盘读取，最贴近真实）。

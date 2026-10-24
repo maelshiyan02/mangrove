@@ -210,7 +210,10 @@ class _AddChapterDialog extends StatefulWidget {
 class _AddChapterDialogState extends State<_AddChapterDialog> {
   final _number = TextEditingController();
   final _group = TextEditingController();
+  // 导入来源：0 = 图片文件夹，1 = 多张图片文件。
+  int _sourceMode = 0;
   Directory? _folder;
+  List<String>? _filePaths;
   bool _loading = false;
 
   @override
@@ -223,73 +226,142 @@ class _AddChapterDialogState extends State<_AddChapterDialog> {
   Future<void> _pickFolder() async {
     final dir = await DirectoryPicker().pickDirectory();
     if (dir != null) {
-      setState(() => _folder = dir);
+      setState(() {
+        _folder = dir;
+        _filePaths = null;
+      });
     }
+  }
+
+  Future<void> _pickFiles() async {
+    final files = await selectImages(
+      ext: const ['jpg', 'jpeg', 'png', 'webp', 'gif', 'jpe'],
+    );
+    if (files != null) {
+      setState(() {
+        _filePaths = files;
+        _folder = null;
+      });
+    }
+  }
+
+  /// 本次将要导入的图片数量（用于导入后反馈与空校验）。
+  int get _imageCount {
+    if (_sourceMode == 0 && _folder != null) {
+      try {
+        return _folder!
+            .listSync()
+            .whereType<File>()
+            .where((f) => isComicImageFile(f.name))
+            .length;
+      } catch (_) {
+        return 0;
+      }
+    }
+    if (_sourceMode == 1 && _filePaths != null) {
+      final baseName = (String p) => p.split(RegExp(r'[/\\]')).last;
+      return _filePaths!.where((p) => isComicImageFile(baseName(p))).length;
+    }
+    return 0;
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final pickedLabel = _sourceMode == 0
+        ? (_folder?.path ?? "选择图片文件夹".tl)
+        : (_filePaths == null
+            ? "选择图片文件".tl
+            : "已选 @n 张图片".tlParams({'n': _filePaths!.length}));
     return ContentDialog(
       title: "添加章节".tl,
       content: SizedBox(
         width: 560,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: _number,
-              decoration: InputDecoration(
-                labelText: "话号（如 1、6、Extra）".tl,
-                border: const OutlineInputBorder(),
-              ),
-            ).paddingBottom(12),
-            TextField(
-              controller: _group,
-              decoration: InputDecoration(
-                labelText: "翻译组（可选，留空则无组名）".tl,
-                border: const OutlineInputBorder(),
-              ),
-            ).paddingBottom(12),
-            InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: _loading
-                  ? null
-                  : () async {
-                      await _pickFolder();
-                    },
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 14,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: _number,
+                decoration: InputDecoration(
+                  labelText: "话号（如 1、6、Extra）".tl,
+                  border: const OutlineInputBorder(),
                 ),
-                decoration: BoxDecoration(
-                  border: Border.all(color: cs.outline),
-                  borderRadius: BorderRadius.circular(8),
+              ).paddingBottom(12),
+              TextField(
+                controller: _group,
+                decoration: InputDecoration(
+                  labelText: "翻译组（可选，留空则无组名）".tl,
+                  border: const OutlineInputBorder(),
                 ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.folder_open_outlined),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        _folder?.path ?? "选择图片文件夹".tl,
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
+              ).paddingBottom(12),
+              Text(
+                "导入来源".tl,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: cs.onSurfaceVariant,
                     ),
-                  ],
+              ).paddingBottom(6),
+              Wrap(
+                spacing: 8,
+                children: [
+                  ChoiceChip(
+                    label: Text("图片文件夹".tl),
+                    selected: _sourceMode == 0,
+                    onSelected: (_) => setState(() => _sourceMode = 0),
+                  ),
+                  ChoiceChip(
+                    label: Text("多张图片".tl),
+                    selected: _sourceMode == 1,
+                    onSelected: (_) => setState(() => _sourceMode = 1),
+                  ),
+                ],
+              ).paddingBottom(12),
+              InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: _loading
+                    ? null
+                    : () {
+                        if (_sourceMode == 0) {
+                          _pickFolder();
+                        } else {
+                          _pickFiles();
+                        }
+                      },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 14,
+                  ),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: cs.outline),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(_sourceMode == 0
+                          ? Icons.folder_open_outlined
+                          : Icons.photo_library_outlined),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          pickedLabel,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            Text(
-              "图片文件夹里平铺的页面图会被导入为一个章节；带翻译组时目录名形如"
-              "「6 [Asura Scans]」。".tl,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: cs.onSurfaceVariant,
-                  ),
-            ).paddingTop(12),
-          ],
+              Text(
+                "只识别图片文件，视频 / 压缩包等会被忽略，也不会被删除，保持磁盘"
+                "完整。".tl,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
+              ).paddingTop(12),
+            ],
+          ),
         ),
       ),
       actions: [
@@ -308,8 +380,20 @@ class _AddChapterDialogState extends State<_AddChapterDialog> {
               context.showMessage(message: "请填写话号".tl);
               return;
             }
-            if (_folder == null) {
+            if (_sourceMode == 0 && _folder == null) {
               context.showMessage(message: "请选择图片文件夹".tl);
+              return;
+            }
+            if (_sourceMode == 1 &&
+                (_filePaths == null || _filePaths!.isEmpty)) {
+              context.showMessage(message: "请至少选择一张图片".tl);
+              return;
+            }
+            final count = _imageCount;
+            if (count == 0) {
+              context.showMessage(
+                message: "该文件夹里没有可导入的图片".tl,
+              );
               return;
             }
             setState(() => _loading = true);
@@ -317,9 +401,17 @@ class _AddChapterDialogState extends State<_AddChapterDialog> {
               widget.comic,
               chapterNumber: number,
               group: _group.text,
-              imagesFolder: _folder!,
+              imagesFolder: _sourceMode == 0 ? _folder : null,
+              imageFiles: _sourceMode == 1
+                  ? _filePaths!.map((p) => File(p)).toList()
+                  : null,
             );
             if (mounted) {
+              if (updated != null) {
+                context.showMessage(
+                  message: "已导入 @n 张图片".tlParams({'n': count}),
+                );
+              }
               Navigator.pop(context, updated);
             }
           },

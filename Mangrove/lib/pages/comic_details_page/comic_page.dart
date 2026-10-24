@@ -62,6 +62,7 @@ import 'package:mangrove/pages/translation_studio/studio_project_menu.dart';
 import 'package:mangrove/pages/local_comic_edit_dialogs.dart';
 import 'package:mangrove/utils/file_type.dart';
 import 'package:mangrove/utils/io.dart';
+import 'package:mangrove/utils/local_comic_edit.dart';
 import 'package:mangrove/utils/local_comic_scanner.dart';
 import 'package:mangrove/utils/tags_translation.dart';
 import 'package:mangrove/utils/translations.dart';
@@ -1994,6 +1995,32 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
                               if (changed && mounted) update();
                             },
                             child: Text('管理章节'.tl),
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              final controller = showLoadingDialog(
+                                context,
+                                message: "刷新章节…".tl,
+                                barrierDismissible: false,
+                              );
+                              final added = await refreshLocalComicChapters(
+                                _localComic!,
+                              );
+                              controller.close();
+                              if (!mounted) return;
+                              if (added > 0) {
+                                update();
+                                context.showMessage(
+                                  message: "新增 @n 个章节"
+                                      .tlParams({'n': added}),
+                                );
+                              } else {
+                                context.showMessage(
+                                  message: "没有新增章节".tl,
+                                );
+                              }
+                            },
+                            child: Text('刷新章节'.tl),
                           ),
                         ],
                       ),
