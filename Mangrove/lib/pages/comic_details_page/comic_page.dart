@@ -334,6 +334,14 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     final refreshed = LocalManager().find(comic.id, ComicType.local);
     if (refreshed != null) {
       _localComic = refreshed;
+      // 详情页的章节 chips / 阅读器 / 封面都读 `data`（ComicDetails），而 `data`
+      // 只在 loadData / _refreshLocalDetails 时用 `_localDetails(localComic)`
+      // 构建一次。只刷新 `_localComic` 不重建 `data`，会导致换封面/改信息后界面不刷新。
+      // 这里用最新的本地记录重建 `data`，确保封面与右侧信息同步显示。
+      data = _localDetails(
+        refreshed,
+        _comicStateRepository.load(widget.sourceKey, widget.id),
+      );
     }
     update();
   }
@@ -714,6 +722,9 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       'cover': localComic.cover,
       'description': localComic.description,
       'tags': _tagsMapOf(localComic),
+      // 本地漫画没有源站点，更新时间由用户手填（编辑信息对话框），注入
+      // ComicDetails 后详情页作为 "Update" 行显示。
+      'updateTime': localComic.updateTime,
       // 已下载的版本提到每话首位：详情页的章节 chips、阅读器、以及"已下载"
       // 判定都只认首个版本，不这么做的话"下载了非首选组"的章节会显示为
       // 未下载且点开是空白。
@@ -1153,10 +1164,12 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
         // 列表的显示、与联网无关：网络模式显示全部章节；本地模式隐藏
         // 未下载的白色章节。图标即模式形象（网络=wifi 样子 / 本地=飞行
         // 模式），与系统设置「漫画管理」读写同一个键，切完立即整页重建。
-        // 🔴 P3（2026-10-23）：本地漫画（comicSource==null，无网络源）根本没有
-        // "网络模式"可言——所有章节都是本地的，切换毫无意义反而误导。故仅在
-        // 有网络源时显示该切换，本地漫画默认就是"本地模式"。
-        if (comicSource != null)
+        // 🔴 P10（2026-10-24）：此前 P3 把本地漫画的该切换隐藏了，理由是
+        // "本地漫画没有网络模式可言"。但用户自建漫画只是记录表里缺基础章节
+        // 信息，切换本身仍是有意义的视图控制（隐藏未下载章节），不应被剥夺。
+        // 故改为：只要有本地记录（_localComic）或网络源就显示，本地漫画也给出
+        // 该按钮，由用户自行切换视图。
+        if (comicSource != null || _localComic != null)
           IconButton(
             onPressed: () {
               setComicDisplayLocalMode(!comicDisplayLocalMode);
@@ -1327,7 +1340,11 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
           subtitle:
               comic.findAuthor() ?? comic.subTitle ?? comic.uploader ?? '',
           description: comic.description ?? '',
-          badge: ComicSource.find(comic.sourceKey)?.name,
+          // 来源徽标：优先用本地漫画用户手填的来源（编辑信息里可设），否则回落
+          // 到网络源名称；纯本地漫画两者都没有时 badge 为 null（不显示来源行）。
+          badge: (_localComic?.source.isNotEmpty == true
+              ? _localComic!.source
+              : ComicSource.find(comic.sourceKey)?.name),
           tags: comic.plainTags,
           maxLines: isWide ? 5 : 4,
           enableTranslate:

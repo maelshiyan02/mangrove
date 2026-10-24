@@ -734,12 +734,29 @@ abstract mixin class _ComicPageActions {
         },
       ),
       if (comic.comicType == ComicType.local &&
-          LocalManager().find(comic.id, ComicType.local) != null)
+          LocalManager().find(comic.id, ComicType.local) != null) ...[
         MenuEntry(
           icon: Icons.image_outlined,
           text: "Custom Cover".tl,
           onClick: () => _setCustomCover(context),
         ),
+        MenuEntry(
+          icon: Icons.edit_note_outlined,
+          text: "Edit Info".tl,
+          onClick: () async {
+            final localComic =
+                LocalManager().find(comic.id, ComicType.local);
+            if (localComic == null) return;
+            final updated = await showEditLocalComicInfoDialog(
+              context,
+              localComic,
+            );
+            if (updated != null) {
+              refreshLocalComic();
+            }
+          },
+        ),
+      ],
       if (comic.url != null)
         MenuEntry(
           icon: Icons.link,
@@ -932,20 +949,26 @@ abstract mixin class _ComicPageActions {
   void _setCustomCover(BuildContext context) async {
     final result = await selectFile(ext: ['jpg', 'jpeg', 'png', 'webp']);
     if (result == null) return;
-    try {
-      final bytes = await File(result.path).readAsBytes();
-      final success = await BtProjectManager().setCover(comic.id, bytes);
+    // 🔴 本地漫画的封面必须由 LocalManager 处理，而非 BtProjectManager：后者只管
+    // 翻译工程（`ensureProject(comicId)` 对本地漫画 id 返回 null → 必然失败）。
+    // 这正是此前「更换封面失败」的根因。这里走 [setCoverFromFile]，把图片写成
+    // 库根下的 `cover.jpg` 并回写本地记录。
+    final localComic = LocalManager().find(comic.id, ComicType.local);
+    if (localComic == null) {
       if (context.mounted) {
-        if (success) {
-          context.showMessage(message: "Cover updated".tl);
-          refreshLocalComic();
-        } else {
-          context.showMessage(message: "Failed to set cover".tl);
-        }
+        context.showMessage(message: "Failed to set cover".tl);
       }
-    } catch (e) {
-      if (context.mounted) {
-        context.showMessage(message: "Error".tl);
+      return;
+    }
+    final updated = await setCoverFromFile(localComic, File(result.path));
+    if (context.mounted) {
+      if (updated != null) {
+        // 换封面后 evict 封面缓存并重建 data，确保详情页立刻显示新封面。
+        await LocalComicImageProvider(updated).evict();
+        context.showMessage(message: "Cover updated".tl);
+        refreshLocalComic();
+      } else {
+        context.showMessage(message: "Failed to set cover".tl);
       }
     }
   }

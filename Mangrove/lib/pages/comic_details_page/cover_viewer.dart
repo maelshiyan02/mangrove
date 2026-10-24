@@ -155,23 +155,23 @@ class _CoverViewerState extends State<_CoverViewer> {
   void _setCustomCover() async {
     final result = await selectFile(ext: ['jpg', 'jpeg', 'png', 'webp']);
     if (result == null) return;
-    try {
-      final bytes = await File(result.path).readAsBytes();
-      final success = await BtProjectManager().setCover(
-        widget.comicId!,
-        bytes,
-      );
+    // 🔴 本地漫画的封面必须由 LocalManager 处理（见 actions.dart 同款修复）：
+    // 此前误用 BtProjectManager.setCover，对本地漫画 id 必然失败。
+    final localComic = LocalManager().find(widget.comicId!, ComicType.local);
+    if (localComic == null) {
       if (mounted) {
-        if (success) {
-          context.showMessage(message: "Cover updated".tl);
-          Navigator.of(context).pop(true);
-        } else {
-          context.showMessage(message: "Failed to set cover".tl);
-        }
+        context.showMessage(message: "Failed to set cover".tl);
       }
-    } catch (e) {
-      if (mounted) {
-        context.showMessage(message: "Error".tl);
+      return;
+    }
+    final updated = await setCoverFromFile(localComic, File(result.path));
+    if (mounted) {
+      if (updated != null) {
+        await LocalComicImageProvider(updated).evict();
+        context.showMessage(message: "Cover updated".tl);
+        Navigator.of(context).pop(true);
+      } else {
+        context.showMessage(message: "Failed to set cover".tl);
       }
     }
   }

@@ -1898,7 +1898,14 @@
     "选择图片文件": "选择图片文件",
     "选择图片文件夹": "选择图片文件夹",
     "选择封面图（可选）": "选择封面图（可选）",
-    "endpoint is paid, this may cost money.": "endpoint is paid, this may cost money."
+    "endpoint is paid, this may cost money.": "endpoint is paid, this may cost money.",
+    "Edit Info": "Edit Info",
+    "编辑信息": "编辑信息",
+    "标题（漫画名）": "标题（漫画名）",
+    "作者 / 翻译组（可选）": "作者 / 翻译组（可选）",
+    "来源（可选，如 Rokari Comics）": "来源（可选，如 Rokari Comics）",
+    "更新时间（可选，自由文本）": "更新时间（可选，自由文本）",
+    "请填写标题": "请填写标题"
   },
   "zh_TW": {
     "Chapter capsule": "章節膠囊",
@@ -3799,6 +3806,13 @@
     "选择图片文件": "選擇圖片檔案",
     "选择图片文件夹": "選擇圖片資料夾",
     "选择封面图（可选）": "選擇封面圖（可選）",
-    "endpoint is paid, this may cost money.": "endpoint is paid, this may cost money."
+    "endpoint is paid, this may cost money.": "endpoint is paid, this may cost money.",
+    "Edit Info": "Edit Info",
+    "编辑信息": "編輯資訊",
+    "标题（漫画名）": "標題（漫畫名）",
+    "作者 / 翻译组（可选）": "作者 / 翻譯組（可選）",
+    "来源（可选，如 Rokari Comics）": "來源（可選，如 Rokari Comics）",
+    "更新时间（可选，自由文本）": "更新時間（可選，自由文本）",
+    "请填写标题": "請填寫標題"
   }
 }

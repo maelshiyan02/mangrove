@@ -87,6 +87,21 @@ class LocalComic with HistoryMixin implements Comic {
   @override
   final String description;
 
+  /// 用户自建本地漫画的自定义「来源」标签（如 "Rokari Comics"）。
+  ///
+  /// 网络漫画的来源由 [sourceKey] 决定（[ComicSource.name]），本地漫画的
+  /// [sourceKey] 恒为 `local`，无法表达用户手填的来源。详情页用这一独立字段
+  /// 作为封面右侧的 Source 徽标显示，可由「编辑信息」对话框设定。
+  final String source;
+
+  /// 用户自建本地漫画的自定义「更新时间」（自由文本，如 "2026-10-20" 或
+  /// "第 49 话"）。
+  ///
+  /// 与网络漫画的 [updateTime]（来自源站点、[ComicDetails.updateTime]）同义，
+  /// 但本地漫画没有源，故独立存储；[ComicDetails] 由 [_localDetails] 注入此值，
+  /// 详情页作为 Update 行显示。
+  final String updateTime;
+
   const LocalComic({
     required this.id,
     required this.title,
@@ -99,6 +114,8 @@ class LocalComic with HistoryMixin implements Comic {
     required this.downloadedChapters,
     required this.createdAt,
     this.description = "",
+    this.source = "",
+    this.updateTime = "",
   });
 
   LocalComic.fromRow(Row row)
@@ -114,7 +131,9 @@ class LocalComic with HistoryMixin implements Comic {
       downloadedChapters =
           List.from(jsonDecode(row['downloadedChapters'] as String)),
       createdAt = DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
-      description = (row['description'] as String?) ?? "";
+      description = (row['description'] as String?) ?? "",
+      source = (row['source'] as String?) ?? "",
+      updateTime = (row['update_time'] as String?) ?? "";
 
   File get coverFile => File(FilePath.join(baseDir, cover));
 
@@ -153,6 +172,8 @@ class LocalComic with HistoryMixin implements Comic {
       "subTitle": subtitle,
       "tags": tags,
       "description": description,
+      "source": source,
+      "updateTime": updateTime,
       "sourceKey": sourceKey,
       "chapters": chapters?.toJson(),
     };
@@ -541,6 +562,15 @@ class LocalManager with ChangeNotifier {
       _db.execute(
           "ALTER TABLE comics ADD COLUMN description TEXT NOT NULL DEFAULT '';");
     }
+    // 本地漫画用户自定义字段（P10，2026-10-24）：来源标签与更新时间。
+    if (!cols.contains('source')) {
+      _db.execute(
+          "ALTER TABLE comics ADD COLUMN source TEXT NOT NULL DEFAULT '';");
+    }
+    if (!cols.contains('update_time')) {
+      _db.execute(
+          "ALTER TABLE comics ADD COLUMN update_time TEXT NOT NULL DEFAULT '';");
+    }
   }
 
   /// Replaces the local-library database content with the file at
@@ -684,8 +714,8 @@ class LocalManager with ChangeNotifier {
     _db.execute(
       'INSERT OR REPLACE INTO comics '
       '(id, title, subtitle, tags, directory, chapters, cover, comic_type, '
-      'downloadedChapters, created_at, description) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);',
+      'downloadedChapters, created_at, description, source, update_time) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);',
       [
         id,
         comic.title,
@@ -698,6 +728,8 @@ class LocalManager with ChangeNotifier {
         jsonEncode(downloadedChapters),
         comic.createdAt.millisecondsSinceEpoch,
         comic.description,
+        comic.source,
+        comic.updateTime,
       ],
     );
   }

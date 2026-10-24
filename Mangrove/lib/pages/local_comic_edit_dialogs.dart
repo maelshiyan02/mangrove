@@ -422,6 +422,172 @@ class _AddChapterDialogState extends State<_AddChapterDialog> {
   }
 }
 
+/// 编辑一本本地漫画的「详细记录表」：标题 / 作者 / 来源 / 更新时间 / 标签 /
+/// 描述。返回更新后的 [LocalComic]（取消返回 null）。全部走
+/// [LocalManager.updateComicDirect]，只改元数据、不动章节与磁盘。
+///
+/// 用户自建漫画没有源站点提供这些信息，所以需要在这里手动补齐——封面右侧的
+/// 信息区（作者 / 来源 / 更新时间 / 标签 / 描述）正是读这些字段。
+Future<LocalComic?> showEditLocalComicInfoDialog(
+  BuildContext context,
+  LocalComic comic,
+) async {
+  return showDialog<LocalComic?>(
+    context: context,
+    builder: (ctx) => _EditLocalComicInfoDialog(comic: comic),
+  );
+}
+
+class _EditLocalComicInfoDialog extends StatefulWidget {
+  final LocalComic comic;
+
+  const _EditLocalComicInfoDialog({required this.comic});
+
+  @override
+  State<_EditLocalComicInfoDialog> createState() =>
+      _EditLocalComicInfoDialogState();
+}
+
+class _EditLocalComicInfoDialogState extends State<_EditLocalComicInfoDialog> {
+  final _title = TextEditingController();
+  final _author = TextEditingController();
+  final _source = TextEditingController();
+  final _updateTime = TextEditingController();
+  final _tags = TextEditingController();
+  final _desc = TextEditingController();
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final c = widget.comic;
+    _title.text = c.title;
+    _author.text = c.subtitle;
+    _source.text = c.source;
+    _updateTime.text = c.updateTime;
+    _tags.text = c.tags.join('，');
+    _desc.text = c.description;
+  }
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _author.dispose();
+    _source.dispose();
+    _updateTime.dispose();
+    _tags.dispose();
+    _desc.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ContentDialog(
+      title: "编辑信息".tl,
+      content: SizedBox(
+        width: 560,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: _title,
+                decoration: InputDecoration(
+                  labelText: "标题（漫画名）".tl,
+                  border: const OutlineInputBorder(),
+                ),
+              ).paddingBottom(12),
+              TextField(
+                controller: _author,
+                decoration: InputDecoration(
+                  labelText: "作者 / 翻译组（可选）".tl,
+                  border: const OutlineInputBorder(),
+                ),
+              ).paddingBottom(12),
+              TextField(
+                controller: _source,
+                decoration: InputDecoration(
+                  labelText: "来源（可选，如 Rokari Comics）".tl,
+                  border: const OutlineInputBorder(),
+                ),
+              ).paddingBottom(12),
+              TextField(
+                controller: _updateTime,
+                decoration: InputDecoration(
+                  labelText: "更新时间（可选，自由文本）".tl,
+                  border: const OutlineInputBorder(),
+                ),
+              ).paddingBottom(12),
+              TextField(
+                controller: _tags,
+                decoration: InputDecoration(
+                  labelText: "标签（逗号分隔，可选）".tl,
+                  border: const OutlineInputBorder(),
+                ),
+              ).paddingBottom(12),
+              TextField(
+                controller: _desc,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  labelText: "简介（可选）".tl,
+                  border: const OutlineInputBorder(),
+                ),
+              ).paddingBottom(12),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        Button.text(
+          onPressed: () {
+            if (_loading) return;
+            Navigator.pop(context);
+          },
+          child: Text("取消".tl),
+        ),
+        Button.filled(
+          isLoading: _loading,
+          onPressed: () async {
+            final title = _title.text.trim();
+            if (title.isEmpty) {
+              context.showMessage(message: "请填写标题".tl);
+              return;
+            }
+            setState(() => _loading = true);
+            final tags = _tags.text
+                .split(RegExp(r'[，,、]'))
+                .map((e) => e.trim())
+                .where((e) => e.isNotEmpty)
+                .toList();
+            final c = widget.comic;
+            final updated = LocalComic(
+              id: c.id,
+              title: title,
+              subtitle: _author.text.trim(),
+              tags: tags,
+              directory: c.directory,
+              chapters: c.chapters,
+              cover: c.cover,
+              comicType: c.comicType,
+              downloadedChapters: c.downloadedChapters,
+              createdAt: c.createdAt,
+              description: _desc.text,
+              source: _source.text.trim(),
+              updateTime: _updateTime.text.trim(),
+            );
+            LocalManager().updateComicDirect(updated);
+            if (mounted) {
+              Navigator.pop(context, updated);
+            }
+          },
+          child: Text("保存".tl),
+        ),
+      ],
+    );
+  }
+}
+
 class _ManageChaptersDialog extends StatefulWidget {
   final LocalComic comic;
 
