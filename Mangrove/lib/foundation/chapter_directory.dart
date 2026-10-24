@@ -26,6 +26,66 @@ String sanitizePathSegment(String name) {
   return builder.toString();
 }
 
+/// 封面候选池的目录名（P12，2026-10-24）。
+///
+/// 一本漫画因季度更新会有多张封面，全部放进 `<漫画目录>/cover/`，文件名带语义
+/// （`[cover]season(1).jpg`）。它**不是章节**：章节扫描、章节刷新、封面兜底
+/// 三条路径都必须跳过它，否则详情页会凭空多出一个叫 "cover" 的假章节。
+const coverDirectoryName = 'cover';
+
+/// 目录名是否就是封面池（大小写不敏感，允许用户手写成 `Cover`）。
+bool isCoverDirectoryName(String name) =>
+    name.trim().toLowerCase() == coverDirectoryName;
+
+/// 从封面文件名里读季度序号：`[cover]season(1).jpg` → 1。
+///
+/// 认 `season(1)` / `season 1` / `Season1` / 全角括号；读不出返回 null
+/// （贺图、特典之类没有季度概念的文件走文件名兜底排序）。
+int? coverSeasonOf(String fileName) {
+  final match = RegExp(
+    r'season\s*[\(（]?\s*(\d+)\s*[\)）]?',
+    caseSensitive: false,
+  ).firstMatch(fileName);
+  if (match == null) return null;
+  return int.tryParse(match.group(1) ?? '');
+}
+
+/// 已知源站标签的样子：`comix.to` 这种"带点的域名"，不含空格。
+///
+/// 只用来决定**显示时要不要露面**，不影响目录名本身——目录名里保留源站是为了
+/// 同话不同源各自成目录，这条规则不能动。
+final _siteTagPattern = RegExp(r'^[\w-]+(?:\.[\w-]+)+$');
+
+/// 把**目录名**翻译成章节列表里的显示文案（P13，2026-10-24）。
+///
+/// 目录名是磁盘标识（`49 [Rokari Comics] [comix.to]`），直接当显示名太长，
+/// 在窄屏上会被截成 `49 [Rokari C…`，看不出是哪一话。这里只改**显示**，
+/// 不动 key——key 是读图时的路径来源，改名等于把已下载的图弄丢。
+///
+/// 规则：
+/// - `49 [Rokari Comics] [comix.to]` → `第49话 · Rokari Comics`
+/// - `116 [comix.to]` → `第116话`（方括号里只有源站，不算翻译组）
+/// - `1` / `12.5` → `第1话` / `第12.5话`
+/// - 不以数字开头的（`默認`、`番外`）→ 原样返回，别硬套"第X话"
+String chapterDisplayName(String directoryName) {
+  final name = directoryName.trim();
+  if (name.isEmpty) return name;
+  final match = RegExp(r'^(\d+(?:\.\d+)?)[\s_]*(.*)$').firstMatch(name);
+  if (match == null) return name;
+  final number = match.group(1)!;
+  final rest = match.group(2)!.trim();
+  final labels = <String>[];
+  for (final bracket in RegExp(r'\[([^\]]*)\]').allMatches(rest)) {
+    final text = (bracket.group(1) ?? '').trim();
+    if (text.isEmpty) continue;
+    // 源站标签不当翻译组显示：读者关心的是"谁翻的"，不是"从哪抓的"。
+    if (_siteTagPattern.hasMatch(text)) continue;
+    labels.add(text);
+  }
+  final suffix = labels.isEmpty ? '' : ' · ${labels.join(' ')}';
+  return '第$number话$suffix';
+}
+
 /// **章节目录名的唯一真相。**
 ///
 /// 下载侧（`ImagesDownloadTask`）、读取侧（`LocalManager.getImagesForComic`）、

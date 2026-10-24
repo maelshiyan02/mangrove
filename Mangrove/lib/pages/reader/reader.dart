@@ -26,6 +26,7 @@ import 'package:mangrove/foundation/download_manager_store.dart';
 import 'package:mangrove/foundation/chapter_title_parser.dart';
 import 'package:mangrove/foundation/chapter_duplicates.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
+import 'package:mangrove/foundation/comic_override_store.dart';
 import 'package:mangrove/foundation/comic_state_repository.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/consts.dart';

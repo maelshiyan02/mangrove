@@ -5,6 +5,7 @@ import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/translation_project/finished_export.dart';
+import 'package:mangrove/utils/cover_pool.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/local_comic_scanner.dart';
 
@@ -80,24 +81,46 @@ Future<LocalComic?> setCoverFromFile(LocalComic comic, File coverFile) async {
     Log.error('LocalComicEdit', 'Failed to set cover: $e', s);
     return null;
   }
-  final updated = LocalComic(
-    id: comic.id,
-    title: comic.title,
-    subtitle: comic.subtitle,
-    tags: comic.tags,
-    directory: comic.directory,
-    chapters: comic.chapters,
-    cover: 'cover.jpg',
-    comicType: comic.comicType,
-    downloadedChapters: comic.downloadedChapters,
-    createdAt: comic.createdAt,
-    description: comic.description,
-  );
+  final updated = _copyLocalComicWith(comic, cover: 'cover.jpg');
   LocalManager().updateComicDirect(updated);
   return updated;
 }
 
-/// 从磁盘识别封面：根目录 `cover*` 图片优先，否则首章首图，否则空串。
+/// 复制一份 [LocalComic] 并替换个别字段。
+///
+/// 🔴 不要手抄 `LocalComic(...)` 构造：本文件里曾经有三处各抄一份，其中
+/// `setCoverFromFile` 漏了 `source` / `updateTime`——用户先"编辑信息"填了
+/// 来源和更新时间，再换一次封面，这两个字段就被静默清空了。
+LocalComic _copyLocalComicWith(LocalComic comic, {String? cover}) => LocalComic(
+  id: comic.id,
+  title: comic.title,
+  subtitle: comic.subtitle,
+  tags: comic.tags,
+  directory: comic.directory,
+  chapters: comic.chapters,
+  cover: cover ?? comic.cover,
+  comicType: comic.comicType,
+  downloadedChapters: comic.downloadedChapters,
+  createdAt: comic.createdAt,
+  description: comic.description,
+  source: comic.source,
+  updateTime: comic.updateTime,
+);
+
+/// 把封面切换成封面池里的某一张（P12）。
+///
+/// 只改本地记录里的 `cover` 指针，**不动任何文件**——池里的图本来就是候选，
+/// 删一张/加一张都由用户在资源管理器里做。
+Future<LocalComic?> selectCoverFromPool(
+  LocalComic comic,
+  String relativePath,
+) async {
+  if (!coverStillExists(comic.baseDir, relativePath)) return null;
+  final updated = _copyLocalComicWith(comic, cover: relativePath);
+  LocalManager().updateComicDirect(updated);
+  return updated;
+}
+
 ///
 /// 不走 [scanLocalComicDirectory] —— 那个会从目录名重建**扁平**章节矩阵、把我们已经
 /// 精心维护的版本化（带翻译组）矩阵冲掉。这里只读封面，绝不碰章节矩阵。
@@ -106,13 +129,25 @@ Future<String> deriveCover(String baseDir, ComicChapters? chapters) async {
   if (!await root.exists()) return '';
   final rootImages = <File>[];
   final chapterDirs = <Directory>[];
+  Directory? coverPool;
   await for (final e in root.list()) {
     if (e is File) {
       if (_isImage(e)) rootImages.add(e);
     } else if (e is Directory) {
-      chapterDirs.add(e);
+      // P12：封面池不是章节，不能进 chapterDirs（否则"首章首图"可能取到封面）。
+      if (isCoverDirectoryName(e.name)) {
+        coverPool = e;
+      } else {
+        chapterDirs.add(e);
+      }
     }
   }
+  // ① 封面池优先：多季度封面时默认用季度号最大的（最新季度）。
+  if (coverPool != null) {
+    final picked = await pickCoverFromPool(coverPool);
+    if (picked != null) return picked;
+  }
+  // ② 旧布局：根目录的 `cover*` 文件。
   rootImages.sort((a, b) => a.name.compareTo(b.name));
   for (final img in rootImages) {
     if (img.name.toLowerCase().startsWith('cover')) return img.name;
@@ -128,6 +163,19 @@ Future<String> deriveCover(String baseDir, ComicChapters? chapters) async {
     if (imgs.isNotEmpty) return FilePath.join(d.name, imgs.first.name);
   }
   return '';
+}
+
+/// 重算封面，但**尊重用户手选**（P12）：旧封面文件还在就保留，只有失效才重算。
+///
+/// 加章、删章、刷新章节三条路径都会走到这里。少了这一层，用户从封面池里挑了
+/// season(1)，只要加一章就被打回 season(2)——这种"改了又自己变回去"的 bug
+/// 极难归因，所以把判断收在一个地方。
+Future<String> _deriveCoverKeepSelection(
+  LocalComic comic,
+  ComicChapters? chapters,
+) async {
+  if (coverStillExists(comic.baseDir, comic.cover)) return comic.cover;
+  return deriveCover(comic.baseDir, chapters);
 }
 
 /// 把 [src] 目录里的**图片文件**（不含子目录）拷贝进 [dst]。
@@ -240,7 +288,7 @@ Future<LocalComic?> addChapterToLocalComic(
     await _copyImageFiles(imageFiles, chapterDir);
   }
 
-  final cover = await deriveCover(comic.baseDir, newChapters);
+  final cover = await _deriveCoverKeepSelection(comic, newChapters);
   final downloaded = <String>{
     ...comic.downloadedChapters,
     key,
@@ -299,11 +347,30 @@ Future<int> refreshLocalComicChapters(LocalComic comic) async {
   }
 
   final map = _toVersionedMap(existing);
+  // P13：老记录的 title 就是目录名（`49 [Rokari Comics] [comix.to]`），顺手
+  // 清洗成显示名。这不是"改名"——chapterKey 一律不动，只换展示文案。
+  var relabeled = false;
+  for (final versions in map.values) {
+    for (var i = 0; i < versions.length; i++) {
+      final version = versions[i];
+      final clean = chapterDisplayName(version.chapterKey);
+      if (version.title == clean) continue;
+      versions[i] = ComicChapterVersion(
+        scanlationGroup: version.scanlationGroup,
+        title: clean,
+        chapterKey: version.chapterKey,
+      );
+      relabeled = true;
+    }
+  }
   final List<String> newKeys = [];
   var added = 0;
   await for (final entry in base.list()) {
     if (entry is! Directory) continue;
     if (entry.name.startsWith('.')) continue;
+    // 🔴 P12：`cover/` 是封面候选池，不是章节。漏了这一条，点一次"刷新章节"
+    // 就会多出一个叫 "cover" 的假章节，点开全是封面图。
+    if (isCoverDirectoryName(entry.name)) continue;
     final rawName = sanitizePathSegment(entry.name).toLowerCase();
     // 幂等闸门：该文件夹（按规范名或原始名）已登记过 ⇒ 跳过，重复刷新不重复建章。
     final canonicalName = sanitizePathSegment(
@@ -325,14 +392,18 @@ Future<int> refreshLocalComicChapters(LocalComic comic) async {
     newKeys.add(key);
     added++;
   }
-  if (added == 0) return 0;
+  // 只有显示名变了也要写回：否则这一次刷新只改了内存里的 map，磁盘记录还是
+  // 旧标题（下次打开详情页又是长串目录名，看起来像"改了没生效"）。
+  if (added == 0 && !relabeled) return 0;
 
   final newChapters = ComicChapters.versioned(map);
   final downloaded = <String>{
     ...comic.downloadedChapters,
     ...newKeys,
   }.toList();
-  final cover = await deriveCover(comic.baseDir, newChapters);
+  // P12：刷新章节不该把用户手选的封面换掉——只有旧值真的失效（那季封面
+  // 被删了）时才回落到默认封面。
+  final cover = await _deriveCoverKeepSelection(comic, newChapters);
   final updated = LocalComic(
     id: comic.id,
     title: comic.title,
@@ -450,7 +521,7 @@ Future<bool> deleteChapters(
     return false;
   }
 
-  final cover = await deriveCover(comic.baseDir, newChapters);
+  final cover = await _deriveCoverKeepSelection(comic, newChapters);
   final updated = LocalComic(
     id: comic.id,
     title: comic.title,

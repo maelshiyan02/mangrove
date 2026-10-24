@@ -89,7 +89,7 @@ class DomainComicSourceLink {
 }
 
 class DomainDatabase {
-  static const schemaVersion = 4;
+  static const schemaVersion = 5;
   static const dataDirectoryName = 'data';
   static const databaseFileName = 'mangrove.db';
 
@@ -1453,6 +1453,26 @@ CREATE TABLE IF NOT EXISTS favorites (
   FOREIGN KEY (comic_id) REFERENCES comics(comic_id) ON DELETE CASCADE
 );
 
+-- 单本漫画的「本地覆盖」层（P11 2026-10-24）。
+--
+-- 为什么要单独一张表：`comics` 表里存的是**网络同步来的字段**。用户在详情页
+-- 改名/换封面/改简介，如果直接回写 `comics`，下一次刷新元数据就被网络值冲掉。
+-- 所以覆盖值单独存 KV，读取时三层合并：覆盖值 > 网络值 > 兜底。
+--
+-- 为什么用 KV 而不是每类信息一张专表：需要覆盖的字段会随阶段推进不断变多
+-- （P12 加封面、P13 加章节命名策略、后面还会加阅读偏好），KV 免迁移。
+-- value_json 统一走 JSON 编码，字符串/布尔/数字/列表都能放。
+--
+-- 为什么不加外键：本地漫画在 `mirrorLocalComic` 落库之前就可能被编辑，
+-- 加外键会让那次写入静默失败。孤儿行由 `comics` 删除时的显式清理负责。
+CREATE TABLE IF NOT EXISTS comic_field_overrides (
+  comic_id TEXT NOT NULL,
+  field_key TEXT NOT NULL,
+  value_json TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (comic_id, field_key)
+);
+
 CREATE INDEX IF NOT EXISTS idx_comic_sources_comic_id
   ON comic_sources(comic_id);
 CREATE INDEX IF NOT EXISTS idx_work_sources_comic_id
@@ -1465,4 +1485,6 @@ CREATE INDEX IF NOT EXISTS idx_pages_chapter_id
   ON pages(chapter_id, page_index);
 CREATE INDEX IF NOT EXISTS idx_history_events_comic_time
   ON history_events(comic_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_comic_field_overrides_comic
+  ON comic_field_overrides(comic_id);
 ''';

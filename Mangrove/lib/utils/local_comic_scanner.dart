@@ -1,8 +1,10 @@
+import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/utils/comic_metadata_resolver.dart';
+import 'package:mangrove/utils/cover_pool.dart';
 import 'package:mangrove/utils/io.dart';
 
 const _localComicImageExtensions = {'jpg', 'jpeg', 'png', 'webp', 'gif', 'jpe'};
@@ -49,8 +51,15 @@ Future<LocalComic?> scanLocalComicDirectory(
 
   final chapterDirectories = <Directory>[];
   final rootImages = <File>[];
+  Directory? coverPool;
   await for (final entry in directory.list()) {
     if (entry is Directory) {
+      // 🔴 P12：`cover/` 是封面候选池，不是章节。不跳过的话详情页会多出一个
+      // 叫 "cover" 的假章节，而且它的"页"全是封面图。
+      if (isCoverDirectoryName(entry.name)) {
+        coverPool = entry;
+        continue;
+      }
       await for (final child in entry.list()) {
         if (child is Directory) {
           Log.info(
@@ -70,12 +79,20 @@ Future<LocalComic?> scanLocalComicDirectory(
   rootImages.sort((a, b) => a.name.compareTo(b.name));
 
   String? coverPath;
-  for (final image in rootImages) {
-    if (image.name.toLowerCase().startsWith('cover')) {
-      coverPath = image.name;
-      break;
-    }
+  // ① 封面池优先（P12）：多季度封面时默认显示季度号最大的那张。
+  if (coverPool != null) {
+    coverPath = await pickCoverFromPool(coverPool);
   }
+  // ② 根目录的 `cover*` 文件（旧布局，必须继续支持）。
+  coverPath ??= () {
+    for (final image in rootImages) {
+      if (image.name.toLowerCase().startsWith('cover')) {
+        return image.name;
+      }
+    }
+    return null;
+  }();
+  // ③ 根目录任意图 → ④ 首章首图。
   coverPath ??= rootImages.isEmpty ? null : rootImages.first.name;
 
   if (coverPath == null && chapterDirectories.isNotEmpty) {
@@ -128,7 +145,14 @@ Future<LocalComic?> scanLocalComicDirectory(
     directory: storedDirectory,
     chapters: chapterNames.isEmpty
         ? null
-        : ComicChapters(Map.fromIterables(chapterNames, chapterNames)),
+        : ComicChapters(
+            Map.fromIterables(
+              chapterNames,
+              // P13：key 仍是目录名（读图时的路径来源），value 是清洗后的
+              // 显示名（`第49话 · Rokari Comics`）。两者分开，改名才安全。
+              chapterNames.map(chapterDisplayName),
+            ),
+          ),
     cover: coverPath,
     comicType: previous?.comicType ?? ComicType.local,
     downloadedChapters: chapterNames,

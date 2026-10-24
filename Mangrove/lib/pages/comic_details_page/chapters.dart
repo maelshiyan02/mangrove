@@ -29,6 +29,10 @@ mixin _ChapterSelectionMixin<T extends StatefulWidget> on State<T> {
 
   _ComicPageState get pageState;
 
+  /// 覆盖层主键（域库 `comic_id`），模式开关/本地覆盖都挂在它上面。
+  /// 普通视图与分组视图共用，所以放在 mixin 里；实现只有 [pageState] 一处。
+  String get _overrideComicId => pageState.overrideComicId;
+
   History? get history;
 
   set history(History? value);
@@ -390,7 +394,11 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
     // 黄(下载中)/红(问题)/浅绿(待命)全部保留。状态判定与配色共用
     // [chapterDownloadStatusFor]；下载任务完成时 LocalManager 通知刷新，
     // 本章会自动从过滤列表里"长"回来，列表不焊死。
-    final localMode = comicDisplayLocalMode;
+    // 🔴 P11（2026-10-24）：模式从全局开关升级为**每本漫画独立**，未设置过
+    // 的本子回落到全局默认值（`ComicOverrideStore.defaultDisplayMode`）。
+    final localMode =
+        ComicOverrideStore.instance.displayModeFor(_overrideComicId) ==
+        ComicDisplayMode.local;
     visible = [
       for (final i in ordered)
         if (!hidden.contains(i) &&
@@ -845,7 +853,10 @@ class _GroupedComicChaptersState extends State<_GroupedComicChapters>
     );
     // 「本地显示模式」（P-DL6）：与普通视图同规则，隐藏未下载的白色章节。
     // chapterKey 取当前组的源章节 id（与下方渲染一致）。
-    final localMode = comicDisplayLocalMode;
+    // P11：模式改为每本独立，分组视图与普通视图共用同一个 `_overrideComicId`。
+    final localMode =
+        ComicOverrideStore.instance.displayModeFor(_overrideComicId) ==
+        ComicDisplayMode.local;
     final groupKeys = chapters.getGroupByIndex(index).keys;
     visible = [
       for (final i in ordered)

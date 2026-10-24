@@ -3,6 +3,48 @@ part of 'comic_page.dart';
 abstract mixin class _ComicPageActions {
   void update();
 
+  /// 覆盖层主键（域库 `comic_id`）与当前生效的显示模式（P11）。
+  /// 实现只有 `_ComicPageState` 一处，这里只做声明。
+  String get overrideComicId;
+  ComicDisplayMode get displayMode;
+
+  /// 「网络信息壳 + 本地覆盖」合并（P11 §5.3）。
+  ///
+  /// - **网络模式** → 原样返回。此刻用户想看的正是源头内容，任何本地改动都
+  ///   不该混进来；这也是"网络模式 = 全部来源于网站"的字面含义。
+  /// - **本地模式** → 覆盖值盖在网络值上，没覆盖的字段继续用网络值
+  ///   （"网络信息作底，本地自定义盖在上面"）。
+  ///
+  /// 本地创建的漫画不走这里：它的 `data` 本来就是 `LocalComic` 转出来的，
+  /// 没有"网络壳"可言，覆盖层对它只有 `display_mode` 一项有意义。
+  ComicDetails overlayLocalOverrides(ComicDetails raw) {
+    if (displayMode != ComicDisplayMode.local) return raw;
+    if (raw.sourceKey == 'local') return raw;
+    final store = ComicOverrideStore.instance;
+    final id = overrideComicId;
+    if (store.valuesOf(id).isEmpty) return raw;
+    return raw.copyWith(
+      title: overlayText(id, ComicOverrideStore.fieldTitle, raw.title),
+      subTitle: overlayText(id, ComicOverrideStore.fieldSubtitle, raw.subTitle),
+      description: overlayText(
+        id,
+        ComicOverrideStore.fieldDescription,
+        raw.description,
+      ),
+    );
+  }
+
+  /// 单字段三层合并：覆盖值 > 网络值 > 原样兜底。
+  /// 覆盖成空串时保留网络值——"清空"由显式清除覆盖（写 null）表达。
+  String? overlayText(String comicId, String fieldKey, String? networkValue) {
+    final store = ComicOverrideStore.instance;
+    if (!store.hasOverride(comicId, fieldKey)) return networkValue;
+    final value = store.valueOf(comicId, fieldKey);
+    if (value == null) return networkValue;
+    final text = value.toString();
+    return text.isEmpty ? networkValue : text;
+  }
+
   /// Re-fetches the local comic from the database and triggers a rebuild.
   /// Called after operations that modify LocalComic data (e.g. setCover).
   void refreshLocalComic();

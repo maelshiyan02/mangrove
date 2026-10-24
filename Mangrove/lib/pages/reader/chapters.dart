@@ -1,5 +1,16 @@
 part of 'reader.dart';
 
+/// 阅读器章节列表当前是否处于「本地显示模式」。
+///
+/// P11（2026-10-24）起该模式是**每本漫画独立**的（`comic_field_overrides`），
+/// 未设置过的本子回落到全局默认。阅读器只知道 `cid` + `type.sourceKey`，
+/// 所以在 part 内做一次换算，两个章节视图共用。
+bool _readerLocalDisplayMode(_ReaderState reader) =>
+    ComicOverrideStore.instance.displayModeFor(
+      ComicOverrideStore.comicIdOf(reader.type.sourceKey, reader.cid),
+    ) ==
+    ComicDisplayMode.local;
+
 class _ChaptersView extends StatefulWidget {
   const _ChaptersView(this.reader);
 
@@ -38,7 +49,7 @@ class _ChaptersViewState extends State<_ChaptersView> {
           widget.reader.chapter == chapter)
         // 本地显示模式下隐藏未下载章节；当前章节始终保留，历史记录指向
         // 的章节才有得高亮。
-        if (!comicDisplayLocalMode ||
+        if (!_readerLocalDisplayMode(widget.reader) ||
             widget.reader.chapter == chapter ||
             _keptInLocalMode(chapter - 1))
           chapter - 1,
@@ -248,7 +259,7 @@ class _GroupedChaptersViewState extends State<_GroupedChaptersView>
             chapter < base + group.length &&
             (!widget.reader.isChapterHidden(chapter) ||
                 widget.reader.chapter == chapter) &&
-            (!comicDisplayLocalMode ||
+            (!_readerLocalDisplayMode(widget.reader) ||
                 widget.reader.chapter == chapter ||
                 _keptInLocalMode(chapter - 1)))
           chapter,

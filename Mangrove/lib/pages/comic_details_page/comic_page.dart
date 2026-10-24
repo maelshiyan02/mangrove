@@ -17,6 +17,7 @@ import 'package:mangrove/foundation/chapter_title_parser.dart';
 import 'package:mangrove/foundation/chapter_duplicates.dart';
 import 'package:mangrove/foundation/comic_collection_store.dart';
 import 'package:mangrove/foundation/comic_details_cache.dart';
+import 'package:mangrove/foundation/comic_override_store.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/comic_state_repository.dart';
 import 'package:mangrove/foundation/comic_type.dart';
@@ -60,6 +61,8 @@ import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
 import 'package:mangrove/pages/translation_studio/studio_enqueue_message.dart';
 import 'package:mangrove/pages/translation_studio/studio_project_menu.dart';
 import 'package:mangrove/pages/local_comic_edit_dialogs.dart';
+import 'package:mangrove/pages/comic_override_dialogs.dart';
+import 'package:mangrove/pages/cover_picker_dialog.dart';
 import 'package:mangrove/utils/file_type.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/local_comic_edit.dart';
@@ -186,6 +189,17 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
   /// 的三分法同源；**不看 `comicType`** —— 成品的 `comic_type` 也是 local，
   /// 拿它判会把真正的本地素材一起算成成品。
   bool get _isProduct => comic.id.startsWith(FinishedExport.idPrefix);
+
+  /// 覆盖层主键（域库 `comic_id`，形如 `remote:comix.to:11522449`）。
+  ///
+  /// P11（2026-10-24）起「本地/网络显示模式」与各种字段覆盖都挂在它上面，
+  /// 所以这里的换算只有一个入口，章节列表（mixin）也复用它。
+  String get overrideComicId =>
+      ComicOverrideStore.comicIdOf(comic.sourceKey, comic.id);
+
+  /// 当前这本漫画生效的章节显示模式（自己的设置优先，否则全局默认）。
+  ComicDisplayMode get displayMode =>
+      ComicOverrideStore.instance.displayModeFor(overrideComicId);
 
   bool descriptionExpanded = false;
 
@@ -405,6 +419,10 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
 
   @override
   Widget buildContent(BuildContext context, ComicDetails data) {
+    // 🔴 P11（2026-10-24）：本地模式下把「本地覆盖」盖到网络信息壳上。
+    // 只在渲染入口合并一次，下面的下载/阅读/收藏等操作仍用原始 `data`
+    // （它们要的是源侧 id 与真实章节结构，不是被改过的展示文案）。
+    data = overlayLocalOverrides(data);
     // The comic grids can only filter on the tags a list item happens to carry,
     // and most sources send none — tags arrive with the details request. This is
     // the first point where the full tag set is known, so it is where a blocked
@@ -1163,27 +1181,70 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
         // 章节「网络/本地显示模式」切换（P-DL6 2026-10-16）。只影响章节
         // 列表的显示、与联网无关：网络模式显示全部章节；本地模式隐藏
         // 未下载的白色章节。图标即模式形象（网络=wifi 样子 / 本地=飞行
-        // 模式），与系统设置「漫画管理」读写同一个键，切完立即整页重建。
-        // 🔴 P10（2026-10-24）：此前 P3 把本地漫画的该切换隐藏了，理由是
-        // "本地漫画没有网络模式可言"。但用户自建漫画只是记录表里缺基础章节
-        // 信息，切换本身仍是有意义的视图控制（隐藏未下载章节），不应被剥夺。
-        // 故改为：只要有本地记录（_localComic）或网络源就显示，本地漫画也给出
-        // 该按钮，由用户自行切换视图。
+        // 模式）。
+        // 🔴 P11（2026-10-24）：从**全局开关**升级为**每本漫画独立**。
+        // 值存 `comic_field_overrides.display_mode`，没设过的本子回落到
+        // 全局默认（系统设置「漫画管理」那个开关仍是默认值来源）。
+        // 🔴 P10：此前 P3 把本地漫画的该切换隐藏了，理由是"本地漫画没有
+        // 网络模式可言"。但用户自建漫画只是记录表里缺基础章节信息，切换
+        // 本身仍是有意义的视图控制（隐藏未下载章节），不应被剥夺。
         if (comicSource != null || _localComic != null)
           IconButton(
             onPressed: () {
-              setComicDisplayLocalMode(!comicDisplayLocalMode);
+              ComicOverrideStore.instance.toggleDisplayMode(overrideComicId);
               update();
             },
             icon: Icon(
-              comicDisplayLocalMode
+              displayMode == ComicDisplayMode.local
                   ? Icons.airplanemode_active
                   : Icons.wifi,
             ),
-            tooltip: (comicDisplayLocalMode
-                    ? 'Switch to Network Mode'
-                    : 'Switch to Local Mode')
-                .tl,
+            tooltip:
+                (displayMode == ComicDisplayMode.local
+                        ? 'Switch to Network Mode'
+                        : 'Switch to Local Mode')
+                    .tl,
+          ),
+        // 换封面（P12）：从漫画目录下的 `cover/` 池里挑一张。
+        // 只在有本地记录时出现——没有本地记录就没有封面池可谈。
+        if (_localComic != null)
+          IconButton(
+            onPressed: () async {
+              final local = _localComic!;
+              final picked = await showCoverPickerDialog(
+                App.rootContext,
+                baseDir: local.baseDir,
+                currentCover: local.cover,
+              );
+              if (picked == null) return;
+              final updated = await selectCoverFromPool(local, picked);
+              if (updated == null) return;
+              // 必须走 refreshLocalComic 而不是 update：后者只 setState，
+              // `data` 里还是旧封面（P10 的坑，见 P10 日志）。封面缓存也要
+              // evict，否则 ImageProvider 会继续喂旧图。
+              await LocalComicImageProvider(updated).evict();
+              refreshLocalComic();
+            },
+            icon: const Icon(Icons.photo_library_outlined),
+            tooltip: 'Choose Cover'.tl,
+          ),
+        // 本地模式下允许编辑「本地覆盖层」（P11 §5.3）：网络漫画的信息来自
+        // 站点、不能在源头改，但可以盖一层自己的。网络模式不给这个入口——
+        // 那时你看到的就是源头内容，改它没有意义，也无处可存。
+        if (displayMode == ComicDisplayMode.local && comic.sourceKey != 'local')
+          IconButton(
+            onPressed: () async {
+              final changed = await showComicOverrideDialog(
+                App.rootContext,
+                comicId: overrideComicId,
+                networkTitle: comic.title,
+                networkSubtitle: comic.subTitle,
+                networkDescription: comic.description,
+              );
+              if (changed) update();
+            },
+            icon: const Icon(Icons.edit_note),
+            tooltip: 'Edit Local Info'.tl,
           ),
         if (widget.sourceKey == 'local' ||
             ComicSource.find(widget.sourceKey)?.loadComicInfo != null)

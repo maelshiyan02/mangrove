@@ -1905,7 +1905,20 @@
     "作者 / 翻译组（可选）": "作者 / 翻译组（可选）",
     "来源（可选，如 Rokari Comics）": "来源（可选，如 Rokari Comics）",
     "更新时间（可选，自由文本）": "更新时间（可选，自由文本）",
-    "请填写标题": "请填写标题"
+    "请填写标题": "请填写标题",
+    "Default Local Mode": "默认本地模式",
+    "Default mode for comics that never set one. Local mode shows downloaded content plus your own custom info; network mode follows the source site. Switch each comic separately from its detail page.": "从未单独设置过模式的漫画使用这里的默认值。本地模式显示已下载的内容 + 你自己补充的信息；网络模式跟随源站内容。每本漫画都可以在详情页单独切换。",
+    "Edit Local Info": "编辑本地信息",
+    "本地信息覆盖": "本地信息覆盖",
+    "这里改的是「本地覆盖层」：网络原文仍然保留，随时可以恢复。": "这里改的是「本地覆盖层」：网络原文仍然保留，随时可以恢复。",
+    "副标题 / 作者": "副标题 / 作者",
+    "全部恢复原文": "全部恢复原文",
+    "网络原文": "网络原文",
+    "简介": "简介",
+    "Choose Cover": "选择封面",
+    "封面候选": "封面候选",
+    "好的": "好的",
+    "这本漫画还没有封面池。在漫画目录下建一个 cover 文件夹，把图片放进去（建议命名 [cover]season(1).jpg、[cover]season(2).jpg），再回来就能在这里切换。": "这本漫画还没有封面池。在漫画目录下建一个 cover 文件夹，把图片放进去（建议命名 [cover]season(1).jpg、[cover]season(2).jpg），再回来就能在这里切换。"
   },
   "zh_TW": {
     "Chapter capsule": "章節膠囊",
@@ -3813,6 +3826,19 @@
     "作者 / 翻译组（可选）": "作者 / 翻譯組（可選）",
     "来源（可选，如 Rokari Comics）": "來源（可選，如 Rokari Comics）",
     "更新时间（可选，自由文本）": "更新時間（可選，自由文本）",
-    "请填写标题": "請填寫標題"
+    "请填写标题": "請填寫標題",
+    "Default Local Mode": "預設本地模式",
+    "Default mode for comics that never set one. Local mode shows downloaded content plus your own custom info; network mode follows the source site. Switch each comic separately from its detail page.": "從未單獨設定過模式的漫畫使用這裡的預設值。本地模式顯示已下載的內容 + 你自己補充的資訊；網路模式跟隨來源網站內容。每本漫畫都可以在詳細頁單獨切換。",
+    "Edit Local Info": "編輯本地資訊",
+    "本地信息覆盖": "本地資訊覆蓋",
+    "这里改的是「本地覆盖层」：网络原文仍然保留，随时可以恢复。": "這裡改的是「本地覆蓋層」：網路原文仍然保留，隨時可以恢復。",
+    "副标题 / 作者": "副標題 / 作者",
+    "全部恢复原文": "全部恢復原文",
+    "网络原文": "網路原文",
+    "简介": "簡介",
+    "Choose Cover": "選擇封面",
+    "封面候选": "封面候選",
+    "好的": "好的",
+    "这本漫画还没有封面池。在漫画目录下建一个 cover 文件夹，把图片放进去（建议命名 [cover]season(1).jpg、[cover]season(2).jpg），再回来就能在这里切换。": "這本漫畫還沒有封面池。在漫畫目錄下建一個 cover 資料夾，把圖片放進去（建議命名 [cover]season(1).jpg、[cover]season(2).jpg），再回來就能在這裡切換。"
   }
 }

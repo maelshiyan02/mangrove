@@ -62,6 +62,8 @@
 | **A14** | 路径便携与搬家自愈（PathRoots：便携根 / local_path 相对化 / btProjectRoot 重定位 / 工程 directory 重基 / 便携源目录 / symlink 坑） | 碰库根/工程根/源目录路径，或项目目录改名搬家之后 |
 | **A15** | 🔴 版本号规则（基线 2.3.4 · 口径 B 施工类日志=1 版 · base-10 三段式 大.小A.小B(满10进位) · 权威落点 pubspec.yaml · 50 版→V2.8.4） | **每次 push/发布前**、改 pubspec 版本号之前 |
 | **A16** | 运营坑与取证工具（agent-browser 卡 Chromium 下载→curl 兜底；收藏页 "Not login" 是框架登录拦截非 bug） | 需网页取证、或见收藏/详情页 "Not login" 鉴别诊断时 |
+| **A17** | comix 批量下载 · 🔴 假缺页（HTTP2 失败≠广告页）· `py -3.12` · 日志块缓冲 · 章节命名与 `chapterDirectoryName` 耦合 | 跑 `comix_browser_dl.py`、见到某话少页、改章节文件夹命名之前 |
+| **A18** | 本地覆盖层（`comic_field_overrides`）· per-comic 模式 · 封面池 `cover/[cover]season(N)` · 章节显示名 · 🔴 构建工装 python 在 `envs/default` | 碰详情页模式开关/封面/章节显示名、要"本地改网络漫画信息"之前 |
 
 ## 2. 工作日志索引
 
