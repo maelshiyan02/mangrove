@@ -724,6 +724,29 @@ def _session() -> requests.Session:
     return s
 
 
+def sniff_image_ext(data: bytes) -> str:
+    """按**文件头**判断真实图片格式，不看 URL 后缀。
+
+    🔴 为什么必须这样：comix 的图片 URL 一律带 `.jpg` 后缀，实际返回的却是
+    WEBP（`RIFF....WEBP`）。旧版按 URL 猜扩展名，于是全库 800 个 webp 被存成
+    `.jpg`；等下次换版本重下、扩展名算法变了，新旧文件就会并存 —— Ch.49
+    因此从 95 页变成 190 个文件，阅读器直接显示 190 页。
+
+    判断只看 12 个字节，开销可忽略。
+    """
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    if data[:2] == b"\xff\xd8":
+        return "jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if data[4:8] == b"ftyp":
+        return "avif"
+    return "jpg"
+
+
 def download_image(url: str, dest: Path, hosts: list[str] | None = None, retries: int = 3) -> int:
     """从图片 CDN 取一张图。
 
@@ -747,6 +770,8 @@ def download_image(url: str, dest: Path, hosts: list[str] | None = None, retries
             try:
                 r = _session().get(cand, timeout=30)
                 if r.status_code == 200 and len(r.content) > 1024:
+                    # 扩展名按真实字节定，URL 后缀不可信（见 sniff_image_ext）
+                    dest = dest.with_suffix(f".{sniff_image_ext(r.content)}")
                     dest.write_bytes(r.content)
                     return len(r.content)
                 last = f"HTTP {r.status_code}/{len(r.content)}B @{urlparse(cand).netloc}"
@@ -765,7 +790,7 @@ def save_payload(payload: dict, dest_stem: Path) -> tuple[int, str]:
             try:
                 r = requests.get(url, headers=IMG_HEADERS, timeout=45)
                 if r.status_code == 200 and len(r.content) > 1024:
-                    ext = "webp" if ".webp" in url else ("png" if ".png" in url else "jpg")
+                    ext = sniff_image_ext(r.content)
                     path = dest_stem.with_suffix(f".{ext}")
                     path.write_bytes(r.content)
                     return len(r.content), ext
@@ -776,8 +801,8 @@ def save_payload(payload: dict, dest_stem: Path) -> tuple[int, str]:
                 time.sleep(1.2 * (attempt + 1))
     data_url = payload["data"]
     header, _, b64 = data_url.partition(",")
-    ext = "webp" if "webp" in header else "png"
     raw = base64.b64decode(b64)
+    ext = sniff_image_ext(raw)
     dest_stem.with_suffix(f".{ext}").write_bytes(raw)
     return len(raw), ext
 
@@ -1003,6 +1028,9 @@ async def download_chapters(args, out_dir: Path, chapters: list[dict], base_path
                 src = r.get("src")
                 if not src:
                     continue
+                # 这里只是占位后缀，真正落盘时 download_image 会用
+                # sniff_image_ext 按响应字节改回正确扩展名（comix 的 URL
+                # 一律写 .jpg 但实际给 webp）。
                 ext = "webp" if ".webp" in src else ("png" if ".png" in src else "jpg")
                 ordered.append((r["i"], src, ext))
 
