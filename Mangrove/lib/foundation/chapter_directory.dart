@@ -59,6 +59,31 @@ int? coverSeasonOf(String fileName) {
 /// 同话不同源各自成目录，这条规则不能动。
 final _siteTagPattern = RegExp(r'^[\w-]+(?:\.[\w-]+)+$');
 
+/// 封面的语言标识（P17，2026-10-24）。
+///
+/// 同一本漫画可能有多张封面：韩文原版、简体中文正版（快看）、英文版……文件名
+/// 里必须能看出**这张图是哪国语言的封面**，否则多语言候选池混在一起只能靠
+/// 猜。注意这是**封面版本的语言**，不是漫画的原始国籍——一本韩国漫画的
+/// 中文版封面标 `CN`，不标 `KR`。
+const coverLanguages = <String>['CN', 'EN', 'KR', 'JP'];
+
+/// 一个方括号标签是不是**站点标签**（`comix.to` 带点域名，或 `baozimh`
+/// 这类登记过的站名）。
+///
+/// 为什么要把登记过的站名也算进来：`_siteTagPattern` 只认带点的域名，
+/// 而包子源的目录名写作 `116 [baozimh]`——不带点，于是被当成"翻译组"，
+/// 章节列表里整本挂一行 `baozimh`，把真正的组信息挤没了。
+bool isSourceSiteTag(String text) {
+  final tag = text.trim();
+  if (tag.isEmpty) return false;
+  if (_siteTagPattern.hasMatch(tag)) return true;
+  final lower = tag.toLowerCase();
+  for (final site in _sourceSiteTags.values) {
+    if (site.toLowerCase() == lower) return true;
+  }
+  return false;
+}
+
 /// 把**目录名**翻译成章节列表里的显示文案（P13，2026-10-24）。
 ///
 /// 目录名是磁盘标识（`49 [Rokari Comics] [comix.to]`），直接当显示名太长，
@@ -82,7 +107,7 @@ String chapterDisplayName(String directoryName) {
     final text = (bracket.group(1) ?? '').trim();
     if (text.isEmpty) continue;
     // 源站标签不当翻译组显示：读者关心的是"谁翻的"，不是"从哪抓的"。
-    if (_siteTagPattern.hasMatch(text)) continue;
+    if (isSourceSiteTag(text)) continue;
     labels.add(text);
   }
   final suffix = labels.isEmpty ? '' : ' · ${labels.join(' ')}';
@@ -112,6 +137,31 @@ String chapterNumberLabel(String keyOrTitle) {
   final match = RegExp(r'^(\d+(?:\.\d+)?)[\s_]*(.*)$').firstMatch(name);
   if (match == null) return name;
   return '第${match.group(1)}话';
+}
+
+/// 从封面文件名里读语言标识：`[KR][cover]season(1).jpg` → `KR`。
+///
+/// 认 `[CN]` / `[EN]` / `[KR]` / `[JP]` 四种（大小写不敏感）。老命名
+/// （`[cover]season(1).jpg`）没有语言段，返回 null——调用方把它排在最后，
+/// 于是"新抓的多语言封面"会自然顶掉老的无语言封面，无需额外迁移。
+String? coverLanguageOf(String fileName) {
+  for (final match in RegExp(r'\[([A-Za-z]{2})\]').allMatches(fileName)) {
+    final code = match.group(1)!.toUpperCase();
+    if (coverLanguages.contains(code)) return code;
+  }
+  return null;
+}
+
+/// 同季度多语言封面的默认优先级：韩文原版 > 简体中文 > 英文 > 日文。
+///
+/// 原版排第一不是"崇洋"：原版封面通常带原作标题字（韩文/日文 Logo 完整），
+/// 翻译版封面要么被重新排版、要么干脆是无字插画，信息量反而更少。中文版
+/// 排在第二位，原因是没有原版时才轮到它。
+int coverLanguageRank(String? code) {
+  const order = ['KR', 'CN', 'EN', 'JP'];
+  if (code == null) return order.length;
+  final index = order.indexOf(code.toUpperCase());
+  return index < 0 ? order.length : index;
 }
 
 /// 已知源 key → 目录名里用的站点标签（D1，2026-10-24）。
@@ -211,7 +261,7 @@ ChapterDirectoryRef? parseChapterDirectoryName(String name) {
   for (final bracket in _bracketPattern.allMatches(rest)) {
     final text = (bracket.group(1) ?? '').trim();
     if (text.isEmpty) continue;
-    if (_siteTagPattern.hasMatch(text)) {
+    if (isSourceSiteTag(text)) {
       site = text;
     } else {
       groups.add(text);

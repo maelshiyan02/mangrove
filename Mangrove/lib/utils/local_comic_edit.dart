@@ -105,6 +105,7 @@ LocalComic _copyLocalComicWith(LocalComic comic, {String? cover}) => LocalComic(
   description: comic.description,
   source: comic.source,
   updateTime: comic.updateTime,
+  altTitles: comic.altTitles,
 );
 
 /// 把封面切换成封面池里的某一张（P12）。

@@ -158,5 +158,6 @@ Future<LocalComic?> scanLocalComicDirectory(
     downloadedChapters: chapterNames,
     createdAt: createTime ?? previous?.createdAt ?? DateTime.now(),
     description: metadata?.description ?? previous?.description ?? '',
+    altTitles: previous?.altTitles ?? const [],
   );
 }

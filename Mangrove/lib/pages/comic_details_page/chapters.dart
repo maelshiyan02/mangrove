@@ -334,6 +334,11 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
 
   /// Currently selected scanlation group for versioned chapters.
   /// Null = show all (default newest version per chapter).
+  ///
+  /// P17：扁平本地漫画也复用它做**显示筛选**。区别在于版本化章节是真的换
+  /// `_displayChapters`（组就是版本），而扁平章节只在 [visible] 里过滤
+  /// index——绝不能重建 `ComicChapters`，否则下标重排，"已读"标记和
+  /// `read(i+1)` 全部错位到别的章节上。
   String? _selectedScanlationGroup;
 
   @override
@@ -363,6 +368,42 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
     }
   }
 
+  /// 扁平本地漫画的翻译组名（P17，2026-10-24）。
+  ///
+  /// 本地漫画的组名只存在于目录名里（`6 [Asura Scans] [comix.to]`），没有
+  /// 版本矩阵可问。这里扫一遍全部章节键取出组名，按登场次数降序（主组在
+  /// 前）、同次数按名字排，结果只用于 chips 与格子小字，**不参与任何 key
+  /// 或路径计算**。版本化/分组章节返回空表——它们有自己的组来源。
+  List<String> get _localGroups =>
+      _localGroupsCache ??= _computeLocalGroups();
+
+  List<String>? _localGroupsCache;
+
+  List<String> _computeLocalGroups() {
+    if (chapters.isVersioned || chapters.isGrouped) return const [];
+    final counts = <String, int>{};
+    for (final key in chapters.allChapters.keys) {
+      final ref = parseChapterDirectoryName(key);
+      if (ref == null || ref.groups.isEmpty) continue;
+      final label = ref.groups.join(' ');
+      counts[label] = (counts[label] ?? 0) + 1;
+    }
+    if (counts.isEmpty) return const [];
+    final names = counts.keys.toList()
+      ..sort((a, b) {
+        final cmp = counts[b]!.compareTo(counts[a]!);
+        return cmp != 0 ? cmp : a.compareTo(b);
+      });
+    return names;
+  }
+
+  /// 章节键属于哪个翻译组；读不出来返回 null。
+  String? _groupOfKey(String key) {
+    final ref = parseChapterDirectoryName(key);
+    if (ref == null || ref.groups.isEmpty) return null;
+    return ref.groups.join(' ');
+  }
+
   /// Original flat indices actually rendered, in list order. Hiding duplicates
   /// only removes entries here — the indices themselves keep their original
   /// values, because [_ComicPageActions.read] and the download picker address
@@ -386,34 +427,14 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
     }
     final ref = parseChapterDirectoryName(key);
     if (ref == null || ref.groups.isEmpty) return null;
-    final label = ref.groups.join(' ');
-    return _ambiguousGroups.contains(label) ? label : null;
-  }
-
-  /// 全书「同一话号存在多个翻译组」时涉及的组名集合，只决定小字出现与否。
-  Set<String> get _ambiguousGroups =>
-      _ambiguousCache ??= _computeAmbiguousGroups();
-
-  Set<String>? _ambiguousCache;
-
-  Set<String> _computeAmbiguousGroups() {
-    final byNumber = <String, Set<String>>{};
-    for (final key in chapters.allVersionKeys) {
-      final ref = parseChapterDirectoryName(key);
-      if (ref == null || ref.groups.isEmpty) continue;
-      byNumber.putIfAbsent(ref.number, () => <String>{}).add(
-        ref.groups.join(' '),
-      );
-    }
-    final ambiguous = <String>{};
-    for (final groups in byNumber.values) {
-      if (groups.length > 1) ambiguous.addAll(groups);
-    }
-    return ambiguous;
+    // P17：扁平本地漫画的组名**一律显示**。旧实现只在一话多组时才给，导致
+    // 单组的那几本（Lua Comic / Violet Scans / HiveToons）整页看不到"谁翻的"。
+    // 组名是分类标识，只占 10px 一行，比"读者猜是哪来的"划算。
+    return ref.groups.join(' ');
   }
 
   void _computeVisible() {
-    _ambiguousCache = null;
+    _localGroupsCache = null;
     _computeDisplayChapters();
     // duplicateChapterIndices are flat indices into the FULL chapters list.
     // When a scanlation-group filter is active, _displayChapters is a
@@ -439,9 +460,16 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
     final localMode =
         ComicOverrideStore.instance.displayModeFor(_overrideComicId) ==
         ComicDisplayMode.local;
+    // P17：扁平本地漫画的组筛选只作用在 [visible] 上（不重建 chapters，
+    // 保住 index 语义）。版本化章节的组筛选已经在 _computeDisplayChapters
+    // 里做完了，这里传 null 即不过滤。
+    final groupFilter = chapters.isVersioned ? null : _selectedScanlationGroup;
     visible = [
       for (final i in ordered)
         if (!hidden.contains(i) &&
+            (groupFilter == null ||
+                _groupOfKey(_displayChapters.ids.elementAt(i)) ==
+                    groupFilter) &&
             !(localMode &&
                 chapterDownloadStatusFor(
                       comicId: state.comic.id,
@@ -452,6 +480,12 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
                     ChapterDownloadStatus.notDownloaded))
           i,
     ];
+    // 组筛选把列表筛空了（目录名被手工改过、那组已不存在）→ 退回"全部"，
+    // 而不是给用户一片空白。清空后 groupFilter 变 null，不会无限递归。
+    if (visible.isEmpty && groupFilter != null) {
+      _selectedScanlationGroup = null;
+      _computeVisible();
+    }
   }
 
   /// 章节标签四态配色（#P5/S3-a，2026-10-05 用户确认）。
@@ -567,8 +601,12 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
                         // group filter is applied, _displayChapters contains a
                         // single group (length == 1), which hid the whole chip
                         // row and left no way to unselect the filter.
-                        if (chapters.isVersioned &&
-                            chapters.scanlationGroupsSorted.length > 1)
+                        //
+                        // P17：条件从"2 组以上"放宽到"有组名就显示"，且来源
+                        // 不再只认版本化章节——本地漫画的组名藏在目录名里。
+                        // 单组时渲染只读标签（以前整行都不出现，读者看不到这本
+                        // 是谁翻的）。
+                        if (_displayGroupNames.isNotEmpty)
                           _buildScanlationGroupChips(context),
                       ],
                     ),
@@ -678,20 +716,54 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
     );
   }
 
+  /// 章节区要显示的翻译组名：版本化章节问版本矩阵，扁平本地漫画问目录名。
+  List<String> get _displayGroupNames =>
+      chapters.isVersioned ? chapters.scanlationGroupsSorted : _localGroups;
+
   /// Scrollable row of filter chips for selecting a scanlation group.
-  /// Shown only when there are 2+ groups in versioned chapters.
+  ///
+  /// 多组：`全部` + 每个组，点选筛选（P17 补上"全部"，以前只能再点一次
+  /// 已选中的 chip 来取消，用户不知道能这么退出筛选）。
+  /// 单组：只渲染一个只读标签——组信息必须可见（否则本地漫画看不出是哪个
+  /// 组翻的），但没有可切换的对象，给可点的 FilterChip 只会让人以为点了没反应。
   Widget _buildScanlationGroupChips(BuildContext context) {
-    final groups = chapters.scanlationGroupsSorted;
+    final groups = _displayGroupNames;
     final selected = _selectedScanlationGroup;
+    if (groups.length == 1) {
+      return Container(
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        alignment: Alignment.centerLeft,
+        child: Chip(
+          label: Text('${"翻译组".tl}：${groups.first}'),
+          visualDensity: VisualDensity.compact,
+          backgroundColor: Colors.transparent,
+          side: BorderSide(color: context.colorScheme.outlineVariant),
+        ),
+      );
+    }
     return Container(
       height: 36,
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: groups.length,
+        itemCount: groups.length + 1,
         separatorBuilder: (_, __) => const SizedBox(width: 6),
         itemBuilder: (context, index) {
-          final group = groups[index];
+          if (index == 0) {
+            return FilterChip(
+              label: Text("全部".tl),
+              selected: selected == null,
+              showCheckmark: false,
+              onSelected: (_) {
+                setState(() {
+                  _selectedScanlationGroup = null;
+                  _computeVisible();
+                });
+              },
+            );
+          }
+          final group = groups[index - 1];
           final isSelected = group == selected;
           return FilterChip(
             label: Text(group),

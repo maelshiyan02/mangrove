@@ -19,7 +19,13 @@ bool _isCoverImage(File file) {
   return dot >= 0 && _coverImageExtensions.contains(name.substring(dot + 1));
 }
 
-/// 排序：季度号从新到旧；没有季度号的（贺图/特典）排在后面按文件名。
+/// 排序：季度号从新到旧；同一季内按语言优先级（CN > KR > EN > JP，P17）；
+/// 没有季度号的（贺图/特典）排在最后按文件名。
+///
+/// 为什么要加语言这一维：同一本漫画的 cover/ 里现在会同时躺着韩文原版、
+/// 快看简体中文版、英文版封面，文件名只靠季度号区分时它们的相对顺序是
+/// "按文件名 ASCII"，`[EN]` 永远排在 `[KR]` 前面——中文用户默认就会看到
+/// 英文封面。默认封面交给语言优先级决定。
 int _compareCover(File a, File b) {
   final seasonA = coverSeasonOf(a.name);
   final seasonB = coverSeasonOf(b.name);
@@ -28,6 +34,9 @@ int _compareCover(File a, File b) {
   }
   if (seasonA != null && seasonB == null) return -1;
   if (seasonA == null && seasonB != null) return 1;
+  final rankA = coverLanguageRank(coverLanguageOf(a.name));
+  final rankB = coverLanguageRank(coverLanguageOf(b.name));
+  if (rankA != rankB) return rankA.compareTo(rankB);
   return a.name.compareTo(b.name);
 }
 

@@ -455,6 +455,7 @@ class _EditLocalComicInfoDialogState extends State<_EditLocalComicInfoDialog> {
   final _updateTime = TextEditingController();
   final _tags = TextEditingController();
   final _desc = TextEditingController();
+  final _altTitles = TextEditingController();
   bool _loading = false;
 
   @override
@@ -467,6 +468,7 @@ class _EditLocalComicInfoDialogState extends State<_EditLocalComicInfoDialog> {
     _updateTime.text = c.updateTime;
     _tags.text = c.tags.join('，');
     _desc.text = c.description;
+    _altTitles.text = c.altTitles.join('\n');
   }
 
   @override
@@ -477,6 +479,7 @@ class _EditLocalComicInfoDialogState extends State<_EditLocalComicInfoDialog> {
     _updateTime.dispose();
     _tags.dispose();
     _desc.dispose();
+    _altTitles.dispose();
     super.dispose();
   }
 
@@ -534,6 +537,15 @@ class _EditLocalComicInfoDialogState extends State<_EditLocalComicInfoDialog> {
                   border: const OutlineInputBorder(),
                 ),
               ).paddingBottom(12),
+              TextField(
+                controller: _altTitles,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  labelText: "原名 / 又名（每行一条，可选）".tl,
+                  hintText: "原名：My Dragon Girlfriend Has Returned\n又名：내 여자친구가 돌아왔다",
+                  border: const OutlineInputBorder(),
+                ),
+              ).paddingBottom(12),
             ],
           ),
         ),
@@ -575,6 +587,11 @@ class _EditLocalComicInfoDialogState extends State<_EditLocalComicInfoDialog> {
               description: _desc.text,
               source: _source.text.trim(),
               updateTime: _updateTime.text.trim(),
+              altTitles: _altTitles.text
+                  .split('\n')
+                  .map((e) => e.trim())
+                  .where((e) => e.isNotEmpty)
+                  .toList(),
             );
             LocalManager().updateComicDirect(updated);
             if (mounted) {

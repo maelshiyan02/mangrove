@@ -1413,6 +1413,23 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
             ),
           ),
         ],
+        // 原名 / 又名（P17，2026-10-24）：标题被改成中文后，原文名与各方译名
+        // 必须留在页面上，否则按原名搜不到、也对不上源站。只对本地漫画有值
+        // （网络漫画的标题本身就是源站标题，没有"改名"这层信息丢失）。
+        if (_localComic?.hasAltTitles == true) ...[
+          const SizedBox(height: 4),
+          for (final line in _localComic!.altTitles)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: SelectableText(
+                line,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.colorScheme.outline,
+                  height: 1.35,
+                ),
+              ),
+            ),
+        ],
         const SizedBox(height: 12),
         ComicDescription(
           title: comic.title,

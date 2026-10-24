@@ -102,6 +102,17 @@ class LocalComic with HistoryMixin implements Comic {
   /// 详情页作为 Update 行显示。
   final String updateTime;
 
+  /// 别名（P17，2026-10-24）：原名 + 各方译名，**按语言分组的有序列表**。
+  ///
+  /// 详情页标题改成中文后，读者仍需要看到"这本的原文叫什么、还有哪些译名"，
+  /// 否则按原名搜不到、也对不上源站。元素形如 `原名：My Dragon Girlfriend
+  /// Has Returned` / `又名：내 여자친구가 돌아왔다`，由详情页逐行渲染，顺序与
+  /// 写法完全由数据决定。
+  final List<String> altTitles;
+
+  /// 是否有可展示的别名行。
+  bool get hasAltTitles => altTitles.any((e) => e.trim().isNotEmpty);
+
   const LocalComic({
     required this.id,
     required this.title,
@@ -116,6 +127,7 @@ class LocalComic with HistoryMixin implements Comic {
     this.description = "",
     this.source = "",
     this.updateTime = "",
+    this.altTitles = const [],
   });
 
   LocalComic.fromRow(Row row)
@@ -133,7 +145,28 @@ class LocalComic with HistoryMixin implements Comic {
       createdAt = DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
       description = (row['description'] as String?) ?? "",
       source = (row['source'] as String?) ?? "",
-      updateTime = (row['update_time'] as String?) ?? "";
+      updateTime = (row['update_time'] as String?) ?? "",
+      altTitles = _decodeAltTitles(row);
+
+  /// 别名列的 JSON 解码，**容错到"列不存在"**。
+  ///
+  /// 老库（P17 之前的备份、`restoreFrom` 进来的旧文件）没有 `alt_titles` 列，
+  /// 直接 `row['alt_titles']` 在部分 sqflite 实现上会抛，而不是返回 null。
+  /// 别名是纯展示信息，读不出来就当没有，绝不能让整本漫画加载失败。
+  static List<String> _decodeAltTitles(Row row) {
+    try {
+      final raw = row['alt_titles'];
+      if (raw is! String || raw.trim().isEmpty) return const [];
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      return [
+        for (final item in decoded)
+          if (item.toString().trim().isNotEmpty) item.toString().trim(),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
 
   File get coverFile => File(FilePath.join(baseDir, cover));
 
@@ -174,6 +207,7 @@ class LocalComic with HistoryMixin implements Comic {
       "description": description,
       "source": source,
       "updateTime": updateTime,
+      "altTitles": altTitles,
       "sourceKey": sourceKey,
       "chapters": chapters?.toJson(),
     };
@@ -571,6 +605,11 @@ class LocalManager with ChangeNotifier {
       _db.execute(
           "ALTER TABLE comics ADD COLUMN update_time TEXT NOT NULL DEFAULT '';");
     }
+    // 别名（P17，2026-10-24）：JSON 字符串数组，详情页标题下方逐行显示。
+    if (!cols.contains('alt_titles')) {
+      _db.execute(
+          "ALTER TABLE comics ADD COLUMN alt_titles TEXT NOT NULL DEFAULT '';");
+    }
   }
 
   /// Replaces the local-library database content with the file at
@@ -714,8 +753,9 @@ class LocalManager with ChangeNotifier {
     _db.execute(
       'INSERT OR REPLACE INTO comics '
       '(id, title, subtitle, tags, directory, chapters, cover, comic_type, '
-      'downloadedChapters, created_at, description, source, update_time) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);',
+      'downloadedChapters, created_at, description, source, update_time, '
+      'alt_titles) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);',
       [
         id,
         comic.title,
@@ -730,6 +770,7 @@ class LocalManager with ChangeNotifier {
         comic.description,
         comic.source,
         comic.updateTime,
+        jsonEncode(comic.altTitles),
       ],
     );
   }
