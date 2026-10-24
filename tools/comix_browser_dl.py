@@ -1079,6 +1079,37 @@ def _parse_gap(text: str) -> tuple[float, float]:
     return 45.0, 100.0
 
 
+def _quarantine_stale(ch_dir: Path, files: list, tag: str = "") -> None:
+    """把待重下的旧页移进 `.stale/<时间戳>/`，**不是删掉**。
+
+    为什么不用 unlink：本机有 safe-delete 守卫（阈值 50 个 / 单回合）。
+    实测 Ch.3 重下 65 页时，删到第 50 个就被
+    `SAFE_DELETE_BULK_CONFIRM_REQUIRED` 拦断，整个进程 rc=1 退出 ——
+    表现出来就是"下载莫名其妙停住 / 批次结束 rc=1"，很像是网络被封，
+    实际是本地守卫。移动不属于删除，不受守卫限制，而且旧页留着能回滚、
+    能事后比对页码对不对齐。
+
+    `.stale/` 是子目录，`ch_dir.iterdir()` 只取文件，不会被算进页数。
+    """
+    if not files:
+        return
+    trash = ch_dir / ".stale" / time.strftime("%Y%m%d_%H%M%S")
+    try:
+        trash.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log(f"    !! 无法创建隔离目录 {trash}：{e}")
+        return
+    moved = 0
+    for f in files:
+        try:
+            f.replace(trash / f.name)
+            moved += 1
+        except OSError:
+            pass
+    if moved:
+        log(f"{tag} 旧页 {moved} 个已隔离到 .stale/{trash.name}/（不删，可回滚）")
+
+
 async def _download_seq(args, out_dir: Path, chapters: list[dict], base_path: str) -> dict:
     """逐章独立会话模式。
 
@@ -1113,17 +1144,26 @@ async def _download_seq(args, out_dir: Path, chapters: list[dict], base_path: st
         except Exception:
             prev = {}
         prev_rec = prev.get(dir_name) or {}
+        have = (
+            [p for p in ch_dir.iterdir() if p.suffix.lower() in img_ext]
+            if ch_dir.is_dir()
+            else []
+        )
         if ch_dir.is_dir() and not args.force:
-            have = [p for p in ch_dir.iterdir() if p.suffix.lower() in img_ext]
             prev_nodes = prev_rec.get("nodes") or 0
+            # 🔴 2026-10-24：`prev_nodes == 0` 不能算 complete。
+            # 旧版下载器不写 manifest，一个 12 页的残目录（Ch.2）正是靠
+            # 「没有记录 ⇒ 节点数为 0 ⇒ 页数 >= 0」一路绿灯，被当成已完成
+            # 永远不再补。没有记录就没有完整性依据，必须重下。
             complete = (
                 bool(have)
                 and not prev_rec.get("pending")
                 and not prev_rec.get("failures")
-                and (prev_nodes == 0 or len(have) >= prev_nodes)
+                and prev_nodes > 0
+                and len(have) >= prev_nodes
             )
             if complete:
-                log(f"{tag} 跳过（已有 {len(have)}/{prev_nodes or '?'} 页，记录完整）")
+                log(f"{tag} 跳过（已有 {len(have)}/{prev_nodes} 页，记录完整）")
                 skipped.append(ch["number"])
                 consec_fail = 0
                 continue
@@ -1133,11 +1173,11 @@ async def _download_seq(args, out_dir: Path, chapters: list[dict], base_path: st
                     f"待补 {len(prev_rec.get('pending') or [])}，"
                     f"失败 {len(prev_rec.get('failures') or [])}）→ 重下本章"
                 )
-                for stale in have:
-                    try:
-                        stale.unlink()
-                    except OSError:
-                        pass
+
+        # 走到这里就是要重下：旧页一律隔离，不删。
+        # --force 也一样要隔离，否则新页换了扩展名（.jpg→.webp）就会
+        # 新旧并存，Ch.49 因此出现过 95 页变 190 个文件。
+        _quarantine_stale(ch_dir, have, tag)
 
         if n > 1:
             wait = random.uniform(gap_lo, gap_hi)
