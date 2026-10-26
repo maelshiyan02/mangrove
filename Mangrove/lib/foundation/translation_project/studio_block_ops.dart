@@ -187,6 +187,11 @@ abstract final class StudioSfxOps {
 
   /// [block] 是否已被本策略标记为拟声词。
   static bool isMarkedSfx(TextBlock block) => block.label == label;
+
+  /// [block] 是否为翻译组水印（管线第 0 步擦除，不翻译）。
+  ///
+  /// 🔴 与 [isMarkedSfx] 并列但独立：水印走自己的擦除通道，不进翻译批次。
+  static bool isWatermark(TextBlock block) => block.kind == TextBlockKind.watermark;
 }
 
 /// 一次局部识别的裁剪窗口（页坐标）。

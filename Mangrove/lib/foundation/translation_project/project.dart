@@ -36,6 +36,14 @@ class ProjectPage {
     ];
   }
 
+  /// 翻译组水印块（管线第 0 步擦除，不参与翻译/嵌字）。
+  List<TextBlock> get watermarkBlocks =>
+      [for (final block in blocks) if (block.kind == TextBlockKind.watermark) block];
+
+  /// 水印块的整块外接矩形（页坐标）。擦除用整块而非字形级（否则月标/白字漏擦）。
+  List<IntRect> get watermarkRects =>
+      [for (final block in watermarkBlocks) block.rect];
+
   bool get hasTranslation => blocks.any((block) => block.hasTranslation);
 
   /// Regions for the existing renderer, in order.

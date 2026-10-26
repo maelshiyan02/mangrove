@@ -68,6 +68,7 @@
 | **A20** | 🔴 下载实验坑与核验铁律（移动替代删除绕守卫 · 无记录≠完整 · force 不清理 · 扩展名按 magic · `ls -t` 不能当进度 · 拦截三信号 · 验收五项 · 提速阶梯到 workers=28） | 批量/整章重下、判"是否卡住/被封"、验收完整性、批量改名之前 |
 | **A21** | 🔴 域库删行的连带损失（`history_events`/`favorites` cascade · 先迁后删 · chapter_id 宁置空不硬搬 · 删前三件套） | 要删 `comics` 行、把远端身份转成本地身份之前 |
 | **A22** | 🔴 本地漫画组显示 / 封面三制与贺图 / 复合主键删行（组名只在目录名 · 别为显示改 versioned · 站名≠组名 · `season(N)`=韩漫季 / `vol(N)`=日漫卷 / `event(名)`=节日贺图，三者不同轴 · 贺图无版本号排最后 · KR>CN>EN>JP · Kakao `[단행본]` 是**小说**单行本 · Googlebot UA 可拿 KakaoPage SSR · 愚人节/连休/春节/秋夕会整批换缩略图 · 删完再 UPDATE 会丢整本） | 本地漫画看不到翻译组、找/改封面、判断某张是不是贺图、网络转本地之前 |
+| **A23** | 🔴 文字块类型（kind）与多边形精确掩膜（复合工具栏三键合框 · 下拉须 `PopupMenuPosition.under`+`scheme.surface`+小三角 · `itemBuilder` 返回 `PopupMenuItem<String>` 非 `Widget` · 多边形擦除=字形∩多边形掩膜 · 水印不译不要求译文 · 马赛克用区域级掩膜 · analyze 报错看 `builds/step_2_analyze.log` · `translation.json` 提交前还原 CRLF） | 改工作室工具栏、文字块类型、多边形/水印像素处理之前 |
 
 ## 2. 工作日志索引
 

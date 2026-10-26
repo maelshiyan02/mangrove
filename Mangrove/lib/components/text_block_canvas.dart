@@ -557,6 +557,7 @@ class PageCanvasPainter extends CustomPainter {
     this.showGroups = true,
     this.activeGroupFrame,
     this.marquee,
+    this.polygon = const [],
     this.snapGuidesX = const [],
     this.snapGuidesY = const [],
   });
@@ -590,6 +591,10 @@ class PageCanvasPainter extends CustomPainter {
   /// translucent fill plus a dashed border so it reads as "pending" rather than
   /// as a committed block.
   final Rect? marquee;
+
+  /// P48 · Live freehand polygon for "draw a new block", in **canvas** pixels.
+  /// Drawn as a translucent fill plus a dashed stroke so it reads as "pending".
+  final List<Offset> polygon;
 
   /// Full-height / full-width guide lines the current drag snapped to, in
   /// **canvas** pixels.
@@ -735,6 +740,33 @@ class PageCanvasPainter extends CustomPainter {
           ..strokeWidth = 1.5
           ..color = selection,
       );
+    }
+
+    // P48 · 自由多边形预览：封闭填充 + 虚线描边，顶点用圆点提示。
+    if (polygon.length >= 2) {
+      final path = Path()..moveTo(polygon.first.dx, polygon.first.dy);
+      for (final p in polygon.skip(1)) {
+        path.lineTo(p.dx, p.dy);
+      }
+      path.close();
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.fill
+          ..color = selection.withValues(alpha: 0.12),
+      );
+      final stroke = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = selection;
+      for (var i = 0; i < polygon.length; i++) {
+        final a = polygon[i];
+        final b = polygon[(i + 1) % polygon.length];
+        _paintDashedLine(canvas, a, b, stroke);
+      }
+      for (final p in polygon) {
+        canvas.drawCircle(p, 2.5, Paint()..color = selection);
+      }
     }
 
     // Snap guides last so they sit on top of every block. Drawn edge-to-edge
@@ -1137,6 +1169,7 @@ class PageCanvasPainter extends CustomPainter {
       old.activeGroupFrame?.groupId != activeGroupFrame?.groupId ||
       old.activeGroupFrame?.bounds != activeGroupFrame?.bounds ||
       old.marquee != marquee ||
+      !_sameOffsets(old.polygon, polygon) ||
       !_sameDoubles(old.snapGuidesX, snapGuidesX) ||
       !_sameDoubles(old.snapGuidesY, snapGuidesY);
 
@@ -1155,6 +1188,15 @@ class PageCanvasPainter extends CustomPainter {
   /// `material.dart`, and pulling in `foundation.dart` for one helper is how a
   /// canvas ends up with two names for the same predicate.
   static bool _sameDoubles(List<double> a, List<double> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  /// P48 · [Offset] 列表逐项比较（多边形顶点预览是否变化）。
+  static bool _sameOffsets(List<Offset> a, List<Offset> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i] != b[i]) return false;

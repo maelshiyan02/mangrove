@@ -45,6 +45,9 @@ class StudioBlockPanel extends StatefulWidget {
     this.isCrossPage = false,
     this.onDissolveSpan,
     this.onSampleColor,
+    this.onKindChanged,
+    this.onErase,
+    this.onMosaic,
     this.busy = false,
   });
 
@@ -60,6 +63,15 @@ class StudioBlockPanel extends StatefulWidget {
   final StudioBlockEdit onEdit;
 
   final VoidCallback? onDelete;
+
+  /// P48 · 改块的识别类型（对话/拟声词/水印）。null = 面板只读（无选中页）。
+  final void Function(String kind)? onKindChanged;
+
+  /// 水印【去水印/擦除】：按精确轮廓抹掉水印并修复底色（**无需译文**）。
+  final Future<void> Function()? onErase;
+
+  /// 水印【马赛克】：把块区域像素化（不擦除，只破坏字迹可读性）。
+  final Future<void> Function()? onMosaic;
 
   /// 【识别】—— re-run OCR on this block's own box (S-N1).
   ///
@@ -151,6 +163,9 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final block = widget.block;
+    // 🔴 P48 · 按类型差异化切面：水印不译、不嵌字，只做像素处理，因此走
+    // 专用面板（擦除 / 马赛克 / AI 修复填充 / 复原），不显示翻译与排版。
+    if (block.isWatermark) return _buildWatermarkPanel(context, scheme);
     final format = block.fontFormat;
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
@@ -209,6 +224,10 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
             ),
           ],
         ),
+        const SizedBox(height: 8),
+        _section('Type (识别类型)'),
+        const SizedBox(height: 6),
+        ..._kindDropdown(scheme, block),
         const SizedBox(height: 8),
         _kv('Box', block.xyxy.map((v) => v.round().toString()).join(', ')),
         const SizedBox(height: 8),
@@ -504,6 +523,217 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 识别类型下拉（对话 / 拟声词 / 水印）。普通面板与水印面板共用。
+  List<Widget> _kindDropdown(ColorScheme scheme, TextBlock block) {
+    return [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            value: block.kind,
+            isExpanded: true,
+            items: [
+              DropdownMenuItem(
+                value: TextBlockKind.dialogue,
+                child: Row(
+                  children: [
+                    const Icon(Icons.chat_bubble_outline, size: 18),
+                    const SizedBox(width: 8),
+                    Text('Dialogue'.tl),
+                  ],
+                ),
+              ),
+              DropdownMenuItem(
+                value: TextBlockKind.onomatopoeia,
+                child: Row(
+                  children: [
+                    const Icon(Icons.graphic_eq, size: 18),
+                    const SizedBox(width: 8),
+                    Text('Onomatopoeia'.tl),
+                  ],
+                ),
+              ),
+              DropdownMenuItem(
+                value: TextBlockKind.watermark,
+                child: Row(
+                  children: [
+                    const Icon(Icons.branding_watermark, size: 18),
+                    const SizedBox(width: 8),
+                    Text('Watermark'.tl),
+                  ],
+                ),
+              ),
+            ],
+            onChanged: widget.onKindChanged == null
+                ? null
+                : (v) {
+                    if (v != null) widget.onKindChanged!(v);
+                  },
+          ),
+        ),
+      ),
+    ];
+  }
+
+  /// 水印块专用面板（不译、不嵌字）：擦除 / 马赛克 / AI 修复填充 / 复原。
+  Widget _buildWatermarkPanel(BuildContext context, ColorScheme scheme) {
+    final block = widget.block;
+    final polygon = block.polygon;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Text block #@n'.tlParams({'n': widget.index + 1}),
+                style: ts.s16,
+              ),
+            ),
+            if (widget.onDelete != null)
+              IconButton(
+                tooltip: 'Delete block'.tl,
+                icon: const Icon(Icons.delete_outline, size: 20),
+                onPressed: widget.onDelete,
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: scheme.tertiaryContainer.withValues(alpha: 0.35),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.branding_watermark,
+                size: 16,
+                color: scheme.onTertiaryContainer,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Watermark blocks are erased, never translated.'.tl,
+                  style: ts.s12.copyWith(color: scheme.onTertiaryContainer),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        _section('Type (识别类型)'),
+        const SizedBox(height: 6),
+        ..._kindDropdown(scheme, block),
+        const SizedBox(height: 8),
+        _kv('Box', block.xyxy.map((v) => v.round().toString()).join(', ')),
+        if (polygon != null) ...[
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Icon(Icons.polyline, size: 16, color: scheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                'Precise polygon region (@n vertices)'
+                    .tlParams({'n': '${polygon.length}'}),
+                style: ts.s12.copyWith(color: scheme.primary),
+              ),
+            ],
+          ),
+        ],
+        const Divider(height: 28),
+        _section('Watermark tools'),
+        const SizedBox(height: 6),
+        if (widget.onErase != null)
+          _watermarkAction(
+            icon: Icons.cleaning_services_outlined,
+            label: 'Erase watermark',
+            subtitle: 'Erase the watermark and fill the background',
+            onPressed: widget.onErase!,
+          ),
+        if (widget.onMosaic != null)
+          _watermarkAction(
+            icon: Icons.blur_on,
+            label: 'Mosaic',
+            subtitle: 'Pixelate this region (mosaic)',
+            onPressed: widget.onMosaic!,
+          ),
+        if (widget.onRepair != null)
+          _watermarkAction(
+            icon: Icons.auto_fix_high,
+            label: 'AI fill (inpaint)',
+            subtitle: 'AI inpaint the erased area',
+            onPressed: widget.onRepair!,
+          ),
+        if (widget.onRestoreOriginal != null)
+          _watermarkAction(
+            icon: Icons.restore,
+            label: 'Restore original',
+            onPressed: widget.onRestoreOriginal!,
+          ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            'Pixel edits are irreversible: the blanked pixels are written to inpainted/. Use Restore original to bring them back.'.tl,
+            style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 水印面板的一行动作：图标 + 标题/说明 + 执行按钮。
+  Widget _watermarkAction({
+    required IconData icon,
+    required String label,
+    String? subtitle,
+    required Future<void> Function() onPressed,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          Icon(icon, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label.tl, style: ts.s14),
+                if (subtitle != null)
+                  Text(
+                    subtitle.tl,
+                    style: ts.s10.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+              ],
+            ),
+          ),
+          FilledButton.tonal(
+            onPressed: widget.busy ? null : () => unawaited(onPressed()),
+            child: widget.busy
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text('Apply'.tl),
+          ),
+        ],
+      ),
     );
   }
 

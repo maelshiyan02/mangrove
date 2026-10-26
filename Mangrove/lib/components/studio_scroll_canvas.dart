@@ -145,6 +145,8 @@ class StudioScrollCanvas extends StatefulWidget {
     this.onResizeGroup,
     this.groupFrameFor,
     this.onMarquee,
+    this.onPolygon,
+    this.polygonMode = false,
     this.marqueeMode = false,
     this.spanMode = false,
     this.onSpanMarquee,
@@ -227,8 +229,15 @@ class StudioScrollCanvas extends StatefulWidget {
   /// **page pixels**. Ignored when the drag was too small to be a box.
   final void Function(String pageKey, Rect rect)? onMarquee;
 
+  /// P48 · Fires when the user finishes a freehand polygon on a page, with the
+  /// vertex list in **page pixels**.
+  final void Function(String pageKey, List<Offset> points)? onPolygon;
+
   /// When true every page's canvas is in "draw a new box" mode.
   final bool marqueeMode;
+
+  /// P48 · When true every page's canvas is in "draw a polygon" mode.
+  final bool polygonMode;
 
   /// B-2：跨页框选模式。整个条带被一层透明手势层盖住，拖出的框可以**跨过缝线**，
   /// 松手时按缝切成 per-page 子矩形交回 [onSpanMarquee]。
@@ -1112,6 +1121,9 @@ class StudioScrollCanvasState extends State<StudioScrollCanvas> {
                       ?.call(page.key, groupId, oldBounds, newBounds),
                   onMarquee: (rect) => widget.onMarquee?.call(page.key, rect),
                   marqueeMode: widget.marqueeMode,
+                  polygonMode: widget.polygonMode,
+                  onPolygon: (points) =>
+                      widget.onPolygon?.call(page.key, points),
                   onEditText: (pageKey, index) =>
                       widget.onEditText?.call(pageKey, index),
                   isFirst: v == 0,
@@ -1212,6 +1224,8 @@ class _StripItem extends StatelessWidget {
     this.onResizeGroup,
     required this.onMarquee,
     required this.marqueeMode,
+    required this.polygonMode,
+    required this.onPolygon,
     required this.isFirst,
     required this.groupPickMode,
     required this.onPickBlock,
@@ -1255,6 +1269,8 @@ class _StripItem extends StatelessWidget {
 
   final void Function(Rect rect)? onMarquee;
   final bool marqueeMode;
+  final bool polygonMode;
+  final void Function(List<Offset> points)? onPolygon;
 
   /// 第一页不画顶部 1px 分隔线（上面没有前一页）。
   final bool isFirst;
@@ -1340,6 +1356,8 @@ class _StripItem extends StatelessWidget {
         onResizeGroup: onResizeGroup,
         onMarquee: (rect) => onMarquee?.call(rect),
         marqueeMode: marqueeMode,
+        polygonMode: polygonMode,
+        onPolygon: (points) => onPolygon?.call(points),
         onEditText: (index) => _reportTap(onEditText, index),
       );
     } else {

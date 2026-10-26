@@ -46,6 +46,7 @@ import 'package:mangrove/foundation/translation_project/glossary_store_app.dart'
 import 'package:mangrove/foundation/translation_project/gray_png.dart';
 import 'package:mangrove/foundation/translation_project/mask_producer.dart';
 import 'package:mangrove/foundation/translation_project/page_size_probe.dart';
+import 'package:mangrove/foundation/translation_project/polygon_mask.dart';
 import 'package:mangrove/foundation/translation_project/project.dart';
 import 'package:mangrove/foundation/translation_project/project_io.dart';
 import 'package:mangrove/foundation/translation_project/project_writer.dart';
@@ -451,19 +452,36 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   /// the user just positioned jump somewhere else. A mode costs one click and
   /// removes the ambiguity entirely; it also auto-exits after a successful draw
   /// so consecutive blocks can be placed without re-arming.
-  bool _marqueeMode = false;
+  /// P48 · 文字块创建复合控件的状态（替换旧的"固定位置新建块" + "框选新建块"）：
+  /// [_createMode] 是总开关（add_comment 按钮），开着时画布进入"创建"语义；
+  /// [_blockShape] 决定拖拽是画矩形还是画笔自由多边形；[_newBlockKind] 是新建
+  /// 块的识别类型（对话/拟声词/水印）。矩形/多边形两种"模式"由这三者派生，
+  /// 不再单独存 `_marqueeMode` 字段，避免状态分裂与两处不同步。
+  bool _createMode = false;
+
+  /// 新建块形状：`'rect'`（矩形，拖框）或 `'polygon'`（多边形，自由画笔）。
+  String _blockShape = 'rect';
+
+  /// 新建块的识别类型，对应 [TextBlockKind]。
+  String _newBlockKind = TextBlockKind.dialogue;
+
+  /// 派生：矩形创建模式（开创建 + 形状=矩形）。
+  bool get _marqueeActive => _createMode && _blockShape == 'rect';
+
+  /// 派生：多边形创建模式（开创建 + 形状=多边形）。
+  bool get _polygonActive => _createMode && _blockShape == 'polygon';
 
   /// B-2 跨页框选模式（仅长画布可用）。
   ///
-  /// 🔴 与 [_marqueeMode] 一样是**一次性模式**（画完自动关），且两者**互斥**：
-  /// 跨页框选盖住整条条带、吃掉页内手势，"在某一页里拖框移动块"与"跨缝拖框
-  /// 建块"在手势上无法共存，只能靠显式模式二选一。仅在 [_stripMode] 下可用 ——
-  /// 单页模式里根本没有相邻页，跨缝无从谈起。
+  /// 🔴 与 [_createMode] 互斥：两者都靠拖拽，含义不同。跨页框选盖住整条条带、
+  /// 吃掉页内手势，"在某一页里拖框移动块"与"跨缝拖框建块"在手势上无法共存，
+  /// 只能靠显式模式二选一。仅在 [_stripMode] 下可用 —— 单页模式里根本没有
+  /// 相邻页，跨缝无从谈起。
   bool _spanMode = false;
 
   /// B-3 建组点选模式（仅长画布）。
   ///
-  /// 🔴 与 [_marqueeMode] / [_spanMode] 互斥，但**不**用全屏手势覆盖层：建组
+  /// 🔴 与 [_createMode] / [_spanMode] 互斥，但**不**用全屏手势覆盖层：建组
   /// 要跨多页滚着点，覆盖层会吃掉滚轮。它只让页内块变成"只读 + 点选即加入
   /// 名单"，见 `studio_scroll_canvas.dart`。
   bool _groupPickMode = false;
@@ -505,9 +523,32 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   /// block, then type", and leaving the mode on would make the next drag on the
   /// page draw another box instead of doing what the user expects.
   void _onMarquee(Rect rect) {
-    if (!_marqueeMode) return;
-    setState(() => _marqueeMode = false);
+    if (!_marqueeActive) return;
+    // 🔴 P48：创建模式在画完一个块后**保持开启**（不再像旧 marquee 那样自动退出），
+    // 因为现在它是显式的总开关，连续放多个块时不必反复点按钮；要退出点一下
+    // add_comment 即可。块的识别类型/形状沿用当前预设。
     _createBlockAt(rect);
+  }
+
+  /// P48 · 画笔自由多边形建块：[points] 为**页像素**顶点序列，至少 3 点。
+  /// 由画布 polygon 模式在拖拽结束时回调。块以包围盒落盘（管线/擦除暂按矩形
+  /// 处理），顶点细节存 `polygon` 字段，供阶段 3 的精确掩膜使用。
+  void _onPolygon(List<Offset> points) {
+    if (!_polygonActive || points.length < 3) return;
+    double minX = double.infinity;
+    double minY = double.infinity;
+    double maxX = -double.infinity;
+    double maxY = -double.infinity;
+    for (final p in points) {
+      if (p.dx < minX) minX = p.dx;
+      if (p.dy < minY) minY = p.dy;
+      if (p.dx > maxX) maxX = p.dx;
+      if (p.dy > maxY) maxY = p.dy;
+    }
+    final rect = Rect.fromLTRB(minX, minY, maxX, maxY);
+    _createBlockAt(rect, polygon: [
+      for (final p in points) [p.dx, p.dy],
+    ]);
   }
 
   /// B-2：跨缝拖框松手 —— [parts] 已由长画布**按缝切好**（每页一个子矩形）。
@@ -1304,7 +1345,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           // 而标记必须依据该块**自己**的检测语言，否则同一页会因为用户换了语向
           // 而得到不同的标记。标记只有一个产生点：`StudioPagePipeline.runPage`。
           // 面板上的【翻译】是**单块**动作、不看这个标记，误标一次点击就能回来。
-          if (StudioSfxOps.isMarkedSfx(block)) continue;
+          // 🔴 水印块（管线第 0 步产物）即使被误标了文本也不进自动翻译批次：
+          // 它的去处是抹字通道而非译文字段，进翻译只会白白消耗 token。
+          if (StudioSfxOps.isMarkedSfx(block) || block.kind == 'watermark') continue;
           final source = block.sourceText.trim();
           if (source.isEmpty || block.hasTranslation) continue;
           targets.add(i);
@@ -1808,13 +1851,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       _pageIndex = index;
       _selectedBlock = -1;
       _selectedPageKey = null;
-      // 🔴 P9.7: 翻页要把"框选新建"这个**模式**关掉。模式本身就设计成"画完
-      // 一个自动退出"（[_onMarquee]），因为常见用法是"放一个块然后打字"；
-      // 跨页保留它则相反 —— 用户换页多半只是想看看，下一次拖动就会在他
-      // 没打算动的那一页上造出一个块，而块一旦落地就进了 undo 栈与脏页集合。
-      // 两条翻页入口（本方法与长画布的 `onPageChanged`）必须一起清，只改
-      // 一条会留下"单页模式正常、长画布漏"的假象。
-      _marqueeMode = false;
+      // 🔴 P48：创建模式（[_createMode]）是**显式总开关**，翻页不再自动关 ——
+      // 用户开着它连续换页放多个块是合理诉求。跨页框选/建组点选仍随翻页清，
+      // 因为它们是"偶发一次性"语义；创建模式不是。两条翻页入口都只清这两个。
       _spanMode = false;
     });
     if (_stripMode) {
@@ -2203,26 +2242,15 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   ///
   /// ## Two ways in
   ///
-  /// This button is the **keyboard-free fallback**. The primary path is the
-  /// marquee mode next to it: drag a box exactly where the text goes. The
-  /// button exists because marquee needs a non-touch-friendly pointer for
-  /// precise work, and because "I just need a block here" should not require
-  /// entering a mode.
+  /// P48：新建文字块的统一落块入口。
   ///
-  /// ## One undo step
+  /// 矩形（marquee）与多边形（画笔）两条创建路径都汇聚到这里，确保几何体之外
+  /// 二者**完全一致**——尤其是识别类型 [_newBlockKind] 与多边形顶点 [polygon]
+  /// 的写入，只此一处，不会分叉。
   ///
-  /// `captureBlockListEdit` snapshots the whole list — the same path delete
-  /// uses, so create and delete are symmetric and neither can drift.
-  void _createBlock() {
-    _createBlockAt(null);
-  }
-
-  /// Creates a block at [rect] (page pixels), or at the default spot when null.
-  ///
-  /// Both entry points funnel through here so a marquee-created block and a
-  /// button-created block are **byte-identical** except for geometry — no second
-  /// construction path that could drift.
-  void _createBlockAt(Rect? rect) {
+  /// [rect] 为页像素矩形（多边形时是其包围盒）；[polygon] 可选，为源像素顶点
+  /// `[[x,y], ...]`。
+  void _createBlockAt(Rect? rect, {List<List<double>>? polygon}) {
     final project = _project;
     if (project == null || _pageKeys.isEmpty) return;
     final pageKey = _pageKeys[_pageIndex];
@@ -2238,6 +2266,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         box.bottom.round(),
       ),
     );
+    // 🔴 P48：新建块按当前预设的识别类型落盘（对话/拟声词/水印）。
+    block.kind = _newBlockKind;
+    if (polygon != null) block.polygon = polygon;
     final command = captureBlockListEdit(
       page.rawBlocks,
       () => page.addBlock(block),
@@ -2261,7 +2292,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     });
   }
 
-  /// Where [_createBlock] puts a block when the user did not drag one out.
+  /// P48：未拖出几何体时（多边形至少 3 点，矩形需达最小尺寸）落块的默认位置。
   Rect _defaultBlockRect(String pageKey) {
     final pageSize = _pageSizeInPixels(pageKey);
     const widthFraction = 0.42;
@@ -2432,7 +2463,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     final pageKey = _selectedPageKey;
     final block = _currentBlock;
     if (project == null || pageKey == null || block == null) return;
-    if (block.translation.trim().isEmpty) {
+    // 🔴 水印块**不翻译** —— 去水印只需要"擦掉"，因此不要求译文存在。对话/
+    // 拟声词块仍要求先有译文再修图（修图后要填译文，没译文等于白擦）。
+    if (!block.isWatermark && block.translation.trim().isEmpty) {
       if (mounted) {
         context.showMessage(message: 'This block has no translation yet.'.tl);
       }
@@ -2473,13 +2506,39 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         }
         return;
       }
+      // 🔴 P48 阶段 3：多边形块按**轮廓**精确擦除 —— 把顶点栅格化成整页掩膜，
+      // 与字形掩膜取交，只抹轮廓内部真正有笔画的像素。矩形块（无 polygon）
+      // 保持原路径，字节级不变。
+      final poly = block.polygon;
+      final precise = poly != null && poly.length >= 3;
+      Uint8List erasedMask = maskPage.pixels;
+      if (poly != null && poly.length >= 3) {
+        final polyMask = rasterizePolygon(
+          width: original.width,
+          height: original.height,
+          polygon: poly,
+        );
+        erasedMask = intersectPageMasks(maskPage.pixels, polyMask);
+        if (!maskHasAny(erasedMask)) {
+          if (mounted) {
+            context.showMessage(
+              message: 'No lettering detected inside this block.'.tl,
+            );
+          }
+          return;
+        }
+      }
       // 在原图**副本**上只擦这一块；块外像素与原图逐字节相同。
       final erased = RgbaImage(
         original.width,
         original.height,
         Uint8List.fromList(original.pixels),
       );
-      TextInpainter.erase(erased, rects);
+      if (precise) {
+        erasePageMaskInPlace(erased, erasedMask);
+      } else {
+        TextInpainter.erase(erased, rects);
+      }
 
       final root = project.workspace;
       final inpaintedFile = File(project.artifactPath('inpainted', pageKey));
@@ -2488,7 +2547,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           : null;
       final merged = mergeRepairedInpainted(
         erasedBlock: erased,
-        blockMask: maskPage.pixels,
+        blockMask: erasedMask,
         existingInpainted: existingInpainted,
       );
       if (merged == null) {
@@ -2511,7 +2570,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         }
       }
       final combinedMask = unionMasks(
-        added: maskPage.pixels,
+        added: erasedMask,
         existing: existingMask,
       );
 
@@ -2634,8 +2693,40 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         return;
       }
       final existingMask = decodedMask.grey;
+      final poly = block.polygon;
       // 外扩 30% 检测原字，再与"实际被抹"记录取交。
-      final dilated = buildRestorationMask(original, block.rect);
+      //
+      // 🔴 P48 阶段 3：多边形块只复原轮廓内的像素 —— 否则外扩窗口会把轮廓外、
+      // 属于邻块的已抹像素一并盖回原图（等于撤销了别的块的修图）。
+      //
+      // 🔴 水印块用**区域级**掩膜（轮廓/外框）而不是字形级：马赛克写进 mask
+      // 的是一整片区域，只看字形会漏掉它，导致【复原原图】对马赛克无效。
+      Uint8List dilated;
+      if (block.isWatermark) {
+        dilated = (poly != null && poly.length >= 3)
+            ? rasterizePolygon(
+                width: original.width,
+                height: original.height,
+                polygon: poly,
+              )
+            : rasterizeRect(
+                width: original.width,
+                height: original.height,
+                rect: block.rect,
+              );
+      } else {
+        dilated = buildRestorationMask(original, block.rect);
+        if (poly != null && poly.length >= 3) {
+          dilated = intersectPageMasks(
+            dilated,
+            rasterizePolygon(
+              width: original.width,
+              height: original.height,
+              polygon: poly,
+            ),
+          );
+        }
+      }
       final effective = intersectMasks(dilated, existingMask);
       if (!maskHasAny(effective)) {
         if (mounted) {
@@ -2717,6 +2808,142 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       }
     } catch (e, s) {
       Log.error('Translation Studio', 'block restore failed', s);
+      if (mounted) {
+        context.showMessage(
+          message: 'Block operation failed: @a'.tlParams({'a': e}),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _blockOpBusy = false);
+    }
+  }
+
+  /// 水印【马赛克】：把块区域（多边形优先）像素化，写回 inpainted 底图并
+  /// 重画 result。不擦除、不嵌字，只破坏字迹可读性。
+  ///
+  /// 🔴 与修图一样，像素操作只能在 GUI 会话里肉眼验收（本环境无渲染表面）。
+  Future<void> _mosaicSelectedBlock() async {
+    final project = _project;
+    final pageKey = _selectedPageKey;
+    final block = _currentBlock;
+    if (project == null || pageKey == null || block == null) return;
+    // 跨页块暂不做马赛克：产物契约逐页，区域跨页会把问题复杂化，明确提示。
+    final span = readSpan(block);
+    if (span != null && span.isCrossPage) {
+      if (mounted) {
+        context.showMessage(
+          message: 'Mosaic is not available for cross-page blocks yet.'.tl,
+        );
+      }
+      return;
+    }
+    final originalFile = File(project.originalPath(pageKey));
+    if (!originalFile.existsSync()) {
+      if (mounted) {
+        context.showMessage(message: 'The original page is missing.'.tl);
+      }
+      return;
+    }
+    setState(() => _blockOpBusy = true);
+    try {
+      final original = await decodeFullResolutionRgba(originalFile);
+      if (original == null) {
+        if (mounted) {
+          context.showMessage(
+            message: 'Block repair needs the full-resolution page.'.tl,
+          );
+        }
+        return;
+      }
+      // 底图优先用现有 inpainted（保住别的块已修好的底），否则退回原图。
+      final inpaintedFile = File(project.artifactPath('inpainted', pageKey));
+      final existing = inpaintedFile.existsSync()
+          ? await decodeFullResolutionRgba(inpaintedFile)
+          : null;
+      final base = (existing != null &&
+              existing.width == original.width &&
+              existing.height == original.height)
+          ? RgbaImage(
+              original.width,
+              original.height,
+              Uint8List.fromList(existing.pixels),
+            )
+          : RgbaImage(
+              original.width,
+              original.height,
+              Uint8List.fromList(original.pixels),
+            );
+
+      final poly = block.polygon;
+      final regionMask = (poly != null && poly.length >= 3)
+          ? rasterizePolygon(
+              width: original.width,
+              height: original.height,
+              polygon: poly,
+            )
+          : rasterizeRect(
+              width: original.width,
+              height: original.height,
+              rect: block.rect,
+            );
+      final changed = mosaicPageMaskInPlace(base, regionMask, blockSize: 12);
+      if (changed == 0) {
+        if (mounted) {
+          context.showMessage(message: 'Nothing to erase here.'.tl);
+        }
+        return;
+      }
+
+      final root = project.workspace;
+      // 记录到 mask：让【复原原图】能把马赛克区域一并盖回原图。水印块用
+      // **区域级**掩膜是有意的 —— 水印的目标是整片消失，不是字形级。
+      final maskFile = File(project.artifactPath('mask', pageKey));
+      Uint8List? existingMask;
+      if (maskFile.existsSync()) {
+        final decoded = await decodeGreyscaleMask(maskFile);
+        if (decoded != null &&
+            decoded.width == original.width &&
+            decoded.height == original.height) {
+          existingMask = decoded.grey;
+        }
+      }
+      final combinedMask =
+          unionMasks(added: regionMask, existing: existingMask);
+
+      // 两阶段顺序：先底图（mask + inpainted），再 result。
+      await _writeArtifactBytes(
+        root,
+        ProjectArtifactKind.mask,
+        pageKey,
+        GrayPng.encode(original.width, original.height, combinedMask),
+      );
+      final originalBytes = await originalFile.readAsBytes();
+      final inpaintedPng = await renderTranslatedPage(
+        originalBytes,
+        base,
+        const [],
+        mode: InpaintMode.smart,
+      );
+      await _writeArtifactBytes(
+        root,
+        ProjectArtifactKind.inpainted,
+        pageKey,
+        inpaintedPng,
+      );
+      await _rerenderResultPage(project, root, pageKey);
+      await ArtifactReconciliation.write(project);
+
+      Log.info(
+        'Translation Studio',
+        'block mosaic: page=$pageKey block=$_selectedBlock pixels=$changed',
+      );
+      if (LocalManager().isInitialized) LocalManager().notifyListeners();
+      if (!mounted) return;
+      setState(() {});
+      await _loadBase(pageKey, resetSelection: false);
+      if (mounted) context.showMessage(message: 'Mosaic applied.'.tl);
+    } catch (e, s) {
+      Log.error('Translation Studio', 'block mosaic failed', s);
       if (mounted) {
         context.showMessage(
           message: 'Block operation failed: @a'.tlParams({'a': e}),
@@ -3089,7 +3316,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     setState(() {
       _groupPickMode = !_groupPickMode;
       if (_groupPickMode) {
-        _marqueeMode = false;
+        _createMode = false;
         _spanMode = false;
         _groupDraft.clear();
       }
@@ -4091,60 +4318,170 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                     color: context.colorScheme.primary),
                 onPressed: project == null ? null : _resumePipeline,
               ),
-            IconButton(
-              tooltip: 'Create block'.tl,
-              icon: const Icon(Icons.add_comment_outlined),
-              onPressed: project == null ? null : _createBlock,
-            ),
-            // 🔴 Marquee mode: the primary way to place a block, because it puts
-            // the box exactly where the text goes instead of at a default spot
-            // the user then has to drag. Kept as a mode (not "drag on empty
-            // space") so it can never hijack the move gesture.
-            //
-            // Each state is its own button so both icon references are `const`
-            // (`Icons.crop` 0xe1a3 and `Icons.crop_outlined` 0xef9a are both
-            // present in the shipped font subset — this is style, not a fix).
-            //
-            // 🔴 The active state must be unmistakable. Relying on
-            // `IconButton.isSelected` alone left the button looking identical
-            // to every other action, so users could not tell that marquee mode
-            // was armed — the complaint that it "shows nothing when active".
-            // The tinted container plus a filled-vs-outlined icon gives two
-            // independent cues, and the tooltip says which click will do.
+            // 🔴 P48 · 文字块创建复合控件（三键合一的框选簇）：
+            //   ① add_comment 总开关（开/关创建模式）
+            //   ② 形状下拉（矩形框选 / 多边形画笔）
+            //   ③ 类型下拉（对话 / 拟声词 / 水印）
+            // 三键用浅描边圆角容器**框在一起**，表明它们是一个整体；两个下拉都
+            // 带小三角，菜单从按钮**下方**展开（PopupMenuPosition.under）不再
+            // 盖住按钮本身，且用主题 surface（白）与工具栏统一，尺寸收紧。
             Builder(
               builder: (context) {
-                final active = _marqueeMode;
-                return Tooltip(
-                  message: active
-                      ? 'Cancel box draw'.tl
-                      : 'Draw box for new block'.tl,
-                  child: IconButton(
-                    isSelected: active,
-                    style: active
-                        ? IconButton.styleFrom(
-                            backgroundColor:
-                                context.colorScheme.primaryContainer,
-                            foregroundColor:
-                                context.colorScheme.onPrimaryContainer,
-                          )
-                        : null,
-                    icon: Icon(
-                      active ? Icons.crop : Icons.crop_outlined,
-                      color: active
-                          ? context.colorScheme.onPrimaryContainer
-                          : null,
+                final scheme = Theme.of(context).colorScheme;
+                PopupMenuItem<String> item(
+                  String value,
+                  IconData icon,
+                  String label,
+                ) {
+                  return PopupMenuItem<String>(
+                    value: value,
+                    height: 38,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(icon, size: 17),
+                        const SizedBox(width: 8),
+                        Text(label, style: ts.s14),
+                      ],
                     ),
-                    onPressed: project == null
-                        ? null
-                        : () => setState(() {
-                              _marqueeMode = !active;
-                              // 与跨页框选互斥（两者都靠拖拽，含义不同）。
-                              if (_marqueeMode) _spanMode = false;
-                            }),
+                  );
+                }
+
+                final active = _createMode;
+                return Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: scheme.outline),
+                    borderRadius: BorderRadius.circular(9),
+                    color: scheme.surface,
+                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // ① 创建模式总开关。
+                      IconButton(
+                        tooltip: active
+                            ? 'Cancel block creation'.tl
+                            : 'Create block mode'.tl,
+                        isSelected: active,
+                        visualDensity: VisualDensity.compact,
+                        style: active
+                            ? IconButton.styleFrom(
+                                backgroundColor: scheme.primaryContainer,
+                                foregroundColor: scheme.onPrimaryContainer,
+                              )
+                            : null,
+                        icon: Icon(
+                          active
+                              ? Icons.add_comment
+                              : Icons.add_comment_outlined,
+                          color: active ? scheme.onPrimaryContainer : null,
+                        ),
+                        onPressed: project == null
+                            ? null
+                            : () => setState(() {
+                                  _createMode = !active;
+                                  // 与跨页框选/建组点选互斥（都靠拖拽，含义不同）。
+                                  if (_createMode) {
+                                    _spanMode = false;
+                                    _groupPickMode = false;
+                                  }
+                                }),
+                      ),
+                      // ② 形状下拉。
+                      PopupMenuButton<String>(
+                        tooltip: 'Block shape'.tl,
+                        padding: EdgeInsets.zero,
+                        iconSize: 20,
+                        position: PopupMenuPosition.under,
+                        offset: const Offset(0, 6),
+                        color: scheme.surface,
+                        constraints: const BoxConstraints(
+                          minWidth: 168,
+                          maxWidth: 220,
+                        ),
+                        icon: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _blockShape == 'polygon'
+                                  ? Icons.brush
+                                  : Icons.crop,
+                              size: 20,
+                            ),
+                            const Icon(Icons.arrow_drop_down, size: 16),
+                          ],
+                        ),
+                        initialValue: _blockShape,
+                        onSelected: (value) =>
+                            setState(() => _blockShape = value),
+                        itemBuilder: (context) => [
+                          item('rect', Icons.crop, 'Rectangle'.tl),
+                          item(
+                            'polygon',
+                            Icons.brush,
+                            'Polygon (freehand)'.tl,
+                          ),
+                        ],
+                      ),
+                      // ③ 类型下拉。
+                      PopupMenuButton<String>(
+                        tooltip: 'Block type'.tl,
+                        padding: EdgeInsets.zero,
+                        iconSize: 20,
+                        position: PopupMenuPosition.under,
+                        offset: const Offset(0, 6),
+                        color: scheme.surface,
+                        constraints: const BoxConstraints(
+                          minWidth: 168,
+                          maxWidth: 220,
+                        ),
+                        icon: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              switch (_newBlockKind) {
+                                TextBlockKind.onomatopoeia => Icons.graphic_eq,
+                                TextBlockKind.watermark =>
+                                  Icons.branding_watermark,
+                                _ => Icons.chat_bubble_outline,
+                              },
+                              size: 20,
+                            ),
+                            const Icon(Icons.arrow_drop_down, size: 16),
+                          ],
+                        ),
+                        initialValue: _newBlockKind,
+                        onSelected: (value) =>
+                            setState(() => _newBlockKind = value),
+                        itemBuilder: (context) => [
+                          item(
+                            TextBlockKind.dialogue,
+                            Icons.chat_bubble_outline,
+                            'Dialogue'.tl,
+                          ),
+                          item(
+                            TextBlockKind.onomatopoeia,
+                            Icons.graphic_eq,
+                            'Onomatopoeia'.tl,
+                          ),
+                          item(
+                            TextBlockKind.watermark,
+                            Icons.branding_watermark,
+                            'Watermark'.tl,
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 );
               },
             ),
+            // 🔴 跨页框选的视觉提示保留：创建模式与跨页框选互斥，两者都靠拖拽。
+            // 这里只补一句"创建模式开启时跨页框选不可用"的语义说明（代码上由
+            // _createMode 把关，下面 _spanMode 的 onPressed 里再互斥一次）。
             // B-2：跨页框选。仅在长画布模式下可用 —— 单页模式里没有相邻页。
             Builder(
               builder: (context) {
@@ -4175,7 +4512,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                     onPressed: available
                         ? () => setState(() {
                               _spanMode = !active;
-                              if (_spanMode) _marqueeMode = false;
+                              if (_spanMode) _createMode = false;
                             })
                         : null,
                   ),
@@ -4478,7 +4815,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                       onResizeBlock: _resizeBlock,
                       onResizeGroup: _resizeGroup,
                       onMarquee: (pageKey, rect) => _onMarquee(rect),
-                      marqueeMode: _marqueeMode,
+                      marqueeMode: _marqueeActive,
+                      polygonMode: _polygonActive,
+                      onPolygon: (pageKey, points) => _onPolygon(points),
                       spanMode: _spanMode,
                       onSpanMarquee: _onSpanMarquee,
                       groupPickMode: _groupPickMode,
@@ -4495,10 +4834,8 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                         if (index == _pageIndex) return;
                         setState(() {
                           _pageIndex = index;
-                          // 🔴 P9.7: 与 [_selectPage] 同一条规则 —— 滚动翻页也是
-                          // 翻页。这里以前只改页码，于是长画布模式下"上一页开的
-                          // 框选模式"会跟着滚到下一页继续生效。
-                          _marqueeMode = false;
+                          // 🔴 P9.7 / P48: 滚动翻页也是翻页。跨页框选/建组点选随
+                          // 翻页清；创建模式（[_createMode]）保持，见 [_selectPage]。
                           _spanMode = false;
                         });
                       },
@@ -4529,7 +4866,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                             }
                           },
                           onMarquee: (rect) => _onMarquee(rect),
-                          marqueeMode: _marqueeMode,
+                          marqueeMode: _marqueeActive,
+                          polygonMode: _polygonActive,
+                          onPolygon: _onPolygon,
                           onEditText: (index) => _selectBlock(key ?? '', index),
                           // P32：单页（含缩放）模式下的建组点选。命中块即
                           // 入名单（再点取消），画布内部已禁用拖/缩/双击等
@@ -5298,7 +5637,8 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         onRecognise: _blockOpBusy || _pageKeys.isEmpty
             ? null
             : () => _recogniseSelectedBlock(),
-        onTranslate: _blockOpBusy || _pageKeys.isEmpty
+        // 🔴 P48：拟声词块默认不译（保留原字），因此不显示【翻译】。
+        onTranslate: _blockOpBusy || _pageKeys.isEmpty || block.isOnomatopoeia
             ? null
             : () => _translateSelectedBlock(),
         // 🔴 2026-10-09 续：单块级修图 / 复原。禁用条件与识别/翻译相同（busy
@@ -5306,9 +5646,27 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         onRepair: _blockOpBusy || _pageKeys.isEmpty
             ? null
             : () => _repairSelectedBlock(),
+        // 🔴 P48：水印面板的擦除（去水印）与马赛克。擦除与修图共用一条像素
+        // 链路，只是水印块不要求译文。
+        onErase: _blockOpBusy || _pageKeys.isEmpty
+            ? null
+            : () => _repairSelectedBlock(),
+        onMosaic: _blockOpBusy || _pageKeys.isEmpty
+            ? null
+            : () => _mosaicSelectedBlock(),
         onRestoreOriginal: _blockOpBusy || _pageKeys.isEmpty
             ? null
             : () => _restoreOriginalSelectedBlock(),
+        // P48 · 侧栏改块识别类型（对话/拟声词/水印），走与移动/缩放同一条
+        // `_editBlock` 撤销通道。
+        onKindChanged: _selectedPageKey == null
+            ? null
+            : (kind) => _editBlock(
+                  _selectedPageKey!,
+                  _selectedBlock,
+                  'Set block type',
+                  (block) => block.kind = kind,
+                ),
         onDissolveSpan:
             _blockOpBusy ? null : _dissolveSelectedSpanBlock,
         // P33 ⑦b：取色同样需要**原图**（`inpainted/` 上的字已经被抹掉了，

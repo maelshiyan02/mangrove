@@ -3017,6 +3017,298 @@ Future<void> runCacheCheck(List<String> args, int commandIndex) async {
   exit(passed ? 0 : 1);
 }
 
+/// `mangrove.exe --headless create-project --comic-dir <dir> --chapter <name> --name <name> [--projects-root X] [--json out.json] [--force]`
+///
+/// 走与 GUI「新建翻译工程」**完全相同**的 `BtProjectManager.createFromDownload`
+/// 路径：把原图复制进 `<projectsRoot>/<name>/source/`，写 `imgtrans_<name>.json`，
+/// 并立即 `scan()` 注册进当前会话。只动文件、不碰渲染表面，所以能在 headless 下
+/// 跑 —— 这正是「走 Mangrove 实际路线测去水印」的第一步：先有一个真实工程。
+///
+/// ## 为什么是 post-init
+///
+/// `createFromDownload` 内部用 `BtProjectManager.defaultProjectsRoot()` 解析工程根，
+/// 而那个方法要看 `LocalManager` 是否初始化（拿本地库路径反推 `projects/` 兄弟）。
+/// `LocalManager` 由 `initInterdependentStores()` 拉起，所以这条命令必须排在
+/// `init()` 之后，与 `export-check` / `page-reconcile` 同类。
+Future<void> runCreateProject(List<String> args, int commandIndex) async {
+  String argOr(String flag, String fallback) {
+    final i = args.indexOf(flag);
+    return i != -1 && i + 1 < args.length ? args[i + 1] : fallback;
+  }
+
+  final comicDir = argOr('--comic-dir', '');
+  final chapter = argOr('--chapter', '');
+  final name = argOr('--name', '');
+  final force = args.contains('--force');
+  final jsonIndex = args.indexOf('--json');
+  final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
+      ? args[jsonIndex + 1]
+      : '${Directory.current.path}/create_project.json';
+
+  if (comicDir.isEmpty || chapter.isEmpty || name.isEmpty) {
+    cliPrint({
+      'status': 'error',
+      'message': 'create-project needs --comic-dir, --chapter and --name.',
+    });
+    exit(1);
+  }
+
+  final root = BtProjectManager.defaultProjectsRoot();
+  if (root == null) {
+    cliPrint({
+      'status': 'error',
+      'message': 'Cannot resolve projects root (local library not initialized '
+          'and btProjectRoot is empty).',
+    });
+    exit(1);
+  }
+
+  cliPrint({
+    'status': 'running',
+    'message': 'Creating translation project',
+    'data': {
+      'comicDir': comicDir,
+      'chapter': chapter,
+      'name': name,
+      'root': root,
+    },
+  });
+
+  final result = await BtProjectManager().createFromDownload(
+    comicDirectory: comicDir,
+    chapterName: chapter,
+    name: name,
+    force: force,
+    rescan: true,
+  );
+  if (result == null) {
+    cliPrint({
+      'status': 'error',
+      'message': 'createFromDownload returned null (no projects root).',
+    });
+    exit(1);
+  }
+
+  final report = {
+    'version': 1,
+    'command': 'create-project',
+    'created': result.created,
+    'root': result.root,
+    'jsonFile': result.jsonFile.path,
+    'sourceRoot': result.sourceRoot,
+    'copiedSources': result.copiedSources,
+    'missingSources': result.missingSources,
+    'error': result.error,
+  };
+  final output = File(outPath);
+  if (!output.parent.existsSync()) {
+    await output.parent.create(recursive: true);
+  }
+  await output.writeAsString(
+    const JsonEncoder.withIndent('  ').convert(report),
+    encoding: utf8,
+  );
+
+  if (result.error != null) {
+    cliPrint({
+      'status': 'error',
+      'message': result.error!,
+      'data': {'report': output.path},
+    });
+    exit(1);
+  }
+
+  cliPrint({
+    'status': 'success',
+    'message': 'Created project "$name": ${result.copiedSources.length} page(s) '
+        'copied, ${result.missingSources.length} missing',
+    'data': {'report': output.path},
+  });
+  Log.info(
+    'CreateProject',
+    'name=$name root=${result.root} '
+    'copied=${result.copiedSources.length} '
+    'missing=${result.missingSources.length}',
+  );
+  exit(0);
+}
+
+/// 向既有翻译工程的指定页注入一个或多个 `kind=watermark` 的 [TextBlock]。
+///
+/// 这是 P48 阶段0（管线第0步去水印）的测试/演练入口：水印块不翻译、不嵌字，
+/// 但会被 [renderInpaintedPage] / [renderMaskPage] 当作整块填充式擦除对象，
+/// 从而把"净化先于翻译"接入真实工程。纯文件层，无需启动 App。
+///
+/// 参数：
+/// - `--project <path>`：工程 JSON（imgtrans_*.json）的绝对路径。
+/// - `--page <key>`：目标页键，例如 `003` / `050`；也接受去前导零的整数（`3`）。
+/// - `--rect <x0,y0,x1,y1>`：一个或多个水印矩形（图像像素坐标），可重复传。
+/// - `--json <path>`：可选，JSON 报告输出路径。
+///
+/// 落盘用 [ProjectWriter.save] 的纯保存分支（不写 `workspace`/`directory`），
+/// 因此对旧工程零字节 diff 无影响 —— 仅新增的水印块会落盘。
+Future<void> runAddWatermark(List<String> args, int commandIndex) async {
+  String argOr(String flag, String fallback) {
+    final i = args.indexOf(flag);
+    return i != -1 && i + 1 < args.length ? args[i + 1] : fallback;
+  }
+
+  IntRect? parseRect(String s) {
+    final parts = s.split(',').map((e) => int.tryParse(e.trim())).toList();
+    if (parts.length != 4 || parts.any((e) => e == null)) return null;
+    var left = parts[0]!, top = parts[1]!, right = parts[2]!, bottom = parts[3]!;
+    if (left > right) {
+      final tmp = left;
+      left = right;
+      right = tmp;
+    }
+    if (top > bottom) {
+      final tmp = top;
+      top = bottom;
+      bottom = tmp;
+    }
+    return IntRect(left, top, right, bottom);
+  }
+
+  /// 在工程的页表中定位目标页。
+  ///
+  /// 工程页键形如 `"1 [Rokari Comics] [comix.to]/003.webp"`（含章节前缀与扩展名），
+  /// 因此 `--page` 允许四种写法：完整键、`003.webp`、去前导零的 `003`、纯数字 `3`。
+  String? findPageKey(TranslationProject project, String pageArg) {
+    final wanted = pageArg.trim();
+    // 1) 精确匹配（大小写不敏感）。
+    for (final key in project.pages.keys) {
+      if (key.toLowerCase() == wanted.toLowerCase()) return key;
+    }
+    // 2) 去掉章节前缀与扩展名后的页码数字匹配。
+    int? wantedNum;
+    final wBase = wanted.contains('/')
+        ? wanted.substring(wanted.lastIndexOf('/') + 1)
+        : wanted;
+    final wStem = wBase.contains('.')
+        ? wBase.substring(0, wBase.lastIndexOf('.'))
+        : wBase;
+    wantedNum = int.tryParse(wStem);
+    if (wantedNum != null) {
+      for (final key in project.pages.keys) {
+        final base = key.contains('/')
+            ? key.substring(key.lastIndexOf('/') + 1)
+            : key;
+        final stem = base.contains('.')
+            ? base.substring(0, base.lastIndexOf('.'))
+            : base;
+        final num = int.tryParse(stem);
+        if (num != null && num == wantedNum) return key;
+      }
+    }
+    return null;
+  }
+
+  final projectPath = argOr('--project', '');
+  final pageArg = argOr('--page', '');
+  final jsonIndex = args.indexOf('--json');
+  final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
+      ? args[jsonIndex + 1]
+      : '${Directory.current.path}/add_watermark.json';
+
+  if (projectPath.isEmpty || pageArg.isEmpty) {
+    cliPrint({
+      'status': 'error',
+      'message': 'add-watermark needs --project and --page.',
+    });
+    exit(1);
+  }
+
+  final rects = <IntRect>[];
+  for (var i = 0; i < args.length - 1; i++) {
+    if (args[i] == '--rect') {
+      final r = parseRect(args[i + 1]);
+      if (r == null) {
+        cliPrint({
+          'status': 'error',
+          'message': 'Malformed --rect: "${args[i + 1]}" '
+              '(expected x0,y0,x1,y1).',
+        });
+        exit(1);
+      }
+      rects.add(r);
+    }
+  }
+  if (rects.isEmpty) {
+    cliPrint({
+      'status': 'error',
+      'message': 'add-watermark needs at least one --rect x0,y0,x1,y1.',
+    });
+    exit(1);
+  }
+
+  final jsonFile = File(projectPath);
+  if (!jsonFile.existsSync()) {
+    cliPrint({
+      'status': 'error',
+      'message': 'Project JSON not found: $projectPath',
+    });
+    exit(1);
+  }
+
+  final project = await TranslationProjectIo.load(jsonFile);
+  final matchedKey = findPageKey(project, pageArg);
+  if (matchedKey == null) {
+    cliPrint({
+      'status': 'error',
+      'message': 'Page "$pageArg" not found in project. '
+          'Available: ${project.pages.keys.join(", ")}',
+    });
+    exit(1);
+  }
+  final page = project.pages[matchedKey]!;
+
+  final added = <Map<String, int>>[];
+  for (final rect in rects) {
+    final block = TextBlock.createDefault(rect: rect);
+    block.kind = TextBlockKind.watermark;
+    page.addBlock(block);
+    added.add({
+      'l': rect.left,
+      't': rect.top,
+      'r': rect.right,
+      'b': rect.bottom,
+    });
+  }
+
+  final root = jsonFile.parent.path;
+  final saveReport = await ProjectWriter.save(root: root, project: project);
+
+  final out = File(outPath);
+  if (!out.parent.existsSync()) await out.parent.create(recursive: true);
+  await out.writeAsString(
+    const JsonEncoder.withIndent('  ').convert({
+      'version': 1,
+      'command': 'add-watermark',
+      'project': jsonFile.path,
+      'page': matchedKey,
+      'pageArg': pageArg,
+      'root': saveReport.root,
+      'jsonFile': saveReport.jsonFile.path,
+      'bytes': saveReport.bytes,
+      'added': added,
+    }),
+    encoding: utf8,
+  );
+
+  cliPrint({
+    'status': 'success',
+    'message': 'Added ${added.length} watermark block(s) to page "$pageArg".',
+    'data': {'report': out.path},
+  });
+  Log.info(
+    'AddWatermark',
+    'project=${jsonFile.path} page=$pageArg '
+    'added=${added.length} bytes=${saveReport.bytes}',
+  );
+  exit(0);
+}
+
 Future<void> runHeadlessMode(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   if (args.contains('--ignore-disheadless-log')) {
@@ -3099,6 +3391,13 @@ Future<void> runHeadlessMode(List<String> args) async {
     return;
   }
 
+  // 阶段0（P48）：向既有工程的指定页注入 kind=watermark 的文字块，作为管线第0步
+  // 去水印的测试入口。纯文件层（load → addBlock → save），不启动 App。
+  if (command == 'add-watermark') {
+    await runAddWatermark(args, commandIndex);
+    return;
+  }
+
   // Need to initialize the app for some features to work
   _headlessTrace('init: App/data/translation');
   await init();
@@ -3141,6 +3440,8 @@ Future<void> runHeadlessMode(List<String> args) async {
       await runDownloadCheck(args, commandIndex);
     case 'comix-spike':
       await runComixSpike(args, commandIndex);
+    case 'create-project':
+      await runCreateProject(args, commandIndex);
     case 'cache-check':
       await runCacheCheck(args, commandIndex);
     case 'pipeline-check':

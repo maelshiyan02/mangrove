@@ -152,6 +152,23 @@ bool canProduceInpaintedBase({
 ///
 /// 返回 null 表示"这一页没有可产出的底图"（页不存在 / 原图不在 / 没有 regions /
 /// 需要降采样），调用方应记成 skipped 而不是失败。
+
+/// 对水印块做整块填充式擦除（[TextInpainter.eraseWithMask] 全 1 掩膜）。
+///
+/// 与 dialogue 的字形级 [TextInpainter.erase] 不同：水印覆盖在最上层、且含
+/// 月标/白字等半透明图案，字形级阈值会漏掉它们，所以整块 fill。
+void _eraseWatermarkRects(RgbaImage image, List<IntRect> rects) {
+  for (final rect in rects) {
+    if (rect.width < 2 || rect.height < 2) continue;
+    final mask = Uint8List(rect.width * rect.height);
+    mask.fillRange(0, mask.length, 1); // 全 1 ⇒ 整块擦除
+    TextInpainter.eraseWithMask(
+      image,
+      TextMask(rect.left, rect.top, rect.width, rect.height, mask),
+    );
+  }
+}
+
 Future<Uint8List?> renderInpaintedPage(
   TranslationProject project,
   String pageKey,
@@ -159,7 +176,10 @@ Future<Uint8List?> renderInpaintedPage(
   final page = project.pages[pageKey];
   if (page == null) return null;
   final regions = page.regions;
-  if (regions.isEmpty) return null;
+  final watermarkRects = page.watermarkRects;
+  // 没有任何可擦除内容（无译文块且无水印块）才跳过；水印块的擦除独立于
+  // dialogue，不能因为它没有译文就放弃整页底图（否则仅含水印的页无法净化）。
+  if (regions.isEmpty && watermarkRects.isEmpty) return null;
   final source = File(inpaintedBaseSourcePath(project, pageKey));
   if (!source.existsSync()) return null;
   final bytes = await source.readAsBytes();
@@ -185,12 +205,27 @@ Future<Uint8List?> renderInpaintedPage(
           (rect.bottom * scale).round(),
         ),
   ];
-  if (eraseRects.isEmpty) return null;
+  // 管线第 0 步：翻译组水印整块擦除（填充式）。水印是无规则贴纸、覆盖在最上层，
+  // 独立于 dialogue 的字形级抹字；它无译文 ⇒ 不进 regions（不被 letter），这里用
+  // 整块掩膜 fill（不是字形级 computeMask，否则月标/白字会被漏掉）。必须在
+  // dialogue 抹字之后执行，以覆盖其可能露出的残余。
+  final wmRects = [
+    for (final rect in watermarkRects)
+      IntRect(
+        (rect.left * scale).round(),
+        (rect.top * scale).round(),
+        (rect.right * scale).round(),
+        (rect.bottom * scale).round(),
+      ),
+  ];
+  if (eraseRects.isEmpty && wmRects.isEmpty) return null;
 
   // 纯 Dart 擦除：Otsu 分出前景笔画 + 膨胀吞掉抗锯齿边，然后从周围画面重建。
   // 传入的矩形只是**搜索窗口**，真正被抹掉的像素由它内部的笔画判定决定 ——
   // 所以这里用块的外框（`eraseRects` 在工程模型里就是 `xyxy`）是安全的。
   TextInpainter.erase(decoded.image, eraseRects);
+  // 水印整块填充（覆盖在最上层，最后擦）。
+  _eraseWatermarkRects(decoded.image, wmRects);
   // regions 传空：只编码底图，一个字都不画。
   return renderTranslatedPage(
     bytes,
@@ -237,7 +272,8 @@ Future<Uint8List?> renderMaskPage(
   final page = project.pages[pageKey];
   if (page == null) return null;
   final regions = page.regions;
-  if (regions.isEmpty) return null;
+  final watermarkRects = page.watermarkRects;
+  if (regions.isEmpty && watermarkRects.isEmpty) return null;
   final source = File(inpaintedBaseSourcePath(project, pageKey));
   if (!source.existsSync()) return null;
   final bytes = await source.readAsBytes();
@@ -264,13 +300,45 @@ Future<Uint8List?> renderMaskPage(
           (rect.bottom * scale).round(),
         ),
   ];
-  if (eraseRects.isEmpty) return null;
+  // 管线第 0 步：水印整块并入 mask（255 = 已擦）。
+  final wmRects = [
+    for (final rect in watermarkRects)
+      IntRect(
+        (rect.left * scale).round(),
+        (rect.top * scale).round(),
+        (rect.right * scale).round(),
+        (rect.bottom * scale).round(),
+      ),
+  ];
+  if (eraseRects.isEmpty && wmRects.isEmpty) return null;
 
-  final mask = buildMaskPage(decoded.image, eraseRects);
+  var mask = buildMaskPage(decoded.image, eraseRects);
   // All-zero would be a *valid* greyscale image and a useless artifact: FT
   // treats an existing mask as authoritative, so writing an empty one would
   // replace "nothing produced yet" with "nothing to erase" — two states that
   // look identical downstream but mean opposite things. Report skipped instead.
+  if (wmRects.isNotEmpty) {
+    var added = 0;
+    for (final rect in wmRects) {
+      final x0 = rect.left.clamp(0, mask.width);
+      final y0 = rect.top.clamp(0, mask.height);
+      final x1 = rect.right.clamp(0, mask.width);
+      final y1 = rect.bottom.clamp(0, mask.height);
+      for (var y = y0; y < y1; y++) {
+        final rowBase = y * mask.width;
+        for (var x = x0; x < x1; x++) {
+          final idx = rowBase + x;
+          if (mask.pixels[idx] == 0) {
+            mask.pixels[idx] = 255;
+            added++;
+          }
+        }
+      }
+    }
+    if (added > 0) {
+      mask = MaskPage(mask.width, mask.height, mask.pixels, mask.strokes + added, mask.regions);
+    }
+  }
   if (mask.isEmpty) return null;
   return mask.encode();
 }

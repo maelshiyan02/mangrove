@@ -579,6 +579,27 @@ class FontFormat {
   }
 }
 
+/// 文字块的「语义种类」轴（P48 分类重构 · 阶段 0）。
+///
+/// 决定翻译管线如何处理该块：
+/// * [dialogue] —— 对话（气泡/旁白/独白），识别+翻译+嵌字；
+/// * [onomatopoeia] —— 拟声词/语气词（多为作者绘制的艺术字/异形），默认不译、保留原字；
+/// * [objectText] —— 物件文字（书名/信件/招牌），有规整有异形；
+/// * [watermark] —— 翻译组水印，擦除、不翻译、不嵌字（管线第 0 步）。
+///
+/// 🔴 零字节 diff 约束：旧工程块不含此键，读取时回退为 [fallback]（[dialogue]），
+/// 且 [createDefault] 写 `null`，于是旧文件 round-trip 不产生新键。仅当显式设为
+/// 非默认值才落盘（setter 在非默认时写键、默认时删键）。
+abstract final class TextBlockKind {
+  static const String dialogue = 'dialogue';
+  static const String onomatopoeia = 'onomatopoeia';
+  static const String objectText = 'objectText';
+  static const String watermark = 'watermark';
+
+  /// 缺键/空值时的默认种类。
+  static const String fallback = dialogue;
+}
+
 /// One FT text block: the source text, its translation, and its lettering.
 class TextBlock {
   TextBlock(this.raw);
@@ -650,6 +671,8 @@ class TextBlock {
     raw['label'] = null;
     raw['region_mask'] = null;
     raw['region_inpaint_dict'] = null;
+    raw['kind'] = null;
+    raw['polygon'] = null;
     raw['fontformat'] = FontFormat.createDefault().raw;
     raw['text_alpha_mask'] = null;
     raw['_detected_font_name'] = '';
@@ -844,6 +867,62 @@ class TextBlock {
   }
 
   set label(String? value) => raw['label'] = value;
+
+  /// 块的语义种类（[TextBlockKind]）。缺键/空值 ⇒ [TextBlockKind.fallback]。
+  ///
+  /// 🔴 仅非默认才落盘：设为 [TextBlockKind.fallback] 时删键，旧工程（无 `kind`）
+  /// round-trip 不产生新键，零字节 diff 不受影响。
+  String get kind {
+    final value = raw['kind'];
+    if (value is! String) return TextBlockKind.fallback;
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? TextBlockKind.fallback : trimmed;
+  }
+
+  set kind(String value) {
+    final trimmed = value.trim();
+    if (trimmed == TextBlockKind.fallback) {
+      raw.remove('kind');
+    } else {
+      raw['kind'] = trimmed;
+    }
+  }
+
+  /// 翻译组水印块（管线第 0 步擦除，不翻译/不嵌字）。
+  bool get isWatermark => kind == TextBlockKind.watermark;
+
+  /// 拟声词/语气词块（多异形艺术字，默认不译）。
+  bool get isOnomatopoeia => kind == TextBlockKind.onomatopoeia;
+
+  /// 自由画笔（多边形）选区顶点 `[[x,y], ...]`，**源像素**坐标。
+  ///
+  /// 🔴 仅非 null / 非空才落盘：矩形块（绝大多数）不写此键，旧工程 round-trip
+  /// 不产生新键，零字节 diff 不受影响。多边形块的包围盒仍以 [xyxy] 落盘（管线
+  /// 擦除暂按矩形），[polygon] 仅记录精确轮廓，供阶段 3 的精确掩膜使用。
+  List<List<double>>? get polygon {
+    final value = raw['polygon'];
+    if (value is! List || value.isEmpty) return null;
+    final result = <List<double>>[];
+    for (final point in value) {
+      if (point is! List || point.length < 2) return null;
+      result.add([
+        (point[0] as num).toDouble(),
+        (point[1] as num).toDouble(),
+      ]);
+    }
+    return result;
+  }
+
+  set polygon(List<List<double>>? value) {
+    if (value == null || value.isEmpty) {
+      raw.remove('polygon');
+    } else {
+      raw['polygon'] = [
+        for (final point in value)
+          [point[0].toDouble(), point[1].toDouble()],
+      ];
+    }
+  }
 
   bool get hasTranslation => translation.trim().isNotEmpty;
 

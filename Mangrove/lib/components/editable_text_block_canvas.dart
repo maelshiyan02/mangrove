@@ -59,8 +59,10 @@ class EditableTextBlockCanvas extends StatefulWidget {
     this.onMoveBlock,
     this.onResizeBlock,
     this.onMarquee,
+    this.onPolygon,
     this.onEditText,
     this.marqueeMode = false,
+    this.polygonMode = false,
     this.groupFrame,
     this.onResizeGroup,
     this.groupPickMode = false,
@@ -90,12 +92,22 @@ class EditableTextBlockCanvas extends StatefulWidget {
   /// must not create an unletterable sliver.
   final void Function(Rect rect)? onMarquee;
 
+  /// P48 · Fires when the user finishes a freehand polygon, with the vertex list
+  /// in **page pixels**. Driven by [polygonMode]; a valid polygon needs ≥3
+  /// points, which the owner enforces.
+  final void Function(List<Offset> points)? onPolygon;
+
   /// Fires on double-tap, so the owner can focus the translation field.
   final ValueChanged<int>? onEditText;
 
   /// When true the canvas is in "draw a new box" mode: every drag draws a
   /// marquee instead of moving or resizing. Toggled by the owner's toolbar.
   final bool marqueeMode;
+
+  /// P48 · When true the canvas is in "draw a polygon" mode: a drag collects a
+  /// freehand vertex list instead of moving/resizing. Toggled by the owner's
+  /// toolbar; mutually exclusive with [marqueeMode] at the owner level.
+  final bool polygonMode;
 
   /// P31：当前可整体缩放的 nest 组外框（成员都在本页时 owner 才给）；null =
   /// 没有可拖的组外框。框上 8 个手柄与块手柄走同一套 eager 抢占。
@@ -127,6 +139,9 @@ enum _DragKind {
   move,
   resize,
   marquee,
+
+  /// P48 · 画笔自由多边形：拖拽过程中持续收集顶点，松手时交由 owner 落块。
+  polygon,
 
   /// P31：拖 nest 组外框手柄 —— 全部成员块随并集框同因子整体缩放。
   groupResize,
@@ -177,6 +192,10 @@ class _EditableTextBlockCanvasState extends State<EditableTextBlockCanvas> {
   /// Live marquee in canvas pixels — the unit the painter draws it in.
   Rect? _marquee;
 
+  /// P48 · Live freehand polygon vertices in **canvas** pixels (during a
+  /// [polygon] drag). The painter draws them as a pending stroke.
+  List<Offset> _polygon = const [];
+
   int _doubleTapIndex = -1;
 
   /// 🔴 P31：pointer-down 当下就判定这一势是否要让 pan 识别器**抢先独占**。
@@ -194,7 +213,7 @@ class _EditableTextBlockCanvasState extends State<EditableTextBlockCanvas> {
     // P32：点选模式整体只读，任何抢先（框选/手柄）都不允许 —— 单指拖动要
     // 留给外层 InteractiveViewer 平移页面。
     if (widget.groupPickMode) return false;
-    if (widget.marqueeMode) return true;
+    if (widget.marqueeMode || widget.polygonMode) return true;
     // P31：组外框手柄在最外层（并集 ±8px），先于成员块手柄判定 —— 恰好压在
     // 并集边上的成员角点两者命中盒重叠，让看得见、画在最上面的组框先赢。
     if (_hitGroupFrameHandle(local) != null) return true;
@@ -397,6 +416,7 @@ class _EditableTextBlockCanvasState extends State<EditableTextBlockCanvas> {
                 showResizeHandles: true,
                 activeGroupFrame: preview.groupFrame,
                 marquee: _marquee,
+                polygon: _polygon,
                 snapGuidesX: preview.guidesX,
                 snapGuidesY: preview.guidesY,
               ),
@@ -517,6 +537,14 @@ class _EditableTextBlockCanvasState extends State<EditableTextBlockCanvas> {
         _kind = _DragKind.marquee;
         _marqueeAnchor = local;
         _marquee = Rect.fromPoints(local, local);
+      });
+      return;
+    }
+    // P48 · 多边形模式：从按下点开始持续收集顶点。
+    if (widget.polygonMode) {
+      setState(() {
+        _kind = _DragKind.polygon;
+        _polygon = [local];
       });
       return;
     }
@@ -693,6 +721,13 @@ class _EditableTextBlockCanvasState extends State<EditableTextBlockCanvas> {
           // positive-area rect for the painter.
           _marquee = Rect.fromPoints(anchor, local);
         });
+      case _DragKind.polygon:
+        // P48 · 持续追加顶点（画布像素）；去重相邻过近点，避免松手前堆出
+        // 成百上千个重合点。
+        final last = _polygon.isNotEmpty ? _polygon.last : null;
+        if (last == null || (last - local).distanceSquared > 4.0) {
+          setState(() => _polygon = [..._polygon, local]);
+        }
     }
   }
 
@@ -709,6 +744,8 @@ class _EditableTextBlockCanvasState extends State<EditableTextBlockCanvas> {
     final handle = _dragHandle;
     final anchor = _marqueeAnchor;
     final marquee = _marquee;
+    // P48 · 多边形顶点在 reset 前留住（转成页像素后再发）。
+    final polygon = _polygon;
     // P31：组框在 reset 前留住（reset 只清拖拽状态，widget.groupFrame 来自
     // owner 本来就不受影响，但提交用的旧并集必须是这一势开始时的那一版）。
     final groupFrame = widget.groupFrame;
@@ -724,6 +761,7 @@ class _EditableTextBlockCanvasState extends State<EditableTextBlockCanvas> {
       _dragDelta = Offset.zero;
       _marqueeAnchor = null;
       _marquee = null;
+      _polygon = const [];
       _snapXs = const [];
       _snapYs = const [];
     });
@@ -796,6 +834,12 @@ class _EditableTextBlockCanvasState extends State<EditableTextBlockCanvas> {
             rect.right / _fit,
             rect.bottom / _fit,
           ),
+        );
+      case _DragKind.polygon:
+        if (polygon.length < 3) return;
+        // 🔴 与 marquee 同一规则：画布像素 → 页像素，fit 转换只发生一次。
+        widget.onPolygon?.call(
+          [for (final p in polygon) Offset(p.dx / _fit, p.dy / _fit)],
         );
     }
   }
