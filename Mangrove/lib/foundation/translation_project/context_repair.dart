@@ -49,6 +49,46 @@ enum RepairQuality {
   texture,
 }
 
+/// 单块修图时"这一片到底用哪种方式填"的路线。
+enum RepairFillRoute {
+  /// 擦除 + 底色填充：整片选区刷成一个单色。
+  solid,
+
+  /// AI 修复填充（ONNX LaMa）：按上下文重建。
+  model,
+
+  /// 没装模型时的本地纹理合成（如实降级，不假装是神经网络）。
+  localTexture,
+
+  /// 本地结构插值（擦除/渐变底）。
+  localStructural,
+}
+
+/// 决定填色路线 —— **纯函数**，因此 headless 能直接断言它。
+///
+/// 🔴 为什么必须单独抽出来：`allowFlat` 这条闸门曾经不存在，于是"AI 修复
+/// 填充"和"擦除"走同一条判定，第 33 页（白底 + 淡黄网格）的环带有 86% 是
+/// 白，被判成平色后整片刷白 —— 用户要的"按上方那一大片网格延伸纹理"连一次
+/// 机会都没有。人工验收的原话是："明明上面有一大片（网格），居然直接无视
+/// 了，没有对纹理进行延伸。"
+///
+/// 结论（用户把三种方法分得很清楚）：**平色直填只属于"擦除"入口**；
+/// "AI 修复填充"一律走模型/纹理，不受平色判定拦截。
+RepairFillRoute chooseRepairFillRoute({
+  required RepairQuality quality,
+  required bool allowFlat,
+  required bool flatFound,
+  required bool modelInstalled,
+}) {
+  if (allowFlat && flatFound) return RepairFillRoute.solid;
+  if (quality == RepairQuality.texture) {
+    return modelInstalled
+        ? RepairFillRoute.model
+        : RepairFillRoute.localTexture;
+  }
+  return RepairFillRoute.localStructural;
+}
+
 /// 一块区域的检测结果（整页掩膜 + 诊断量）。
 class RegionMaskResult {
   RegionMaskResult({
@@ -536,6 +576,16 @@ Uint8List _predictWindow(
 }
 
 // ── 形态学 ─────────────────────────────────────────────────────────────────
+
+/// 掩膜膨胀（方形结构元，半径 [radius] 像素）。
+///
+/// 🔴 用途只有一个：「多轮修复」的第 2 轮要把**上一轮补过的洞 + 它周围一圈
+/// 过渡**一起重做。早先第 2 轮直接把**整片选区**当洞，结果选区画得比水印大
+/// 时，周围本不需要动的地方（花瓣、裙子）也被整片重画 —— 用户的原话就是
+/// "外围一圈也被识别涂抹了"。只膨胀几像素既盖掉第 1 轮的边缘痕迹，又不碰
+/// 选区里其他内容。
+Uint8List dilatePageMask(Uint8List mask, int w, int h, int radius) =>
+    _morph(mask, w, h, radius, dilate: true);
 
 /// 可分离形态学（边缘按复制处理，避免贴着页面边的水印被削掉）。
 Uint8List _morph(Uint8List src, int w, int h, int r, {required bool dilate}) {

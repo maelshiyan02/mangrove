@@ -161,6 +161,7 @@ class CanvasTextBlock {
     this.groupIsLink = false,
     this.picked = false,
     this.polygon,
+    this.kind = 'dialogue',
   });
 
   final int index;
@@ -175,6 +176,14 @@ class CanvasTextBlock {
   /// 有轮廓的块，画布以轮廓为主体绘制，矩形退成淡辅助线（手柄仍按外接框
   /// 摆放，因为缩放本来就是轴对齐的）。
   final List<Offset>? polygon;
+
+  /// 块的语义种类：`dialogue` / `onomatopoeia` / `objectText` / `watermark`。
+  ///
+  /// 🔴 只服务**描边配色**。人工验收的原话："无论是矩形还是多边形的文字块，
+  /// 我希望针对文字块的类型使用不同的颜色进行区分，都是黑色容易混淆。"
+  /// 水印和对话框长得一样、拟声词和物体文字也长得一样时，一页上十几个块
+  /// 谁是谁只能靠点开面板看 —— 配色是唯一不占空间的区分手段。
+  final String kind;
 
   final String translation;
   final String sourceText;
@@ -665,12 +674,22 @@ class PageCanvasPainter extends CustomPainter {
       }
       if ((showBoxes || selected) && polyPath == null) {
         if (selected) {
+          // 选中 = 同色加粗 + 更宽白晕。颜色仍按**类型**走，只靠粗细表达
+          // "选中"：换成统一的青色会让"这块是水印还是对话框"重新变得不可辨。
+          final kindColor = _kindColor(block.kind);
           canvas.drawRect(
             rect,
             Paint()
               ..style = PaintingStyle.stroke
-              ..strokeWidth = 2
-              ..color = selection,
+              ..strokeWidth = 4.4
+              ..color = const Color(0xFFFFFFFF),
+          );
+          canvas.drawRect(
+            rect,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 2.4
+              ..color = kindColor,
           );
         } else if (showGroups && block.groupId != null) {
           // P32：组成员块用**本组配色**描边（同组同色，与 nest 大框 / link
@@ -693,10 +712,10 @@ class PageCanvasPainter extends CustomPainter {
               ..color = groupColor,
           );
         } else {
-          // 🔴 非选中框 = **黑框 + 白晕**（用户反馈："白边很不明显，视觉上容易
-          // 隐形"）。先在框上描一条更粗的白线，再叠一条更细的黑线：白线在框
-          // 两侧各露出约 1px，于是黑框在深色墨块和浅色气泡上都稳定可见，而不是
-          // 随底色消失。
+          // 🔴 非选中框 = **类型色 + 白晕**（用户反馈："白边很不明显，视觉上
+          // 容易隐形"，以及"都是黑色容易混淆"）。先在框上描一条更粗的白线，
+          // 再叠一条更细的类型色线：白线在框两侧各露出约 1px，于是描边在深色
+          // 墨块和浅色气泡上都稳定可见，而颜色本身负责区分块类型。
           canvas.drawRect(
             rect,
             Paint()
@@ -709,7 +728,7 @@ class PageCanvasPainter extends CustomPainter {
             Paint()
               ..style = PaintingStyle.stroke
               ..strokeWidth = 1.2
-              ..color = const Color(0xFF000000),
+              ..color = _kindColor(block.kind),
           );
         }
       }
@@ -718,7 +737,14 @@ class PageCanvasPainter extends CustomPainter {
       // method returns early for empty text, so a freshly created (still empty)
       // block would have shown no handles at all — precisely the block the user
       // most needs to resize.
-      if (selected && showResizeHandles) _paintHandles(canvas, rect);
+      //
+      // 🔴 多边形块**不画**缩放手柄：用户画的就是最终形状，8 个角/边手柄拖
+      // 动只会让"轮廓"和"外接框"变成两套互相矛盾的尺寸（人工验收原话：
+      // "多边形是不需要再多一层外面的矩形框的，因为无法改变大小和形状，
+      // 我们创造的是不规则形状"）。整块拖动移动仍然有效。
+      if (selected && showResizeHandles && polyPath == null) {
+        _paintHandles(canvas, rect);
+      }
       // B-3：成员序号徽标（阅读序 1 起）。nest/link 共用 —— 断句分配/倒装重排
       // 时用户靠它把面板里的成员和画布上的块一一对上。
       if (showGroups && block.groupOrdinal >= 0) {
@@ -894,6 +920,19 @@ class PageCanvasPainter extends CustomPainter {
     return palette[groupId.hashCode.abs() % palette.length];
   }
 
+  /// 块类型 → 描边色。人工验收："针对文字块的类型使用不同的颜色进行区分，
+  /// 都是黑色容易混淆。"
+  ///
+  /// 🔴 选色约束：必须同时压在**深墨块**和**浅气泡/白底**上都可辨（外面还有
+  /// 一圈白晕兜底），所以一律取中深饱和色，不用浅粉/浅黄这类会隐形的色。
+  /// 组配色（[_groupColor]）优先于类型色 —— 组是用户临时建立的更强分组。
+  static Color _kindColor(String kind) => switch (kind) {
+    'watermark' => const Color(0xFF6A1B9A), // 紫：水印
+    'onomatopoeia' => const Color(0xFFE65100), // 橙：拟声词
+    'objectText' => const Color(0xFF2E7D32), // 绿：物体上的文字
+    _ => const Color(0xFF1565C0), // 蓝：对话气泡（默认）
+  };
+
   /// 成员序号徽标：块框左上角的组色圆点 + 白色序号。
   void _paintOrdinalBadge(
     Canvas canvas,
@@ -950,41 +989,47 @@ class PageCanvasPainter extends CustomPainter {
     return path;
   }
 
-  /// 画自由画笔块：半透明填充 + 白晕描边 + （选中时）顶点圆点 + 淡外接矩形。
+  /// 画自由画笔块：半透明填充 + 白晕描边 + （选中且顶点不多时）顶点圆点。
   ///
-  /// 白晕 + 细线双层是画布既有的可读性纪律（矩形框同样这么做）：单色描边
-  /// 在深墨块或浅气泡上都会隐形。外接矩形只在外层淡化显示，因为 8 个缩放手柄
-  /// 仍然按外接框摆放，不给一点提示会让手柄"悬空"。
+  /// 🔴 **不画外接矩形，也不画缩放手柄**。人工验收原话："针对多边形是不需要
+  /// 再多一层外面的矩形框的，因为这些多边形无法改变大小和形状，准确的说
+  /// 我们创造的是不规则形状。" 之前那圈淡虚线 + 8 个手柄，既让用户以为
+  /// 多边形还能拉成矩形，又在 40+ 顶点时和顶点圆点叠成一片噪点。
   void _paintPolygon(
     Canvas canvas,
     Path path,
     CanvasTextBlock block,
     bool selected,
   ) {
-    final tint = block.picked ? const Color(0xFFFFB300) : selection;
+    final kindColor = _kindColor(block.kind);
+    final tint = block.picked ? const Color(0xFFFFB300) : kindColor;
     if (selected || block.picked) {
       canvas.drawPath(
         path,
         Paint()..color = tint.withValues(alpha: 0.16),
       );
     }
+    // 白晕 + 类型色双层（矩形框同一条可读性纪律）。选中只靠**更粗**表达，
+    // 颜色始终属于类型 —— 手柄和虚线框取消后，粗细是唯一的选中信号。
     canvas.drawPath(
       path,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.2
+        ..strokeWidth = selected ? 4.4 : 3.2
         ..color = const Color(0xFFFFFFFF),
     );
     canvas.drawPath(
       path,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.6
-        ..color = (selected || block.picked) ? tint : const Color(0xFF000000),
+        ..strokeWidth = selected ? 2.4 : 1.6
+        ..color = tint,
     );
     if (!selected) return;
-    // 顶点圆点：让用户看清"我圈的是这些点"，也是后续顶点编辑的锚。
+    // 顶点圆点只对"手绘量级"（≤16 顶点）显示。画笔抽稀后常留 40+ 个顶点，
+    // 全画出来是一圈密集小点，既看不清形状、也盖住轮廓线本身。
     final poly = block.polygon!;
+    if (poly.length > 16) return;
     final dot = Paint()..color = tint;
     final halo = Paint()..color = const Color(0xFFFFFFFF);
     for (final p in poly) {
@@ -992,20 +1037,6 @@ class PageCanvasPainter extends CustomPainter {
       canvas.drawCircle(c, 3.4, halo);
       canvas.drawCircle(c, 2.0, dot);
     }
-    // 外接框：淡虚线，仅提示缩放范围，不冒充"这是矩形块"。
-    _paintDashedRect(
-      canvas,
-      Rect.fromLTRB(
-        block.rect.left * fit,
-        block.rect.top * fit,
-        block.rect.right * fit,
-        block.rect.bottom * fit,
-      ),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0
-        ..color = tint.withValues(alpha: 0.35),
-    );
   }
 
   /// Eight square handles: four corners plus four edge midpoints.

@@ -889,7 +889,8 @@ Future<void> runInpaintApply(List<String> args, int commandIndex) async {
     cliPrint({
       'status': 'error',
       'message': 'usage: inpaint-apply --image <png> --rect x0,y0,x1,y1 '
-          '[--poly "x,y;x,y;x,y"] [--quality texture|structural] [--out x.png]',
+          '[--poly "x,y;x,y;x,y"] [--quality texture|structural] '
+          '[--passes N] [--watermark] [--out x.png]',
     });
     exit(1);
   }
@@ -918,6 +919,13 @@ Future<void> runInpaintApply(List<String> args, int commandIndex) async {
   final quality = arg('--quality') == 'texture'
       ? RepairQuality.texture
       : RepairQuality.structural;
+  // 轮数：与工作室一致 —— 多色复杂环境一次补不干净，水印/拟声词默认 2 轮。
+  final passesRaw = arg('--passes');
+  final passes = (int.tryParse(passesRaw ?? '') ?? 1).clamp(1, 8);
+  // 🔴 平色直填只属于**擦除**入口。用户把三种方法分得很清楚：擦除+底色填充 /
+  // 马赛克 / AI 修复填充。让 AI 填充也吃平色，第 33 页（白底 86%）就会被
+  // 整片刷白，本来要延伸的黄色网格连一次机会都没有。
+  final allowFlat = quality == RepairQuality.structural;
   final outPath = arg('--out') ??
       '${Directory.current.path}/inpaint_${DateTime.now().millisecondsSinceEpoch}.png';
 
@@ -939,41 +947,83 @@ Future<void> runInpaintApply(List<String> args, int commandIndex) async {
     rect: rect,
     polygon: polygon,
   );
-  final flat = detectFlatBackground(original, rect);
+  final flat = allowFlat ? detectFlatBackground(original, rect) : null;
+  // 与工作室**同一个**路线判定（`chooseRepairFillRoute`）—— 否则 headless
+  // 验出来的结果和 GUI 里点出来的不是一条链路，验证就是自欺。
+  final route = chooseRepairFillRoute(
+    quality: quality,
+    allowFlat: allowFlat,
+    flatFound: flat != null,
+    modelInstalled: InpaintModel.isInstalled,
+  );
+
+  // 修图掩膜：`--watermark` 时走**物体级掩膜**（与工作室的水印块一致），
+  // 否则退回整片选区。两者的区别很大 —— 拿整片选区当洞时，选区画得比水印
+  // 大就会把周围的花瓣/裙子一起重画，这正是用户说的"外围一圈也被涂抹了"。
+  Uint8List baseMask;
+  var maskSource = 'selection';
+  if (args.contains('--watermark')) {
+    final object = buildWatermarkMask(original, rect, polygon: polygon);
+    baseMask = object.isEmpty
+        ? selection
+        : intersectPageMasks(object.mask, selection);
+    maskSource = object.isEmpty
+        ? 'selection(object-empty)'
+        : 'object(seeds=${object.seedPixels} px=${object.totalPixels})';
+  } else {
+    baseMask = selection;
+  }
 
   final img = RgbaImage(w, h, Uint8List.fromList(original.pixels));
-  String engine;
+  // 必须先给初值：编译器不推理"循环至少跑一次"，而 `passes>=1` 是运行时事实。
+  var engine = 'local-${quality.name}';
   int written = 0;
-  if (flat != null) {
+  if (route == RepairFillRoute.solid && flat != null) {
     final stats = fillRegionWithColor(img, selection, flat.rgb);
     written = stats.filledPixels;
     engine = 'solid${flat.hex}(share=${flat.share.toStringAsFixed(2)} '
         'edges=${flat.agreeingEdges} dev=${flat.deviation.toStringAsFixed(1)})';
   } else {
-    ModelInpaintResult? model;
-    if (quality == RepairQuality.texture && InpaintModel.isInstalled) {
-      model = await InpaintModel.inpaintRegion(
-        rgba: original.pixels,
-        width: w,
-        height: h,
-        regionMask: selection,
-      );
+    var elapsed = 0;
+    var cropW = 0;
+    var cropH = 0;
+    var usedModel = false;
+    for (var pass = 0; pass < passes; pass++) {
+      // 第 2 轮起只把上一轮的洞**外扩 6px** 重做，绝不碰整片选区。
+      final passMask = pass == 0
+          ? baseMask
+          : intersectPageMasks(dilatePageMask(baseMask, w, h, 6), selection);
+      ModelInpaintResult? model;
+      if (route == RepairFillRoute.model) {
+        model = await InpaintModel.inpaintRegion(
+          rgba: img.pixels,
+          width: w,
+          height: h,
+          regionMask: passMask,
+        );
+      }
+      if (model != null) {
+        img.pixels.setAll(0, model.rgba);
+        written += model.regionPixels;
+        elapsed += model.elapsedMs;
+        cropW = model.crop.width;
+        cropH = model.crop.height;
+        usedModel = true;
+      } else {
+        final stats = repairRegionInPlace(
+          img,
+          passMask,
+          quality: quality,
+        );
+        written += stats.filledPixels;
+        engine = route == RepairFillRoute.localTexture
+            ? 'local-texture(no-model)'
+            : 'local-${quality.name}';
+      }
     }
-    if (model != null) {
-      img.pixels.setAll(0, model.rgba);
-      written = model.regionPixels;
-      engine = 'onnx-lama(${model.elapsedMs}ms '
-          'crop=${model.crop.width}x${model.crop.height})';
-    } else {
-      final stats = repairRegionInPlace(
-        img,
-        selection,
-        quality: quality,
-      );
-      written = stats.filledPixels;
-      engine = InpaintModel.isInstalled
-          ? 'local-${quality.name}(model-failed)'
-          : 'local-${quality.name}(no-model)';
+    if (usedModel) {
+      engine = 'onnx-lama(${elapsed}ms passes=$passes '
+          'mask=$maskSource crop=${cropW}x$cropH)';
     }
   }
 
@@ -1000,6 +1050,7 @@ Future<void> runInpaintApply(List<String> args, int commandIndex) async {
     'message': 'inpaint applied',
     'data': {
       'engine': engine,
+      'passes': passes,
       'selectionPixels': written,
       'leakedOutsideSelection': leaked,
       'modelInstalled': InpaintModel.isInstalled,

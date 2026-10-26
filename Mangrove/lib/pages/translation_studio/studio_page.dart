@@ -144,6 +144,14 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   /// with a permanently disabled panel after a crash mid-OCR.
   bool _blockOpBusy = false;
 
+  /// 当前长耗时操作的人类可读进度（"AI fill 2/2…"）。null = 不显示。
+  ///
+  /// 🔴 为什么不能只靠按钮里的小转圈：LaMa 单轮推理在 6–8 秒量级，多轮更久，
+  /// 而面板上所有按钮同一瞬间变灰 —— 用户的原话是"一瞬间按钮都屏蔽了，我还
+  /// 以为出错了"。按钮转圈（18px）在 Windows 上没有存在感，必须在画布上给出
+  /// 一句话 + 进度环。
+  String? _blockOpLabel;
+
   /// Re-reads only the selected block's box (S-N1 【识别】).
   ///
   /// 🔴 Three things this deliberately does **not** do:
@@ -302,10 +310,14 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         return;
       }
       final bytes = await original.readAsBytes();
+      // 🔴 块级语言覆盖优先：自动语言投票是整页统计，一页里混排韩文+英文
+      // 拟声词时会投错（用户："明明是韩文但是检测成日文"）。面板上选过的
+      // 语言就是这块的真相，不再让"自动"覆盖它。
+      final blockLang = block.sourceLangOverride;
       final detected = await PageTranslationPipeline().ocrRegion(
         bytes,
         IntRect(crop.left, crop.top, crop.right, crop.bottom),
-        sourceLang: _currentSourceLang(),
+        sourceLang: blockLang.isEmpty ? _currentSourceLang() : blockLang,
       );
       // 🔴 P48 五轮：多边形块只认**轮廓内**的检测框。OCR 引擎没有"任意形状"
       // 输入，仍按外接矩形裁剪；但结果按中心点是否落在画笔轮廓内过滤 ——
@@ -412,7 +424,10 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     setState(() => _blockOpBusy = true);
     try {
       final glossary = _glossary;
-      final lang = _currentSourceLang();
+      // 与识别同一份优先级：块级覆盖 > 本轮/工程设置。
+      final lang = block.sourceLangOverride.isEmpty
+          ? _currentSourceLang()
+          : block.sourceLangOverride;
       final response = await TranslationDispatcher.translateBatch(
         [source],
         _currentTargetLang(),
@@ -1993,6 +2008,10 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           : [
               for (final p in block.polygon!) Offset(p[0], p[1]),
             ],
+      // P48 六轮：画布按块类型分色（对话蓝 / 拟声词橙 / 物体文字绿 / 水印紫）。
+      // 用户反馈"都是黑色容易混淆" —— 一页十几个块时只能靠点开面板才知道
+      // 哪块是水印。
+      kind: block.kind,
       ownerPageKey: ownerPageKey,
       // B-3/B-4：组装饰（nest 大框 / link 连线 / 序号）与建组点选高亮。
       groupId: tag?.groupId,
@@ -2530,8 +2549,24 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   Future<void> _aiFillSelectedBlock() =>
       _repairSelectedBlockImpl(quality: RepairQuality.texture);
 
+  /// 单块【画面增强】：在当前**已修复的底图**上，把整片选区再重建一轮。
+  ///
+  /// 🔴 存在的理由（人工验收）："最好能补充一个画面增强的功能，就是说在擦除
+  /// 水印之后针对一些模糊的填充部分进行二次甚至多次的 AI 修复。" 一次推理
+  /// 只能把洞填上，填出来的过渡往往还发糊；再以**当前结果**为输入跑一轮，
+  /// 模型看到的是"已经被补过、但边界发糊"的画面，于是把过渡重新拉开。
+  ///
+  /// 可反复点击 —— 每点一次就是一轮，这就是用户说的"多次"。
+  Future<void> _enhanceSelectedBlock() => _repairSelectedBlockImpl(
+    quality: RepairQuality.texture,
+    fromInpainted: true,
+    wholeSelection: true,
+  );
+
   Future<void> _repairSelectedBlockImpl({
     required RepairQuality quality,
+    bool fromInpainted = false,
+    bool wholeSelection = false,
   }) async {
     final project = _project;
     final pageKey = _selectedPageKey;
@@ -2558,7 +2593,17 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       }
       return;
     }
-    setState(() => _blockOpBusy = true);
+    // 🔴 进度文案在这里就点亮：解码大页本身就要几百毫秒，推理还要 6–8 秒/
+    // 轮。不给文字，用户只看到所有按钮同时变灰 —— 原话"一瞬间按钮都屏蔽了，
+    // 我还以为出错了"。
+    setState(() {
+      _blockOpBusy = true;
+      _blockOpLabel = quality == RepairQuality.texture
+          ? (fromInpainted
+                ? 'Enhancing the repaired area…'.tl
+                : 'AI fill…'.tl)
+          : 'Erasing…'.tl;
+    });
     try {
       final original = await decodeFullResolutionRgba(originalFile);
       if (original == null) {
@@ -2621,24 +2666,56 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         }
         return;
       }
-      // 在原图**副本**上只修这一块；块外像素与原图逐字节相同。
+      // 起点缓冲：普通修复从**原图**开始；「画面增强」从**当前底图**开始
+      //（否则每点一次都从原图重来，等于把上一轮成果扔掉）。
+      final inpaintedFile0 = File(project.artifactPath('inpainted', pageKey));
+      RgbaImage? priorInpainted;
+      if (fromInpainted && inpaintedFile0.existsSync()) {
+        final decoded = await decodeFullResolutionRgba(inpaintedFile0);
+        if (decoded != null &&
+            decoded.width == original.width &&
+            decoded.height == original.height) {
+          priorInpainted = decoded;
+        }
+      }
+      if (fromInpainted && priorInpainted == null) {
+        if (mounted) {
+          context.showMessage(
+            message: 'Erase this block first — there is nothing to enhance.'
+                .tl,
+          );
+        }
+        return;
+      }
+      // 在原图／当前底图的**副本**上只修这一块；块外像素逐字节不变。
+      final start = priorInpainted ?? original;
       final erased = RgbaImage(
         original.width,
         original.height,
-        Uint8List.fromList(original.pixels),
+        Uint8List.fromList(start.pixels),
       );
 
-      // ── 填色三种策略（用户明确要求的三档，按底图自动选） ─────────────
+      // ── 填色三种策略（用户明确要求的三档） ─────────────────────────────
       // 1) 擦除 + 底色填充：选区外是**平色**（黑底水印条 / 白气泡）→ 整片刷该色。
-      //    这是"全部涂黑"的唯一正确实现：插值与纹理合成都只会引入用户没要的东西。
+      //    🔴 **只对「擦除」入口生效**。用户把三种方法分得很清楚："1.擦除+
+      //    底色填充 2.马赛克 3.多边形选取+ai修复填充"。第 33 页白底带淡黄
+      //    网格时，平色判据只看到 86% 是白就把整片刷白，AI 修复连一次机会都
+      //    没有 —— 而用户要的恰恰是"按上方那一大片网格延伸纹理"。
       // 2) 马赛克：见 [_mosaicSelectedBlock]（独立入口）。
-      // 3) 多边形 + AI 修复填充：底图有纹理（裙子、网点）→ 先用 ONNX LaMa，
-      //    没装模型才退回本地块级 patch 合成。
-      final flat = detectFlatBackground(original, block.rect);
+      // 3) AI 修复填充：**强制走模型/纹理**，不被平色拦截。
+      final allowFlat = quality == RepairQuality.structural && !fromInpainted;
+      final flat = allowFlat ? detectFlatBackground(original, block.rect) : null;
+      // 唯一的路线判定（纯函数，headless 可断言）。
+      final route = chooseRepairFillRoute(
+        quality: quality,
+        allowFlat: allowFlat,
+        flatFound: flat != null,
+        modelInstalled: InpaintModel.isInstalled,
+      );
       Uint8List writeMask;
       RepairStats stats;
       var engine = 'local-${quality.name}';
-      if (flat != null) {
+      if (route == RepairFillRoute.solid && flat != null) {
         // 整片选区刷底色，而不是只刷"检测到的笔画" —— 用户要的是"擦干净"，
         // 残留的半笔字正是"只刷笔画"造成的。
         writeMask = selection;
@@ -2648,35 +2725,92 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
             'edges=${flat.agreeingEdges} '
             'dev=${flat.deviation.toStringAsFixed(1)})';
       } else {
+        // 🔴 轮数：非对话块（水印 / 拟声词 / 物体文字）默认 **2 轮**。用户
+        // 原话："除了对话气泡之外，所有的其他文字块都必须再一次擦除的基础上
+        // 进行多次填充修复，因为周围有多种颜色的复杂环境是不可能用一次 AI
+        // 识别就完成修复的。" 第 1 轮只补字形/物体所在的洞，边缘常留"抹过的
+        // 痕迹"；第 2 轮把洞**外扩一圈**再补一次，把那圈痕迹吃掉。对话气泡
+        // 是平色 + 一笔字，1 轮足够。
+        //
+        // 🔴 第 2 轮**绝不能**用整片选区：选区画得比水印大时，周围本不需要
+        // 动的地方会被整片重画（第 11 页那块"糊"就是这么来的）。
+        final passes = (wholeSelection || block.isDialogue)
+            ? 1
+            : (quality == RepairQuality.texture ? 2 : 1);
         writeMask = erasedMask;
-        ModelInpaintResult? model;
-        if (quality == RepairQuality.texture && InpaintModel.isInstalled) {
-          model = await InpaintModel.inpaintRegion(
-            rgba: original.pixels,
-            width: original.width,
-            height: original.height,
-            regionMask: writeMask,
-          );
-        }
-        if (model != null) {
-          // 模型结果已是整页缓冲：直接替换，掩膜外的像素与原来逐字节相同
-          //（[InpaintModel.inpaintRegion] 的契约）。
-          erased.pixels.setAll(0, model.rgba);
-          stats = RepairStats(
-            filledPixels: model.regionPixels,
-            textured: true,
-            windowArea: model.regionPixels,
-          );
-          engine = 'onnx-lama(${model.elapsedMs}ms '
-              'crop=${model.crop.width}x${model.crop.height})';
-        } else {
-          stats = repairRegionInPlace(erased, writeMask, quality: quality);
-          if (quality == RepairQuality.texture) {
-            engine = InpaintModel.isInstalled
-                ? 'local-texture(model-failed)'
-                : 'local-texture(no-model)';
+        var filled = 0;
+        var textured = false;
+        var elapsed = 0;
+        var cropW = 0;
+        var cropH = 0;
+        var usedModel = false;
+        for (var pass = 0; pass < passes; pass++) {
+          final passMask = pass == 0
+              ? erasedMask
+              : intersectPageMasks(
+                  dilatePageMask(
+                    erasedMask,
+                    original.width,
+                    original.height,
+                    6,
+                  ),
+                  selection,
+                );
+          writeMask = unionMasks(added: passMask, existing: writeMask);
+          if (passes > 1 && mounted) {
+            setState(
+              () => _blockOpLabel = 'AI fill @a/@b…'.tlParams({
+                'a': '${pass + 1}',
+                'b': '$passes',
+              }),
+            );
+            // 让这一帧真的画到屏幕上再进推理。推理跑在 isolate 里、UI 线程
+            // 此刻是空闲的，但没有这一帧它会等到全部结束才重绘。
+            await Future<void>.delayed(Duration.zero);
+          }
+          ModelInpaintResult? model;
+          if (route == RepairFillRoute.model) {
+            model = await InpaintModel.inpaintRegion(
+              rgba: erased.pixels,
+              width: erased.width,
+              height: erased.height,
+              regionMask: passMask,
+            );
+          }
+          if (model != null) {
+            // 模型结果已是整页缓冲：直接替换，掩膜外的像素与输入逐字节相同
+            //（[InpaintModel.inpaintRegion] 的契约）。
+            erased.pixels.setAll(0, model.rgba);
+            filled += model.regionPixels;
+            elapsed += model.elapsedMs;
+            cropW = model.crop.width;
+            cropH = model.crop.height;
+            textured = true;
+            usedModel = true;
+          } else {
+            final local = repairRegionInPlace(
+              erased,
+              passMask,
+              quality: quality,
+            );
+            filled += local.filledPixels;
+            textured = textured || local.textured;
+            if (quality == RepairQuality.texture) {
+              engine = route == RepairFillRoute.localTexture
+                  ? 'local-texture(no-model)'
+                  : 'local-texture(model-failed)';
+            }
           }
         }
+        if (usedModel) {
+          engine = 'onnx-lama(${elapsed}ms passes=$passes '
+              'crop=${cropW}x$cropH)';
+        }
+        stats = RepairStats(
+          filledPixels: filled,
+          textured: textured,
+          windowArea: filled,
+        );
       }
       if (stats.filledPixels == 0) {
         if (mounted) {
@@ -2765,7 +2899,12 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         );
       }
     } finally {
-      if (mounted) setState(() => _blockOpBusy = false);
+      if (mounted) {
+        setState(() {
+          _blockOpBusy = false;
+          _blockOpLabel = null;
+        });
+      }
     }
   }
 
@@ -5066,11 +5205,62 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                       ),
                     ),
               if (_groupPickMode) _buildGroupPickBar(),
+              // P48 六轮：长耗时像素操作的进度条。放在**底部居中** —— 不挡
+              // 顶部建组条，也不挡用户正在看的块。
+              if (_blockOpLabel != null) _buildOpProgressBar(),
             ],
           ),
         ),
         _buildStatusBar(key),
       ],
+    );
+  }
+
+  /// 长耗时像素操作（擦除 / AI 填充 / 增强）的进度提示。
+  ///
+  /// 🔴 为什么用环形而不是百分比：LaMa 单轮推理是一个不可分割的调用，没有
+  /// 中间百分比可报；但"第 1/2 轮"这个**阶段**是真实进度，足以让用户确认
+  /// 程序还活着、并且知道还要等多久。
+  Widget _buildOpProgressBar() {
+    final scheme = Theme.of(context).colorScheme;
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 16,
+      child: IgnorePointer(
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(24),
+            color: scheme.inverseSurface,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 18,
+                vertical: 10,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      color: scheme.onInverseSurface,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    _blockOpLabel!,
+                    style: ts.s14.copyWith(color: scheme.onInverseSurface),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -5836,6 +6026,12 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         onAiFill: _blockOpBusy || _pageKeys.isEmpty
             ? null
             : () => _aiFillSelectedBlock(),
+        // P48 六轮：多轮重建。第一次 AI 填充把洞补上，之后每点一次再重建一轮
+        // —— 用户明确说"擦除水印之后针对一些模糊的填充部分进行二次甚至多次
+        // 的 AI 修复"，而一次推理不可能补齐多色复杂环境。
+        onEnhance: _blockOpBusy || _pageKeys.isEmpty
+            ? null
+            : () => _enhanceSelectedBlock(),
         // P48 五轮：是否装了 ONNX LaMa 修复模型 —— 面板据此如实写"走模型"
         // 还是"走本地算法"，不把经典插值吹成神经网络。
         aiModelReady: InpaintModel.isInstalled,

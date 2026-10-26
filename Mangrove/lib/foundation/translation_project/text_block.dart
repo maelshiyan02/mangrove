@@ -891,6 +891,12 @@ class TextBlock {
   /// 翻译组水印块（管线第 0 步擦除，不翻译/不嵌字）。
   bool get isWatermark => kind == TextBlockKind.watermark;
 
+  /// 对话气泡块（默认种类）。
+  ///
+  /// 🔴 只用于**修图策略分档**：气泡是"平色底 + 一笔字"，擦一次就够；其余
+  /// 种类（水印/拟声词/物体文字）的周围是多色复杂环境，需要"擦除 + 多轮重建"。
+  bool get isDialogue => kind == TextBlockKind.dialogue;
+
   /// 拟声词/语气词块（多异形艺术字，默认不译）。
   bool get isOnomatopoeia => kind == TextBlockKind.onomatopoeia;
 
@@ -974,6 +980,25 @@ class TextBlock {
   double get angle => (raw['angle'] as num?)?.toDouble() ?? 0.0;
 
   set angle(double value) => raw['angle'] = value;
+
+  /// 块级源语言覆盖（`source_lang`），空 = 跟随工程/本轮设置。
+  ///
+  /// 🔴 为什么需要它（人工验收）："识别文字是自动检测文字的语言，很容易出现
+  /// 明明是韩文但是检测成日文的情况。" 自动语言投票是**整页**级的统计判断，
+  /// 一页里韩文配英文拟声词、或日文汉字比例高时，单块必然投错；而重识别后
+  /// 用户看到的是错的原文 + 错的译文，却没有任何地方能纠正"这块是韩文"。
+  ///
+  /// 零字节 diff：空值时删键，旧工程 round-trip 不产生新键。
+  String get sourceLangOverride => raw['source_lang']?.toString() ?? '';
+
+  set sourceLangOverride(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      raw.remove('source_lang');
+    } else {
+      raw['source_lang'] = trimmed;
+    }
+  }
 
   /// Whether the block was merged from several detected lines.
   bool get merged => raw['merged'] == true;

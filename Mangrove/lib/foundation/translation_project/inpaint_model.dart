@@ -21,9 +21,10 @@
 /// * 输入 `mask`：`[1,1,512,512]` float32，`{0,1}`，**1 = 要修**；
 /// * 输出：`[1,3,512,512]` float32，RGB，`0..255`（该仓库导出未归一化）。
 ///
-/// 尺寸固定 512：把「选区 + 30% 上下文」的方块缩放到 512，推理后缩回原尺寸，
-/// **只把选区内的像素贴回**。上下文只用于让模型理解结构，绝不写回 —— 这是
-/// 用户明确要求的那条纪律。
+/// 尺寸固定 512：把「选区 + 上下文」的裁剪框**等比缩放**塞进 512（短边两侧
+/// 用边缘像素补齐，不拉黑边、不压扁），推理后缩回原尺寸，**只把选区内的
+/// 像素贴回**。上下文只用于让模型理解结构，绝不写回 —— 这是用户明确要求的
+/// 那条纪律。
 library;
 
 import 'dart:isolate';
@@ -47,7 +48,7 @@ class ModelInpaintResult {
   final Uint8List rgba;
   final int regionPixels;
 
-  /// 实际送进模型的方形裁剪框（源像素）。
+  /// 实际送进模型的上下文裁剪框（源像素，**非正方形**）。
   final IntRect crop;
   final int elapsedMs;
 }
@@ -66,8 +67,14 @@ abstract class InpaintModel {
 
   /// 在 [rgba] 的**副本**上修复 [regionMask] 覆盖的像素。
   ///
-  /// [contextExpand] 是送给模型的上下文比例（默认 0.30 = 每边外扩 15%，
-  /// 总尺寸 ×1.3）。上下文只读；写回严格限制在 [regionMask] 内。
+  /// [contextExpand] 是上下文比例，按选区的**长边**换算成每边外扩的像素数
+  /// （0.75 ⇒ 长边 ×0.75）。上下文只读；写回严格限制在 [regionMask] 内。
+  ///
+  /// 🔴 早先按"正方形裁剪 + 总尺寸 ×1.3"取样，对细长水印是灾难：第 33 页
+  /// 水印 231×65，裁成 300×300 后掩膜占了 77% 的宽度、上下只剩 117px，
+  /// 模型几乎只能看见水印自身，于是把上方一大片黄色网格当不存在、整片填白
+  /// （人工验收原话："AI 修复对于上下环境的参考很狭窄……上方有一大片，
+  /// 居然直接无视了"）。改成按长边外扩后掩膜占比降到约 40%。
   ///
   /// 返回 null 表示模型不可用或选区为空 —— 调用方据此回退本地算法。
   static Future<ModelInpaintResult?> inpaintRegion({
@@ -75,7 +82,7 @@ abstract class InpaintModel {
     required int width,
     required int height,
     required Uint8List regionMask,
-    double contextExpand = 0.30,
+    double contextExpand = 0.75,
     int modelSize = 512,
   }) async {
     if (!isInstalled) return null;
@@ -85,7 +92,7 @@ abstract class InpaintModel {
     final bounds = _maskBounds(regionMask, width, height);
     if (bounds == null) return null;
 
-    final crop = _squareCrop(bounds, width, height, contextExpand);
+    final crop = inpaintContextCrop(bounds, width, height, contextExpand);
     final prepared = _prepareInputs(
       rgba: rgba,
       width: width,
@@ -172,42 +179,58 @@ IntRect? _maskBounds(Uint8List mask, int w, int h) {
 ///
 /// 🔴 补成正方形是为了保住长宽比：LaMa 的训练/导出都是 512×512，把
 /// 1000×40 的水印条直接拉伸到正方形会把字形结构压扁，模型认不出"这是字"。
-IntRect _squareCrop(IntRect box, int w, int h, double expand) {
-  final cx = (box.left + box.right) / 2;
-  final cy = (box.top + box.bottom) / 2;
-  var side = math.max(box.width, box.height) * (1 + expand);
-  // 太小则上下文不足（模型看不出结构），至少给 48px。
-  if (side < 48) side = 48;
-  var half = side / 2;
-  // 夹进页面：先平移再定尺寸，避免裁到页外去。
-  final maxHalfX = math.min(half, math.max(cx, w - cx));
-  final maxHalfY = math.min(half, math.max(cy, h - cy));
-  half = math.min(maxHalfX, maxHalfY);
-  if (half < 8) half = 8;
-  var left = (cx - half).round();
-  var top = (cy - half).round();
-  var right = (cx + half).round();
-  var bottom = (cy + half).round();
+/// 上下文裁剪框：以选区为中心，**每边**外扩 `expand × 长边`，再夹进页面。
+///
+/// 一侧贴边时把缺掉的视野补到对侧（总量守恒）：第 10 页的水印右边界几乎
+/// 顶到页边，若不补，它就只有半圈上下文可用。
+IntRect inpaintContextCrop(IntRect box, int w, int h, double expand) {
+  final bw = box.width;
+  final bh = box.height;
+  if (bw <= 0 || bh <= 0) return box;
+  // 按**长边**算外扩量，不按各方向自己的比例：水印几乎都是细长条，按短边
+  // 算出来的 0.75×65≈49px 根本看不到上下的纹理。
+  final pad = math.max(64, (math.max(bw, bh) * expand).round());
+
+  var left = box.left - pad;
+  var right = box.right + pad;
+  var top = box.top - pad;
+  var bottom = box.bottom + pad;
+
   if (left < 0) {
-    right -= left;
+    right = math.min(w, right - left);
     left = 0;
   }
-  if (top < 0) {
-    bottom -= top;
-    top = 0;
-  }
   if (right > w) {
-    left -= right - w;
+    left = math.max(0, left - (right - w));
     right = w;
   }
+  if (top < 0) {
+    bottom = math.min(h, bottom - top);
+    top = 0;
+  }
   if (bottom > h) {
-    top -= bottom - h;
+    top = math.max(0, top - (bottom - h));
     bottom = h;
   }
-  if (left < 0) left = 0;
-  if (top < 0) top = 0;
-  if (right <= left || bottom <= top) return IntRect(0, 0, w, h);
+  if (right <= left || bottom <= top) return box;
   return IntRect(left, top, right, bottom);
+}
+
+/// 裁剪框 → `size×size` 模型输入的等比映射（letterbox）。
+class _Fitted {
+  const _Fitted(this.scale, this.offX, this.offY);
+
+  /// 裁剪框像素 → 模型像素 的倍数。
+  final double scale;
+
+  /// 居中留白（模型像素）。
+  final double offX;
+  final double offY;
+}
+
+_Fitted _fitInto(int cw, int ch, int size) {
+  final scale = size / math.max(cw, ch);
+  return _Fitted(scale, (size - cw * scale) / 2, (size - ch * scale) / 2);
 }
 
 // ── 预处理 / 后处理 ────────────────────────────────────────────────────────
@@ -232,18 +255,28 @@ _Prepared? _prepareInputs({
   if (cw <= 0 || ch <= 0) return null;
   final image = Float32List(size * size * 3);
   final mask = Float32List(size * size);
+  // 🔴 letterbox：等比缩放 + 居中。落在留白区的模型像素**钳到裁剪框边缘**
+  // = 边缘像素复制。这样模型看到的是"纹理一直延伸出去"，而不是一圈黑边
+  //（黑边会被 LaMa 当成真实内容，补出一块暗色）。
+  final f = _fitInto(cw, ch, size);
 
   for (var y = 0; y < size; y++) {
     // 双线性取样（图像）/ 最近邻（掩膜）。
-    final sy = (y + 0.5) * ch / size - 0.5;
-    final y0 = sy.floor().clamp(0, ch - 1).toInt();
-    final y1 = (y0 + 1).clamp(0, ch - 1).toInt();
-    final wy = (sy - y0).clamp(0.0, 1.0).toDouble();
+    final sy = ((y + 0.5 - f.offY) / f.scale - 0.5).clamp(
+      0.0,
+      (ch - 1).toDouble(),
+    );
+    final y0 = sy.floor();
+    final y1 = math.min(y0 + 1, ch - 1);
+    final wy = sy - y0;
     for (var x = 0; x < size; x++) {
-      final sx = (x + 0.5) * cw / size - 0.5;
-      final x0 = sx.floor().clamp(0, cw - 1).toInt();
-      final x1 = (x0 + 1).clamp(0, cw - 1).toInt();
-      final wx = (sx - x0).clamp(0.0, 1.0).toDouble();
+      final sx = ((x + 0.5 - f.offX) / f.scale - 0.5).clamp(
+        0.0,
+        (cw - 1).toDouble(),
+      );
+      final x0 = sx.floor();
+      final x1 = math.min(x0 + 1, cw - 1);
+      final wx = sx - x0;
 
       final i00 = ((crop.top + y0) * width + crop.left + x0) * 4;
       final i10 = ((crop.top + y0) * width + crop.left + x1) * 4;
@@ -259,8 +292,8 @@ _Prepared? _prepareInputs({
 
       // 掩膜用最近邻：0/1 被插值成 0.4 这种值会让模型把"半透明边"当成
       // 需要保留的内容。
-      final mx = (x * cw / size).floor().clamp(0, cw - 1).toInt();
-      final my = (y * ch / size).floor().clamp(0, ch - 1).toInt();
+      final mx = sx.round().clamp(0, cw - 1);
+      final my = sy.round().clamp(0, ch - 1);
       mask[y * size + x] =
           regionMask[(crop.top + my) * width + crop.left + mx] != 0 ? 1.0 : 0.0;
     }
@@ -279,11 +312,16 @@ void _compositeBack({
 }) {
   final cw = crop.width;
   final ch = crop.height;
+  // 与 [_prepareInputs] 完全同一份 letterbox 映射，否则补回来的位置会整体偏移。
+  final f = _fitInto(cw, ch, modelSize);
   for (var y = 0; y < ch; y++) {
-    final sy = (y + 0.5) * modelSize / ch - 0.5;
-    final y0 = sy.floor().clamp(0, modelSize - 1).toInt();
-    final y1 = (y0 + 1).clamp(0, modelSize - 1).toInt();
-    final wy = (sy - y0).clamp(0.0, 1.0).toDouble();
+    final my = ((y + 0.5) * f.scale + f.offY - 0.5).clamp(
+      0.0,
+      (modelSize - 1).toDouble(),
+    );
+    final y0 = my.floor();
+    final y1 = math.min(y0 + 1, modelSize - 1);
+    final wy = my - y0;
     final py = crop.top + y;
     if (py < 0 || py >= pageHeight) continue;
     final pageRow = py * pageWidth;
@@ -292,10 +330,13 @@ void _compositeBack({
       if (px < 0 || px >= pageWidth) continue;
       // 🔴 只写选区内的像素：上下文只让模型"看懂"，不允许它改写邻居。
       if (regionMask[pageRow + px] == 0) continue;
-      final sx = (x + 0.5) * modelSize / cw - 0.5;
-      final x0 = sx.floor().clamp(0, modelSize - 1).toInt();
-      final x1 = (x0 + 1).clamp(0, modelSize - 1).toInt();
-      final wx = (sx - x0).clamp(0.0, 1.0).toDouble();
+      final mx = ((x + 0.5) * f.scale + f.offX - 0.5).clamp(
+        0.0,
+        (modelSize - 1).toDouble(),
+      );
+      final x0 = mx.floor();
+      final x1 = math.min(x0 + 1, modelSize - 1);
+      final wx = mx - x0;
       final di = (pageRow + px) * 4;
       for (var c = 0; c < 3; c++) {
         // 🔴 输出同样是 [1,3,H,W]（CHW），必须按通道平面寻址。

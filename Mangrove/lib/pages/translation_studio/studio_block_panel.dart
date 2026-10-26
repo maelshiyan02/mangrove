@@ -49,6 +49,7 @@ class StudioBlockPanel extends StatefulWidget {
     this.onErase,
     this.onMosaic,
     this.onAiFill,
+    this.onEnhance,
     this.aiModelReady = false,
     this.busy = false,
   });
@@ -84,6 +85,12 @@ class StudioBlockPanel extends StatefulWidget {
   /// ONNX LaMa 修复模型是否已安装（决定【AI 修复填充】的**如实**文案：
   /// 装了就说走模型，没装就明说走本地算法，不把经典算法吹成神经网络）。
   final bool aiModelReady;
+
+  /// 【画面增强】—— 在**当前已修复的底图**上把整片选区再重建一轮。
+  ///
+  /// 🔴 与水印面板同名按钮同一个回调。用户的原话："在擦除水印之后针对一些
+  /// 模糊的填充部分进行二次甚至多次的 AI 修复"。可反复点击 = 每点一次一轮。
+  final Future<void> Function()? onEnhance;
 
   /// 【识别】—— re-run OCR on this block's own box (S-N1).
   ///
@@ -241,7 +248,35 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
         const SizedBox(height: 6),
         ..._kindDropdown(scheme, block),
         const SizedBox(height: 8),
+        ..._langDropdown(scheme, block),
+        const SizedBox(height: 8),
         _kv('Box', block.xyxy.map((v) => v.round().toString()).join(', ')),
+        if (block.polygon != null) ...[
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Icon(Icons.polyline, size: 16, color: scheme.primary),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Precise polygon region (@n vertices)'
+                      .tlParams({'n': '${block.polygon!.length}'}),
+                  style: ts.s12.copyWith(color: scheme.primary),
+                ),
+              ),
+              TextButton(
+                onPressed: widget.busy
+                    ? null
+                    : () => widget.onEdit(
+                        'Clear freehand outline',
+                        (b) => b.polygon = null,
+                        syncRichText: true,
+                      ),
+                child: Text('Use box'.tl, style: ts.s12),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 8),
         _section('Translation'),
         const SizedBox(height: 6),
@@ -250,7 +285,15 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
           focusNode: _focus,
           minLines: 3,
           maxLines: 8,
-          style: ts.s14,
+          // 🔴 与画布**同一个**字体 + fallback。用户反馈："在文字块中显示的
+          // 译文和对话框中显示的译文的省略号一个在底部一个在当中，显示的效果
+          // 不一致。" 画布走 `resolveFamily(block.fontFamily)`，面板原来走主题
+          // 字体 —— 同一段文字在两条路径上，`……`、标点、韩文的字形位置必然
+          // 不同。字号保持 14：面板宽度不是页面宽度，套页面字号会溢出。
+          style: ts.s14.copyWith(
+            fontFamily: resolveFamily(format?.fontFamily).family,
+            fontFamilyFallback: bundledFamilyFallbacks(format?.fontFamily),
+          ),
           decoration: InputDecoration(
             isDense: true,
             border: const OutlineInputBorder(),
@@ -298,6 +341,15 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
                     : 'AI fill this block (local texture)'.tl,
                 busy: widget.busy,
                 onPressed: widget.onAiFill!,
+              ),
+            // P48 六轮：拟声词 / 物体文字同样需要"多轮"——周围多色复杂环境
+            // 一次识别补不干净（用户原话）。
+            if (widget.onEnhance != null)
+              _ActionButton(
+                icon: Icons.auto_fix_normal,
+                tooltip: 'Enhance this block (one more AI pass)'.tl,
+                busy: widget.busy,
+                onPressed: widget.onEnhance!,
               ),
             if (widget.onRepair != null && widget.onRestoreOriginal != null)
               const SizedBox(width: 4),
@@ -584,6 +636,16 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
                 ),
               ),
               DropdownMenuItem(
+                value: TextBlockKind.objectText,
+                child: Row(
+                  children: [
+                    const Icon(Icons.label_outline, size: 18),
+                    const SizedBox(width: 8),
+                    Text('Text on object'.tl),
+                  ],
+                ),
+              ),
+              DropdownMenuItem(
                 value: TextBlockKind.watermark,
                 child: Row(
                   children: [
@@ -600,6 +662,65 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
                     if (v != null) widget.onKindChanged!(v);
                   },
           ),
+        ),
+      ),
+    ];
+  }
+
+  /// 块级源语言（OCR 与翻译共用）。空 = 自动。
+  ///
+  /// 🔴 存在的理由（人工验收）："识别文字是自动检测文字的语言，很容易出现
+  /// 明明是韩文但是检测成日文的情况。" 自动投票是**整页**统计，一页里只要
+  /// 混入几行日文汉字或英文拟声词就会投偏；而投偏之后，用户在界面上没有任何
+  /// 地方能说"这块是韩文"。这个下拉补齐了那条实时修改的路径。
+  List<Widget> _langDropdown(ColorScheme scheme, TextBlock block) {
+    const options = <String, String>{
+      '': 'Auto-detect',
+      'ja': 'Japanese',
+      'ko': 'Korean',
+      'zh': 'Chinese',
+      'en': 'English',
+    };
+    final current = options.containsKey(block.sourceLangOverride)
+        ? block.sourceLangOverride
+        : '';
+    return [
+      Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Source language'.tl,
+              style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+          DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: current,
+              isDense: true,
+              style: ts.s12,
+              items: [
+                for (final entry in options.entries)
+                  DropdownMenuItem(
+                    value: entry.key,
+                    child: Text(entry.value.tl, style: ts.s12),
+                  ),
+              ],
+              onChanged: (v) => widget.onEdit(
+                'Source language',
+                (b) => b.sourceLangOverride = v ?? '',
+                // 语言变了，rich_text 里的排版是按旧原文算的，必须重排。
+                syncRichText: true,
+              ),
+            ),
+          ),
+        ],
+      ),
+      Padding(
+        padding: const EdgeInsets.only(top: 2, bottom: 2),
+        child: Text(
+          'Auto uses the page-wide vote. Pin a language here when this block is misdetected, then press Recognise again.'
+              .tl,
+          style: ts.s10.copyWith(color: scheme.onSurfaceVariant),
         ),
       ),
     ];
@@ -664,10 +785,24 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
             children: [
               Icon(Icons.polyline, size: 16, color: scheme.primary),
               const SizedBox(width: 6),
-              Text(
-                'Precise polygon region (@n vertices)'
-                    .tlParams({'n': '${polygon.length}'}),
-                style: ts.s12.copyWith(color: scheme.primary),
+              Expanded(
+                child: Text(
+                  'Precise polygon region (@n vertices)'
+                      .tlParams({'n': '${polygon.length}'}),
+                  style: ts.s12.copyWith(color: scheme.primary),
+                ),
+              ),
+              // 🔴 自由轮廓**不可拖拽变形**（画布上不再有 8 个手柄），所以
+              // 画歪了必须有退路 —— 否则只能删块重画。
+              TextButton(
+                onPressed: widget.busy
+                    ? null
+                    : () => widget.onEdit(
+                        'Clear freehand outline',
+                        (b) => b.polygon = null,
+                        syncRichText: true,
+                      ),
+                child: Text('Use box'.tl, style: ts.s12),
               ),
             ],
           ),
@@ -698,6 +833,15 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
             label: 'Mosaic (blends into background)',
             subtitle: 'Pixelate the watermark toward the colours underneath',
             onPressed: widget.onMosaic!,
+          ),
+        // 🔴 【画面增强】必须排在【AI 填充】之后：它的前提是"已经修过一遍"。
+        if (widget.onEnhance != null)
+          _watermarkAction(
+            icon: Icons.auto_fix_normal,
+            label: 'Enhance fill (one more pass)',
+            subtitle:
+                'Re-runs inpainting on the repaired area — repeat until the transition reads clean',
+            onPressed: widget.onEnhance!,
           ),
         if (widget.onRestoreOriginal != null)
           _watermarkAction(

@@ -2073,6 +2073,79 @@ Future<void> runP7Checks(
     () => '绿=识别与翻译批次都跳过水印 / 故障=判据漏到面板文件',
   );
 
+  probe(
+    'repair.ai_fill_is_never_intercepted_by_flat_detection',
+    // 🔴 第 33 页的真实教训：白底 + 淡黄网格，环带 86% 是白 ⇒ 平色判据命中
+    // ⇒ 整片刷白，AI 修复连一次机会都没有。用户要的恰恰是"按上方那一大片
+    // 网格延伸纹理"。所以路线判定必须让**擦除**吃平色、**AI 填充**永远走模型。
+    () async {
+      final erase = chooseRepairFillRoute(
+        quality: RepairQuality.structural,
+        allowFlat: true,
+        flatFound: true,
+        modelInstalled: true,
+      );
+      final ai = chooseRepairFillRoute(
+        quality: RepairQuality.texture,
+        allowFlat: false,
+        flatFound: true,
+        modelInstalled: true,
+      );
+      final noModel = chooseRepairFillRoute(
+        quality: RepairQuality.texture,
+        allowFlat: false,
+        flatFound: true,
+        modelInstalled: false,
+      );
+      // 生产代码必须**真的**用它做分支，否则这条只是在测自己。
+      return erase == RepairFillRoute.solid &&
+          ai == RepairFillRoute.model &&
+          noModel == RepairFillRoute.localTexture &&
+          codeHas(_studioPath, 'chooseRepairFillRoute') &&
+          codeHas(_studioPath, 'route == RepairFillRoute.model');
+    },
+    () async {
+      // 故障注入：闸门被忽略（allowFlat 传 true 给 texture 档）。若实现真的
+      // 尊重闸门，这里会返回 solid，绿判据不再成立 ⇒ 故障路径变红。
+      final broken = chooseRepairFillRoute(
+        quality: RepairQuality.texture,
+        allowFlat: true,
+        flatFound: true,
+        modelInstalled: true,
+      );
+      return broken == RepairFillRoute.model;
+    },
+    () => '绿=AI填充强制走模型 / 故障=平色闸门失效⇒AI填充被刷成纯色',
+  );
+
+  probe(
+    'inpaint.context_window_widens_along_the_long_edge',
+    // 🔴 第 33 页水印 231×65：旧实现"正方形 + ×1.3"裁成 300×300，掩膜占了
+    // 77% 的宽度、上下只剩 117px，模型几乎只看得见水印自身 —— 用户："上方
+    // 有一大片（网格），居然直接无视了。" 按**长边**外扩后掩膜占比降到 ~40%。
+    () async {
+      final box = IntRect(554, 1189, 785, 1254); // 真实块框 231×65
+      final crop = inpaintContextCrop(box, 800, 1421, 0.75);
+      // 极端长条：300×10。按长边外扩 = 225px，按短边只有 7.5px。
+      final thin = IntRect(100, 700, 400, 710);
+      final thinCrop = inpaintContextCrop(thin, 800, 1421, 0.75);
+      final padTop = box.top - crop.top;
+      final padBottom = crop.bottom - box.bottom;
+      return padTop >= 150 &&
+          padBottom >= 150 &&
+          crop.width >= 550 &&
+          (thin.top - thinCrop.top) >= 200;
+    },
+    () async {
+      // 故障：把 expand 换成"按短边折算"的等价比例（0.75×10/300≈0.206）
+      // ⇒ pad 掉回 64px 下限，判据不再成立。
+      final thin = IntRect(100, 700, 400, 710);
+      final c = inpaintContextCrop(thin, 800, 1421, 0.206);
+      return (thin.top - c.top) >= 200;
+    },
+    () => '绿=按长边外扩（细长水印也有上下视野）/ 故障=按短边⇒视野不足',
+  );
+
   // ── 跑 ──────────────────────────────────────────────────────────────
 
   for (final item in probes) {
