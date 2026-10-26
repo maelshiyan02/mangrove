@@ -42,6 +42,8 @@ class _TranslationModelsPageState extends State<TranslationModelsPage> {
       'mt_nllb_600m' =>
         "NLLB-200 600M — ja/ko/en/es/zh (lightweight, ~0.9 GB)".tl,
       'mt_opus_ja_en' => "Opus-MT — Japanese to English only (~110 MB)".tl,
+      'inpaint_lama' =>
+        "LaMa inpainting — erase watermarks / lettering (~208 MB)".tl,
       _ => id,
     };
   }
@@ -68,7 +70,9 @@ class _TranslationModelsPageState extends State<TranslationModelsPage> {
     }
     bool isOcr(ModelComponent c) =>
         c.id != 'text_detector' &&
-        !TranslationModels.machineTranslation.contains(c);
+        !TranslationModels.machineTranslation.contains(c) &&
+        // P48：图像修复模型不是 OCR —— 之前它会被归进"文字识别"分组。
+        !TranslationModels.inpainting.contains(c);
     return Scaffold(
       body: SmoothCustomScrollView(
         scrollbarTopPadding: context.padding.top + 56,
@@ -101,6 +105,12 @@ class _TranslationModelsPageState extends State<TranslationModelsPage> {
             "Machine translation (offline engines)".tl,
           ).toSliver(),
           for (var component in TranslationModels.machineTranslation)
+            _buildComponent(context, component, requiredIds).toSliver(),
+          _buildSectionHeader(
+            context,
+            "Image inpainting (erase & reconstruct)".tl,
+          ).toSliver(),
+          for (var component in TranslationModels.inpainting)
             _buildComponent(context, component, requiredIds).toSliver(),
           const SliverPadding(padding: EdgeInsets.only(bottom: 16)),
         ],

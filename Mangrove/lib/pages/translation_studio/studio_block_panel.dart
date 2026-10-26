@@ -49,6 +49,7 @@ class StudioBlockPanel extends StatefulWidget {
     this.onErase,
     this.onMosaic,
     this.onAiFill,
+    this.aiModelReady = false,
     this.busy = false,
   });
 
@@ -79,6 +80,10 @@ class StudioBlockPanel extends StatefulWidget {
   /// 🔴 对**所有类型**可用，不只是水印：结构档填色在纯色/渐变底上够用，但在
   /// 角色衣物、网点渐变这类纹理底上会留下"抹平的色块"，必须靠纹理档补。
   final Future<void> Function()? onAiFill;
+
+  /// ONNX LaMa 修复模型是否已安装（决定【AI 修复填充】的**如实**文案：
+  /// 装了就说走模型，没装就明说走本地算法，不把经典算法吹成神经网络）。
+  final bool aiModelReady;
 
   /// 【识别】—— re-run OCR on this block's own box (S-N1).
   ///
@@ -288,7 +293,9 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
             if (widget.onAiFill != null)
               _ActionButton(
                 icon: Icons.auto_awesome,
-                tooltip: 'AI fill this block (texture)'.tl,
+                tooltip: widget.aiModelReady
+                    ? 'AI fill this block (LaMa model)'.tl
+                    : 'AI fill this block (local texture)'.tl,
                 busy: widget.busy,
                 onPressed: widget.onAiFill!,
               ),
@@ -679,9 +686,10 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
         if (widget.onAiFill != null)
           _watermarkAction(
             icon: Icons.auto_awesome,
-            label: 'AI fill (texture)',
-            subtitle:
-                'Texture synthesis from the 30% context ring — for textured artwork',
+            label: widget.aiModelReady ? 'AI fill (LaMa model)' : 'AI fill (local texture)',
+            subtitle: widget.aiModelReady
+                ? 'ONNX inpainting inside the selection — context is read-only'
+                : 'Local patch synthesis (no model installed). Download LaMa in Settings → Translation models.',
             onPressed: widget.onAiFill!,
           ),
         if (widget.onMosaic != null)

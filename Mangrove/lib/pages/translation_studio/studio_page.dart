@@ -45,6 +45,7 @@ import 'package:mangrove/foundation/translation_project/finished_export.dart';
 import 'package:mangrove/foundation/translation_project/glossary_backend.dart';
 import 'package:mangrove/foundation/translation_project/glossary_store_app.dart';
 import 'package:mangrove/foundation/translation_project/gray_png.dart';
+import 'package:mangrove/foundation/translation_project/inpaint_model.dart';
 import 'package:mangrove/foundation/translation_project/mask_producer.dart';
 import 'package:mangrove/foundation/translation_project/page_size_probe.dart';
 import 'package:mangrove/foundation/translation_project/polygon_mask.dart';
@@ -301,11 +302,33 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         return;
       }
       final bytes = await original.readAsBytes();
-      final blocks = await PageTranslationPipeline().ocrRegion(
+      final detected = await PageTranslationPipeline().ocrRegion(
         bytes,
         IntRect(crop.left, crop.top, crop.right, crop.bottom),
         sourceLang: _currentSourceLang(),
       );
+      // 🔴 P48 五轮：多边形块只认**轮廓内**的检测框。OCR 引擎没有"任意形状"
+      // 输入，仍按外接矩形裁剪；但结果按中心点是否落在画笔轮廓内过滤 ——
+      // 画笔圈得准，就不该把圈外的邻行字吃进来（"不规则框适配识图"）。
+      final poly = block.polygon;
+      final blocks = (poly != null && poly.length >= 3)
+          ? [
+              for (final b in detected)
+                if (pointInPolygon(
+                  poly,
+                  crop.left + (b.rect.left + b.rect.right) / 2,
+                  crop.top + (b.rect.top + b.rect.bottom) / 2,
+                ))
+                  b,
+            ]
+          : detected;
+      if (blocks.length != detected.length) {
+        Log.info(
+          'Studio Block',
+          'recognise polygon-filter kept=${blocks.length}/'
+          '${detected.length} vertices=${poly?.length}',
+        );
+      }
       final lines = StudioTranslateOps.splitLines(
         blocks.map((b) => b.text).join('\n'),
       );
@@ -547,8 +570,33 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       if (p.dy > maxY) maxY = p.dy;
     }
     final rect = Rect.fromLTRB(minX, minY, maxX, maxY);
+    // 🔴 P48 五轮：一笔**直线**拖拽围不出面积（点全共线），落出来的多边形
+    // 会退化成零宽的块 —— 用户的直觉动作就是"拖一个框"，得到的却是个坏块。
+    // 判据：多边形面积 / 外接框面积 < 0.12 时按矩形处理。
+    final bboxArea = rect.width * rect.height;
+    var twiceArea = 0.0;
+    for (var i = 0; i < points.length; i++) {
+      final a = points[i];
+      final b = points[(i + 1) % points.length];
+      twiceArea += a.dx * b.dy - b.dx * a.dy;
+    }
+    final area = twiceArea.abs() / 2;
+    if (bboxArea <= 0 || area / bboxArea < 0.12) {
+      _createBlockAt(rect);
+      return;
+    }
+    // 顶点抽稀：自由笔画可能采到几百个点，全塞进 JSON 既臃肿又没必要。
+    // 保端点、等距抽样到 ≤48 个，形状肉眼无损。
+    const maxPoints = 48;
+    final step = points.length <= maxPoints
+        ? 1
+        : (points.length / maxPoints).ceil();
+    final decimated = <Offset>[
+      for (var i = 0; i < points.length; i += step) points[i],
+      if ((points.length - 1) % step != 0) points.last,
+    ];
     _createBlockAt(rect, polygon: [
-      for (final p in points) [p.dx, p.dy],
+      for (final p in decimated) [p.dx, p.dy],
     ]);
   }
 
@@ -1938,6 +1986,13 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           : _colorOf(format.gradientEndColor),
       gradientAngle: format?.gradientAngle ?? 0,
       angle: block.angle,
+      // P48 · 自由画笔轮廓（源像素 → 画布实体）。有它画布才画多边形而不是
+      // 只画外接矩形；`polygon` 的写盘是零字节差安全的（默认不写）。
+      polygon: block.polygon == null
+          ? null
+          : [
+              for (final p in block.polygon!) Offset(p[0], p[1]),
+            ],
       ownerPageKey: ownerPageKey,
       // B-3/B-4：组装饰（nest 大框 / link 连线 / 序号）与建组点选高亮。
       groupId: tag?.groupId,
@@ -2516,7 +2571,19 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       }
       final rects = block.eraseRects;
       final poly = block.polygon;
-      final hasPoly = poly != null && poly.length >= 3;
+      // 🔴 P48 五轮：**选区 = 写入的硬边界**。
+      //
+      // 上下文（外扩 30%）只让算法"看懂"这块底下应该是什么，绝不允许它
+      // 顺手改掉邻居。之前的实现让水印的物体级掩膜自由长到上下文里，结果
+      // 第 7 页"修改范围多了一圈"、第 10 页"自动拉上方的白边" —— 两张截图
+      // 都是这条纪律被破坏的直接后果。多边形优先于矩形：不规则水印用画笔
+      // 圈出来才是精确范围。
+      final selection = selectionMaskOf(
+        width: original.width,
+        height: original.height,
+        rect: block.rect,
+        polygon: poly,
+      );
       Uint8List erasedMask;
       var maskSource = 'glyph';
       if (block.isWatermark) {
@@ -2544,15 +2611,8 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         );
         maskSource = 'glyph+residual(strokes=${glyph.strokes})';
       }
-      if (hasPoly) {
-        // 多边形是用户画的精确范围：只处理轮廓内的像素。
-        final polyMask = rasterizePolygon(
-          width: original.width,
-          height: original.height,
-          polygon: poly,
-        );
-        erasedMask = intersectPageMasks(erasedMask, polyMask);
-      }
+      // 收敛到选区：物体会长、字形会漏，但写回范围只有一个。
+      erasedMask = intersectPageMasks(erasedMask, selection);
       if (!maskHasAny(erasedMask)) {
         if (mounted) {
           context.showMessage(
@@ -2567,13 +2627,57 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         original.height,
         Uint8List.fromList(original.pixels),
       );
-      // 🔴 填色不再走 TextInpainter 的"最近邻 + 松弛"：水印/长条洞会被填成
-      // 放射性条纹。改用方向性插值（结构档）或叠加纹理合成（纹理档）。
-      final stats = repairRegionInPlace(
-        erased,
-        erasedMask,
-        quality: quality,
-      );
+
+      // ── 填色三种策略（用户明确要求的三档，按底图自动选） ─────────────
+      // 1) 擦除 + 底色填充：选区外是**平色**（黑底水印条 / 白气泡）→ 整片刷该色。
+      //    这是"全部涂黑"的唯一正确实现：插值与纹理合成都只会引入用户没要的东西。
+      // 2) 马赛克：见 [_mosaicSelectedBlock]（独立入口）。
+      // 3) 多边形 + AI 修复填充：底图有纹理（裙子、网点）→ 先用 ONNX LaMa，
+      //    没装模型才退回本地块级 patch 合成。
+      final flat = detectFlatBackground(original, block.rect);
+      Uint8List writeMask;
+      RepairStats stats;
+      var engine = 'local-${quality.name}';
+      if (flat != null) {
+        // 整片选区刷底色，而不是只刷"检测到的笔画" —— 用户要的是"擦干净"，
+        // 残留的半笔字正是"只刷笔画"造成的。
+        writeMask = selection;
+        stats = fillRegionWithColor(erased, writeMask, flat.rgb);
+        engine = 'solid${flat.hex}'
+            '(share=${flat.share.toStringAsFixed(2)} '
+            'edges=${flat.agreeingEdges} '
+            'dev=${flat.deviation.toStringAsFixed(1)})';
+      } else {
+        writeMask = erasedMask;
+        ModelInpaintResult? model;
+        if (quality == RepairQuality.texture && InpaintModel.isInstalled) {
+          model = await InpaintModel.inpaintRegion(
+            rgba: original.pixels,
+            width: original.width,
+            height: original.height,
+            regionMask: writeMask,
+          );
+        }
+        if (model != null) {
+          // 模型结果已是整页缓冲：直接替换，掩膜外的像素与原来逐字节相同
+          //（[InpaintModel.inpaintRegion] 的契约）。
+          erased.pixels.setAll(0, model.rgba);
+          stats = RepairStats(
+            filledPixels: model.regionPixels,
+            textured: true,
+            windowArea: model.regionPixels,
+          );
+          engine = 'onnx-lama(${model.elapsedMs}ms '
+              'crop=${model.crop.width}x${model.crop.height})';
+        } else {
+          stats = repairRegionInPlace(erased, writeMask, quality: quality);
+          if (quality == RepairQuality.texture) {
+            engine = InpaintModel.isInstalled
+                ? 'local-texture(model-failed)'
+                : 'local-texture(no-model)';
+          }
+        }
+      }
       if (stats.filledPixels == 0) {
         if (mounted) {
           context.showMessage(
@@ -2590,7 +2694,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           : null;
       final merged = mergeRepairedInpainted(
         erasedBlock: erased,
-        blockMask: erasedMask,
+        blockMask: writeMask,
         existingInpainted: existingInpainted,
       );
       if (merged == null) {
@@ -2613,7 +2717,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         }
       }
       final combinedMask = unionMasks(
-        added: erasedMask,
+        added: writeMask,
         existing: existingMask,
       );
 
@@ -2644,7 +2748,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       Log.info(
         'Translation Studio',
         'block repaired: page=$pageKey block=$_selectedBlock '
-        'quality=${quality.name} mask=$maskSource '
+        'quality=${quality.name} engine=$engine mask=$maskSource '
         'filled=${stats.filledPixels} textured=${stats.textured} '
         'hadExistingInpainted=${existingInpainted != null}',
       );
@@ -2760,17 +2864,20 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                 rect: block.rect,
               );
       } else {
-        dilated = buildRestorationMask(original, block.rect);
-        if (poly != null && poly.length >= 3) {
-          dilated = intersectPageMasks(
-            dilated,
-            rasterizePolygon(
-              width: original.width,
-              height: original.height,
-              polygon: poly,
-            ),
-          );
-        }
+        // 🔴 P48 五轮：纯色底那一路会把**整片选区**刷成底色，只按"字形外扩"
+        // 去盖回会漏掉选区里没有字的部分 —— 用户按【复原原图】会觉得"没复原
+        // 干净"。所以取「字形外扩 ∪ 选区」，再与 mask 记录取交：既盖回全部
+        // 被改像素，又绝不越界碰到邻块（mask 是"真的被改过"的唯一真相）。
+        final selection = selectionMaskOf(
+          width: original.width,
+          height: original.height,
+          rect: block.rect,
+          polygon: poly,
+        );
+        dilated = unionMasks(
+          added: buildRestorationMask(original, block.rect),
+          existing: selection,
+        );
       }
       final effective = intersectMasks(dilated, existingMask);
       if (!maskHasAny(effective)) {
@@ -2938,18 +3045,24 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
               )
             : object.mask;
       } else {
-        regionMask = (poly != null && poly.length >= 3)
-            ? rasterizePolygon(
-                width: original.width,
-                height: original.height,
-                polygon: poly,
-              )
-            : rasterizeRect(
-                width: original.width,
-                height: original.height,
-                rect: block.rect,
-              );
+        regionMask = selectionMaskOf(
+          width: original.width,
+          height: original.height,
+          rect: block.rect,
+          polygon: poly,
+        );
       }
+      // 🔴 P48 五轮：马赛克同样只能落在选区内。物体掩膜会长到上下文里，
+      // 不夹回来就会出现"外圈也被像素化了"的那一圈（第 7 页截图）。
+      regionMask = intersectPageMasks(
+        regionMask,
+        selectionMaskOf(
+          width: original.width,
+          height: original.height,
+          rect: block.rect,
+          polygon: poly,
+        ),
+      );
       // 向底色融合（0.75）：黑底读作近黑、裙子读作裙子色，只留一点纹理，
       // 不再是一块紫方块。经典"保留原色"的马赛克对水印没有意义。
       final changed = mosaicWithBackgroundInPlace(
@@ -5723,6 +5836,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         onAiFill: _blockOpBusy || _pageKeys.isEmpty
             ? null
             : () => _aiFillSelectedBlock(),
+        // P48 五轮：是否装了 ONNX LaMa 修复模型 —— 面板据此如实写"走模型"
+        // 还是"走本地算法"，不把经典插值吹成神经网络。
+        aiModelReady: InpaintModel.isInstalled,
         // 🔴 P48：水印面板的擦除（去水印）与马赛克。擦除与修图共用一条像素
         // 链路，只是水印块不要求译文。
         onErase: _blockOpBusy || _pageKeys.isEmpty

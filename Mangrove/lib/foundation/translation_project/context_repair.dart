@@ -82,11 +82,242 @@ class RepairStats {
     required this.filledPixels,
     required this.textured,
     required this.windowArea,
+    this.solid = false,
+    this.solidRgb = 0,
   });
 
   final int filledPixels;
   final bool textured;
   final int windowArea;
+
+  /// 纯色底直填（见 [detectFlatBackground]）：整片选区被填成一个单色，
+  /// 既没有插值也没有纹理合成。
+  final bool solid;
+
+  /// [solid] 为真时填入的颜色，`0xRRGGBB`。
+  final int solidRgb;
+}
+
+/// 纯色底判定结果。
+///
+/// 🔴 为什么要有这一步（P48 五轮的人工验收）：黑底上的水印，用"从四邻插值"
+/// 去补，会把上方的黑与下方的紫色头发混成一条**渐变**——用户原话"莫名其妙
+/// 出现了自动补充的效果，但根本不需要，这张类型的正确做法是全部涂黑"。白气泡
+/// 同理（补成白，不要拉上方的白边当参考后还留半笔字）。所以先判断"这块周围
+/// 到底是不是一个平色"，是就整片刷成那个颜色。
+class FlatBackground {
+  const FlatBackground({
+    required this.r,
+    required this.g,
+    required this.b,
+    required this.share,
+    required this.deviation,
+    this.agreeingEdges = 0,
+  });
+
+  final int r;
+  final int g;
+  final int b;
+
+  /// 主色在取样环带中的占比（0..1）。
+  final double share;
+
+  /// 环带相对主色的平均绝对偏差（单通道，0..255）。
+  final double deviation;
+
+  /// 四条边里有几条是"压倒性"主色（各自占比 ≥0.65），诊断用。
+  final int agreeingEdges;
+
+  int get rgb => (r << 16) | (g << 8) | b;
+
+  String get hex =>
+      '#${r.toRadixString(16).padLeft(2, '0')}'
+      '${g.toRadixString(16).padLeft(2, '0')}'
+      '${b.toRadixString(16).padLeft(2, '0')}';
+}
+
+/// 检测选区之外的一圈是否基本是**同一个平色**。
+///
+/// 取样环带 = 选区外接框外扩 [ringWidth]（0 = 按选区尺寸自适应 8..48px）的
+/// 那一圈，**只取环带、不取选区内部**：选区里就是待修的东西，把它的颜色当
+/// 背景会填出原色（上一轮 `k=2` 聚类留下的紫团就是这个错误）。
+///
+/// 判定两个条件同时成立才算平色：
+/// 1. 量化到 16 级/通道后，主色桶占比 ≥ [minShare]；
+/// 2. 环带相对主色的平均绝对偏差 ≤ [maxDeviation]（挡掉平滑渐变 —— 渐变会
+///    落在同一个桶里但偏差明显偏大）。
+FlatBackground? detectFlatBackground(
+  RgbaImage image,
+  IntRect rect, {
+  double minShare = 0.62,
+  double maxDeviation = 10.0,
+  int ringWidth = 0,
+}) {
+  final w = image.width;
+  final h = image.height;
+  // 🔴 取样框只认**块矩形**，不认多边形外接框。画笔轮廓常常比块框松
+  // （第 3 页的 lasso 外接框一直含到下方的紫色头发），拿它当取样框会把
+  // 头发算进"背景"，于是黑底横条反而不判平色、又被插值成渐变。
+  // 块矩形是用户明确划定的那个框，轮廓只用来限定**写入**范围。
+  final box = _clampRect(rect, w, h);
+  final bw = box.width;
+  final bh = box.height;
+  if (bw < 2 || bh < 2) return null;
+  final ring = ringWidth > 0
+      ? ringWidth
+      : math.max(8, math.min(48, (math.min(bw, bh) * 0.45).round()));
+  final outer = _clampRect(
+    IntRect(box.left - ring, box.top - ring, box.right + ring, box.bottom + ring),
+    w,
+    h,
+  );
+
+  final px = image.pixels;
+  final counts = <int, int>{};
+  // 四条边的分布分开统计：水印常贴在一条色带上（黑底横条 / 白气泡），
+  // 全局占比可能只有一半，但**三条边同色**已经足够说明"这块在一个平色里"。
+  final edgeCounts = List.generate(4, (_) => <int, int>{});
+  var total = 0;
+  for (var y = outer.top; y < outer.bottom; y++) {
+    for (var x = outer.left; x < outer.right; x++) {
+      if (x >= box.left && x < box.right && y >= box.top && y < box.bottom) {
+        continue;
+      }
+      final i = (y * w + x) * 4;
+      final key = ((px[i] >> 4) << 8) | ((px[i + 1] >> 4) << 4) | (px[i + 2] >> 4);
+      counts[key] = (counts[key] ?? 0) + 1;
+      total++;
+      // 0 = 上, 1 = 下, 2 = 左, 3 = 右。归类到离得最近的一条边。
+      final dTop = y - outer.top;
+      final dBottom = outer.bottom - 1 - y;
+      final dLeft = x - outer.left;
+      final dRight = outer.right - 1 - x;
+      final m = math.min(math.min(dTop, dBottom), math.min(dLeft, dRight));
+      final edge = (m == dTop)
+          ? 0
+          : (m == dBottom ? 1 : (m == dLeft ? 2 : 3));
+      edgeCounts[edge][key] = (edgeCounts[edge][key] ?? 0) + 1;
+    }
+  }
+  if (total < 48) return null;
+  var bestKey = 0;
+  var best = 0;
+  counts.forEach((key, value) {
+    if (value > best) {
+      best = value;
+      bestKey = key;
+    }
+  });
+  final share = best / total;
+  var agreeing = 0;
+  for (final edge in edgeCounts) {
+    var edgeKey = -1;
+    var edgeBest = 0;
+    var edgeTotal = 0;
+    edge.forEach((key, value) {
+      edgeTotal += value;
+      if (value > edgeBest) {
+        edgeBest = value;
+        edgeKey = key;
+      }
+    });
+    // 🔴 一条边要"表态"必须自己也是压倒性的（≥65%），不能只比别的颜色多
+    // 一点点。第 10 页那块水印右侧贴着页边留白、左侧是渐变闪粉：三条边的
+    // "多数色"都是白，但其中两条只有 30%~50% —— 按"计数 ≥3 就平色"会把
+    // 整块刷成白色（用户截图里那块突兀的白方块就是这么来的）。
+    if (edgeKey == bestKey && edgeTotal > 0 && edgeBest / edgeTotal >= 0.65) {
+      agreeing++;
+    }
+  }
+  // 要么整圈以主色为主，要么至少三条边都是主色 —— 后者才是"框贴在一条色带
+  // 上"的真实情形（第 3 页黑底横条：上/左/右黑、下方是紫色头发）。
+  if (share < minShare && agreeing < 3) return null;
+
+  // 主色桶的均色 + 偏差。
+  var sr = 0;
+  var sg = 0;
+  var sb = 0;
+  var n = 0;
+  for (var y = outer.top; y < outer.bottom; y++) {
+    for (var x = outer.left; x < outer.right; x++) {
+      if (x >= box.left && x < box.right && y >= box.top && y < box.bottom) {
+        continue;
+      }
+      final i = (y * w + x) * 4;
+      final key = ((px[i] >> 4) << 8) | ((px[i + 1] >> 4) << 4) | (px[i + 2] >> 4);
+      if (key != bestKey) continue;
+      sr += px[i];
+      sg += px[i + 1];
+      sb += px[i + 2];
+      n++;
+    }
+  }
+  if (n == 0) return null;
+  final mr = sr / n;
+  final mg = sg / n;
+  final mb = sb / n;
+  var dev = 0.0;
+  for (var y = outer.top; y < outer.bottom; y++) {
+    for (var x = outer.left; x < outer.right; x++) {
+      if (x >= box.left && x < box.right && y >= box.top && y < box.bottom) {
+        continue;
+      }
+      final i = (y * w + x) * 4;
+      final key = ((px[i] >> 4) << 8) | ((px[i + 1] >> 4) << 4) | (px[i + 2] >> 4);
+      if (key != bestKey) continue;
+      dev += ((px[i] - mr).abs() + (px[i + 1] - mg).abs() + (px[i + 2] - mb).abs()) /
+          3.0;
+    }
+  }
+  dev /= n;
+  if (dev > maxDeviation) return null;
+  return FlatBackground(
+    r: mr.round(),
+    g: mg.round(),
+    b: mb.round(),
+    share: share,
+    deviation: dev,
+    agreeingEdges: agreeing,
+  );
+}
+
+/// 把 [regionMask] 覆盖的像素整片刷成 [rgb]（纯色底专用）。
+///
+/// 与 [repairRegionInPlace] 的区别：**不读邻域、不做插值**。黑底水印就该
+/// 一整条黑，白气泡就该一整块白 —— 任何"聪明"的混合都只会引入用户没要求的
+/// 东西。
+RepairStats fillRegionWithColor(
+  RgbaImage image,
+  Uint8List regionMask,
+  int rgb,
+) {
+  final w = image.width;
+  final h = image.height;
+  if (regionMask.length != w * h) {
+    throw ArgumentError(
+      'mask size mismatch: ${regionMask.length} vs ${w * h}',
+    );
+  }
+  final r = (rgb >> 16) & 0xFF;
+  final g = (rgb >> 8) & 0xFF;
+  final b = rgb & 0xFF;
+  final px = image.pixels;
+  var filled = 0;
+  for (var i = 0; i < regionMask.length; i++) {
+    if (regionMask[i] == 0) continue;
+    final p = i * 4;
+    px[p] = r;
+    px[p + 1] = g;
+    px[p + 2] = b;
+    filled++;
+  }
+  return RepairStats(
+    filledPixels: filled,
+    textured: false,
+    windowArea: filled,
+    solid: true,
+    solidRgb: rgb,
+  );
 }
 
 // ── 窗口 / 几何 ────────────────────────────────────────────────────────────
@@ -906,11 +1137,22 @@ RepairStats repairRegionInPlace(
   if (count == 0) {
     return const RepairStats(filledPixels: 0, textured: false, windowArea: 0);
   }
+  // 🔴 窗口外扩量按档位分开：
+  // * 结构档只需要"四周一圈真像素"给射线起点，pad=3 就够（也保证老行为不变）；
+  // * 纹理档需要在窗口里找到**整块干净的 patch**当候选源。当写入区域=整片
+  //   选区时，pad=3 的环带连一个 8×8 的干净块都放不下 ⇒ `sources` 为空 ⇒
+  //   纹理档静默变成空操作（实测：纹理档与结构档的输出 PNG 字节完全相同）。
+  //   所以纹理档按选区尺寸外扩 35%（至少 24px）。
+  final bw = maxX - minX + 1;
+  final bh = maxY - minY + 1;
+  final pad = quality == RepairQuality.texture
+      ? math.max(24, (math.min(bw, bh) * 0.35).round())
+      : 3;
   final win = _windowOf(
     IntRect(minX, minY, maxX + 1, maxY + 1),
     w,
     h,
-    pad: 3,
+    pad: pad,
   );
   final n = win.w * win.h;
   final hole = Uint8List(n);

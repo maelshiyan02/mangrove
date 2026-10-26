@@ -197,6 +197,29 @@ abstract class TranslationModels {
   /// Machine-translation components in display order.
   static const machineTranslation = [mtNllb13b, mtNllb600m, mtOpusJaEn];
 
+  // -------------------------------------------------------------------------
+  // Image inpainting (P48). Not part of the text pipeline: this one erases
+  // artwork content (watermarks, lettering) and reconstructs the background.
+  // -------------------------------------------------------------------------
+
+  /// LaMa (Resolution-robust Large Mask Inpainting), fp32 ONNX (~208 MB).
+  ///
+  /// Inputs `image` `[1,3,512,512]` float32 RGB `0..1` and `mask`
+  /// `[1,1,512,512]` float32 `{0,1}`; output `[1,3,512,512]` RGB `0..255`.
+  /// Apache-2.0, exported from the official `advimman/lama` weights.
+  static const inpaintLama = ModelComponent(
+    id: 'inpaint_lama',
+    approxSizeBytes: 208044816,
+    files: [
+      ModelFile('inpaint.onnx', [
+        '{hf}/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx',
+      ]),
+    ],
+  );
+
+  /// Inpainting components in display order.
+  static const inpainting = [inpaintLama];
+
   static const all = [
     detector,
     ocrJa,
@@ -206,6 +229,7 @@ abstract class TranslationModels {
     mtNllb13b,
     mtNllb600m,
     mtOpusJaEn,
+    inpaintLama,
   ];
 
   static ModelComponent? find(String id) {

@@ -112,6 +112,81 @@ Uint8List rasterizeRect({
   return out;
 }
 
+/// 选区的**唯一真相**：写入的硬边界。
+///
+/// 🔴 P48 五轮：修图的写入范围必须**恰好等于用户画的那个范围**。此前的实现
+/// 让水印的物体级掩膜自由长到外扩 30% 的上下文里，结果"外圈被一起改了"、
+/// "上方白边被拉下来"（用户两张截图，第 7 / 10 页）。上下文只能**读**，
+/// 不能**写** —— 本函数产出的掩膜就是写入的硬边界。
+///
+/// ## 为什么多边形还要再和矩形取交集
+///
+/// 用户的原始诉求是两条，缺一不可：
+/// 1. "修图范围限制在画笔不规则框中" —— 所以**形状**听多边形的；
+/// 2. "修改的范围明显多了一圈……只要修框选范围内的部分" —— 所以**不得超过块框**。
+///
+/// 真实数据里这两条会打架：`003.webp` 那条手绘 lasso 有 196 个顶点，包围盒
+/// (372,415,224,108) 比水印块框 (389.5,437.1,585,487.4) 高出一圈，下缘压到
+/// 蓝色头发上。纯按多边形涂黑会把头发一起刷黑 —— 用户看到的就是"又多了
+/// 一圈"。取交集后既保留不规则形状，又钉死块框这条上界。
+///
+/// 唯一例外：交集为空（画笔整个画在块框外面）。这时说明用户是**有意**在框
+/// 外作业，退回纯多边形，否则会"点了没反应"。
+Uint8List selectionMaskOf({
+  required int width,
+  required int height,
+  required IntRect rect,
+  List<List<double>>? polygon,
+}) {
+  if (polygon != null && polygon.length >= 3) {
+    final mask = rasterizePolygon(
+      width: width,
+      height: height,
+      polygon: polygon,
+    );
+    var any = false;
+    for (final v in mask) {
+      if (v != 0) {
+        any = true;
+        break;
+      }
+    }
+    // 退化多边形（顶点共线、面积≈0）时栅格化结果为空 —— 这时退回矩形，
+    // 否则"点了没反应"。
+    if (!any) return rasterizeRect(width: width, height: height, rect: rect);
+
+    final box = rasterizeRect(width: width, height: height, rect: rect);
+    final clipped = Uint8List(mask.length);
+    var kept = 0;
+    for (var i = 0; i < mask.length; i++) {
+      if (mask[i] == 0 || box[i] == 0) continue;
+      clipped[i] = 255;
+      kept++;
+    }
+    // 交集为空 ⇒ 画笔整个画在块框外，说明用户是有意在框外作业。
+    return kept == 0 ? mask : clipped;
+  }
+  return rasterizeRect(width: width, height: height, rect: rect);
+}
+
+/// 点是否落在多边形内（射线法）。用于把 OCR 检测框过滤到画笔轮廓内。
+bool pointInPolygon(List<List<double>> polygon, double x, double y) {
+  final n = polygon.length;
+  if (n < 3) return false;
+  var inside = false;
+  for (var i = 0, j = n - 1; i < n; j = i++) {
+    final xi = polygon[i][0];
+    final yi = polygon[i][1];
+    final xj = polygon[j][0];
+    final yj = polygon[j][1];
+    if ((yi > y) != (yj > y)) {
+      final xInt = xi + (y - yi) / (yj - yi) * (xj - xi);
+      if (x < xInt) inside = !inside;
+    }
+  }
+  return inside;
+}
+
 /// 两张同尺寸整页掩膜取交（都为非零才保留）。
 Uint8List intersectPageMasks(Uint8List a, Uint8List b) {
   if (a.length != b.length) {

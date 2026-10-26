@@ -160,12 +160,21 @@ class CanvasTextBlock {
     this.groupOrdinal = -1,
     this.groupIsLink = false,
     this.picked = false,
+    this.polygon,
   });
 
   final int index;
 
   /// Block box in the **original** page resolution.
   final Rect rect;
+
+  /// P48 · 自由画笔圈出的轮廓（**源像素**顶点，≥3 个才有效）。
+  ///
+  /// 🔴 存在的意义：多边形块如果只画外接矩形，用户根本看不出自己画的是
+  /// 多边形 —— 人工验收的原话就是"多边形画笔还是只能生成矩形框"。凡是
+  /// 有轮廓的块，画布以轮廓为主体绘制，矩形退成淡辅助线（手柄仍按外接框
+  /// 摆放，因为缩放本来就是轴对齐的）。
+  final List<Offset>? polygon;
 
   final String translation;
   final String sourceText;
@@ -649,7 +658,12 @@ class PageCanvasPainter extends CustomPainter {
             ..color = const Color(0xFFFFB300),
         );
       }
-      if (showBoxes || selected) {
+      // P48 · 自由画笔块：先画轮廓。轮廓在就是"这块的形状"，矩形只是外接框。
+      final polyPath = _polygonPath(block);
+      if (polyPath != null) {
+        _paintPolygon(canvas, polyPath, block, selected);
+      }
+      if ((showBoxes || selected) && polyPath == null) {
         if (selected) {
           canvas.drawRect(
             rect,
@@ -908,6 +922,89 @@ class PageCanvasPainter extends CustomPainter {
     painter.paint(
       canvas,
       center - Offset(painter.width / 2, painter.height / 2),
+    );
+  }
+
+  /// P48 · 把块的自由画笔轮廓转成画布坐标路径（源像素 × fit）。
+  ///
+  /// 顶点少于 3 个、或坐标非法时返回 null —— 调用方退回矩形绘制，绝不
+  /// 画一个空路径（那会让块"看起来消失了"）。
+  Path? _polygonPath(CanvasTextBlock block) {
+    final poly = block.polygon;
+    if (poly == null || poly.length < 3) return null;
+    final path = Path();
+    var started = false;
+    for (final p in poly) {
+      if (!p.dx.isFinite || !p.dy.isFinite) return null;
+      final x = p.dx * fit;
+      final y = p.dy * fit;
+      if (!started) {
+        path.moveTo(x, y);
+        started = true;
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    if (!started) return null;
+    path.close();
+    return path;
+  }
+
+  /// 画自由画笔块：半透明填充 + 白晕描边 + （选中时）顶点圆点 + 淡外接矩形。
+  ///
+  /// 白晕 + 细线双层是画布既有的可读性纪律（矩形框同样这么做）：单色描边
+  /// 在深墨块或浅气泡上都会隐形。外接矩形只在外层淡化显示，因为 8 个缩放手柄
+  /// 仍然按外接框摆放，不给一点提示会让手柄"悬空"。
+  void _paintPolygon(
+    Canvas canvas,
+    Path path,
+    CanvasTextBlock block,
+    bool selected,
+  ) {
+    final tint = block.picked ? const Color(0xFFFFB300) : selection;
+    if (selected || block.picked) {
+      canvas.drawPath(
+        path,
+        Paint()..color = tint.withValues(alpha: 0.16),
+      );
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.2
+        ..color = const Color(0xFFFFFFFF),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6
+        ..color = (selected || block.picked) ? tint : const Color(0xFF000000),
+    );
+    if (!selected) return;
+    // 顶点圆点：让用户看清"我圈的是这些点"，也是后续顶点编辑的锚。
+    final poly = block.polygon!;
+    final dot = Paint()..color = tint;
+    final halo = Paint()..color = const Color(0xFFFFFFFF);
+    for (final p in poly) {
+      final c = Offset(p.dx * fit, p.dy * fit);
+      canvas.drawCircle(c, 3.4, halo);
+      canvas.drawCircle(c, 2.0, dot);
+    }
+    // 外接框：淡虚线，仅提示缩放范围，不冒充"这是矩形块"。
+    _paintDashedRect(
+      canvas,
+      Rect.fromLTRB(
+        block.rect.left * fit,
+        block.rect.top * fit,
+        block.rect.right * fit,
+        block.rect.bottom * fit,
+      ),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0
+        ..color = tint.withValues(alpha: 0.35),
     );
   }
 

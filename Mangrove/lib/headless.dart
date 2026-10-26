@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 import 'package:mangrove/utils/data_sync.dart';
 import 'package:mangrove/components/block_resize_geometry.dart';
@@ -24,6 +25,11 @@ import 'package:mangrove/foundation/translation_project/project_writer.dart';
 import 'package:mangrove/foundation/translation_project/rich_text_sync.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
 import 'package:mangrove/foundation/translation_project/text_block.dart';
+import 'package:mangrove/foundation/translation_project/context_repair.dart';
+import 'package:mangrove/foundation/translation_project/inpaint_model.dart';
+import 'package:mangrove/foundation/translation_project/polygon_mask.dart';
+import 'package:mangrove/foundation/translation_project/result_renderer.dart';
+import 'package:mangrove/foundation/image_translation/page_renderer.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/leave_guard.dart';
@@ -860,6 +866,148 @@ Future<void> runComixSpike(List<String> args, int commandIndex) async {
 /// trace. When the raw comic folder of a project was deleted, the studio list
 /// simply came up empty — indistinguishable from "the tab is broken". Any
 /// future silent drop should be caught here rather than by a user report.
+/// `inpaint-apply` —— 在**真实页图**上跑一次修复链路，用于肉眼与数值验收。
+///
+/// 这是 P48「修图三档」的可复现入口：它跟工作室里点【擦除水印】/【AI 修复
+/// 填充】走的是同一批函数（选区夹取 → 平色检测 → 直填 / ONNX LaMa / 本地
+/// 纹理），只是把结果写成一个 PNG 方便对照。
+///
+/// ```
+/// mangrove.exe headless inpaint-apply \
+///   --image page.png --rect x0,y0,x1,y1 \
+///   [--poly "x,y;x,y;x,y"] [--quality texture|structural] [--out out.png]
+/// ```
+Future<void> runInpaintApply(List<String> args, int commandIndex) async {
+  String? arg(String name) {
+    final i = args.indexOf(name);
+    return i != -1 && i + 1 < args.length ? args[i + 1] : null;
+  }
+
+  final imagePath = arg('--image');
+  final rectRaw = arg('--rect');
+  if (imagePath == null || rectRaw == null) {
+    cliPrint({
+      'status': 'error',
+      'message': 'usage: inpaint-apply --image <png> --rect x0,y0,x1,y1 '
+          '[--poly "x,y;x,y;x,y"] [--quality texture|structural] [--out x.png]',
+    });
+    exit(1);
+  }
+  final parts = rectRaw.split(',').map((v) => double.parse(v.trim())).toList();
+  if (parts.length != 4) {
+    cliPrint({'status': 'error', 'message': 'bad --rect'});
+    exit(1);
+  }
+  final rect = IntRect(
+    parts[0].round(),
+    parts[1].round(),
+    parts[2].round(),
+    parts[3].round(),
+  );
+  final polyRaw = arg('--poly');
+  List<List<double>>? polygon;
+  if (polyRaw != null && polyRaw.trim().isNotEmpty) {
+    final pts = <List<double>>[];
+    for (final pair in polyRaw.split(';')) {
+      final xy = pair.split(',');
+      if (xy.length < 2) continue;
+      pts.add([double.parse(xy[0].trim()), double.parse(xy[1].trim())]);
+    }
+    if (pts.length >= 3) polygon = pts;
+  }
+  final quality = arg('--quality') == 'texture'
+      ? RepairQuality.texture
+      : RepairQuality.structural;
+  final outPath = arg('--out') ??
+      '${Directory.current.path}/inpaint_${DateTime.now().millisecondsSinceEpoch}.png';
+
+  final file = File(imagePath);
+  if (!file.existsSync()) {
+    cliPrint({'status': 'error', 'message': 'image not found: $imagePath'});
+    exit(1);
+  }
+  final original = await decodeFullResolutionRgba(file);
+  if (original == null) {
+    cliPrint({'status': 'error', 'message': 'decode failed: $imagePath'});
+    exit(1);
+  }
+  final w = original.width;
+  final h = original.height;
+  final selection = selectionMaskOf(
+    width: w,
+    height: h,
+    rect: rect,
+    polygon: polygon,
+  );
+  final flat = detectFlatBackground(original, rect);
+
+  final img = RgbaImage(w, h, Uint8List.fromList(original.pixels));
+  String engine;
+  int written = 0;
+  if (flat != null) {
+    final stats = fillRegionWithColor(img, selection, flat.rgb);
+    written = stats.filledPixels;
+    engine = 'solid${flat.hex}(share=${flat.share.toStringAsFixed(2)} '
+        'edges=${flat.agreeingEdges} dev=${flat.deviation.toStringAsFixed(1)})';
+  } else {
+    ModelInpaintResult? model;
+    if (quality == RepairQuality.texture && InpaintModel.isInstalled) {
+      model = await InpaintModel.inpaintRegion(
+        rgba: original.pixels,
+        width: w,
+        height: h,
+        regionMask: selection,
+      );
+    }
+    if (model != null) {
+      img.pixels.setAll(0, model.rgba);
+      written = model.regionPixels;
+      engine = 'onnx-lama(${model.elapsedMs}ms '
+          'crop=${model.crop.width}x${model.crop.height})';
+    } else {
+      final stats = repairRegionInPlace(
+        img,
+        selection,
+        quality: quality,
+      );
+      written = stats.filledPixels;
+      engine = InpaintModel.isInstalled
+          ? 'local-${quality.name}(model-failed)'
+          : 'local-${quality.name}(no-model)';
+    }
+  }
+
+  // 选区外必须逐字节不变 —— 这条纪律在 GUI 里看不出来，只能靠数值证明。
+  var leaked = 0;
+  for (var i = 0; i < w * h; i++) {
+    if (selection[i] != 0) continue;
+    final p = i * 4;
+    if (img.pixels[p] != original.pixels[p] ||
+        img.pixels[p + 1] != original.pixels[p + 1] ||
+        img.pixels[p + 2] != original.pixels[p + 2]) {
+      leaked++;
+    }
+  }
+  final png = await renderTranslatedPage(
+    await file.readAsBytes(),
+    img,
+    const [],
+    mode: InpaintMode.smart,
+  );
+  await File(outPath).writeAsBytes(png);
+  cliPrint({
+    'status': 'done',
+    'message': 'inpaint applied',
+    'data': {
+      'engine': engine,
+      'selectionPixels': written,
+      'leakedOutsideSelection': leaked,
+      'modelInstalled': InpaintModel.isInstalled,
+      'out': outPath,
+    },
+  });
+}
+
 Future<void> runStudioScan(List<String> args, int commandIndex) async {
   final jsonIndex = args.indexOf('--json');
   final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
@@ -3434,6 +3582,8 @@ Future<void> runHeadlessMode(List<String> args) async {
       await runExportCheck(args, commandIndex);
     case 'studio-scan':
       await runStudioScan(args, commandIndex);
+    case 'inpaint-apply':
+      await runInpaintApply(args, commandIndex);
     case 'page-reconcile':
       await runPageReconcile(args, commandIndex);
     case 'download-check':

@@ -15,6 +15,7 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:mangrove/foundation/image_translation/inpaint.dart';
@@ -22,7 +23,9 @@ import 'package:mangrove/foundation/image_translation/translation_types.dart';
 import 'package:mangrove/foundation/translation_project/block_artifacts.dart';
 import 'package:mangrove/foundation/translation_project/context_repair.dart';
 import 'package:mangrove/foundation/translation_project/gray_png.dart';
+import 'package:mangrove/foundation/translation_project/inpaint_model.dart';
 import 'package:mangrove/foundation/translation_project/mask_producer.dart';
+import 'package:mangrove/foundation/translation_project/polygon_mask.dart';
 import 'package:mangrove/foundation/translation_project/studio_block_ops.dart';
 import 'package:mangrove/foundation/translation_project/text_block.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink, tlLiteralKeys;
@@ -91,6 +94,72 @@ class _Probe {
 }
 
 /// 在 [img] 上填一块纯色矩形（夹具用，含右下边界）。
+/// 确定性"彩色噪声"底图：给纹理档提供真实的高频结构（不用随机数，跑两次
+/// 结果一致，断言才可复现）。
+RgbaImage _noise(int w, int h) {
+  final px = Uint8List(w * h * 4);
+  var seed = 12345;
+  int next() {
+    seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF;
+    return seed;
+  }
+
+  for (var i = 0; i < w * h; i++) {
+    final r = 40 + next() % 180;
+    final g = 40 + next() % 180;
+    final b = 40 + next() % 180;
+    px[i * 4] = r;
+    px[i * 4 + 1] = g;
+    px[i * 4 + 2] = b;
+    px[i * 4 + 3] = 0xFF;
+  }
+  return RgbaImage(w, h, px);
+}
+
+/// 斜向条纹"布料"：模型有**方向性结构**可延续，才能证明它真的在做 inpainting，
+/// 而不是把邻域平均一下。纯平色底上任何算法都能"看起来对"，证明力为零。
+RgbaImage _stripes(int w, int h) {
+  final px = Uint8List(w * h * 4);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      final p = (y * w + x) * 4;
+      px[p] = (128 + 90 * math.sin((x + y) / 6.0)).round().clamp(0, 255);
+      px[p + 1] = (60 + 50 * math.sin((x + y) / 6.0)).round().clamp(0, 255);
+      px[p + 2] = (200 + 40 * math.cos((x - y) / 8.0)).round().clamp(0, 255);
+      px[p + 3] = 0xFF;
+    }
+  }
+  return RgbaImage(w, h, px);
+}
+
+/// 在 [img] 上刷一块纯白"水印"（就地修改）。
+void _paintBlob(RgbaImage img, int x0, int y0, int x1, int y1) {
+  for (var y = y0; y < y1; y++) {
+    for (var x = x0; x < x1; x++) {
+      final p = (y * img.width + x) * 4;
+      img.pixels[p] = 255;
+      img.pixels[p + 1] = 255;
+      img.pixels[p + 2] = 255;
+    }
+  }
+}
+
+/// [a] 与 [b] 在矩形内的平均逐通道绝对差（0..255）。
+double _meanAbsDiff(RgbaImage a, RgbaImage b, IntRect r) {
+  var sum = 0;
+  var n = 0;
+  for (var y = r.top; y < r.bottom; y++) {
+    for (var x = r.left; x < r.right; x++) {
+      final p = (y * a.width + x) * 4;
+      for (var c = 0; c < 3; c++) {
+        sum += (a.pixels[p + c] - b.pixels[p + c]).abs();
+        n++;
+      }
+    }
+  }
+  return n == 0 ? 0 : sum / n;
+}
+
 void _fillRect(RgbaImage img, int x0, int y0, int x1, int y1, int rgb) {
   for (var y = y0; y < y1; y++) {
     if (y < 0 || y >= img.height) continue;
@@ -1511,6 +1580,485 @@ Future<void> runP7Checks(
           img.pixels[i + 2] <= 40;
     },
     () => '绿=马赛克向黑底融合 / 故障=经典马赛克 ⇒ 仍是紫块',
+  );
+
+  // ── P48 五轮：写入范围纪律 / 纯色底直填 / 多边形真轮廓 ────────────────
+  //
+  // 人工验收的三条原始诉求：
+  //  ① "外圈被一起改了"（第 7 页）、"自动拉上方的白边"（第 10 页）
+  //     ⇒ 上下文只能读，写入必须夹在选区内；
+  //  ② "莫名其妙出现了自动补充的效果，但根本不需要，全部涂黑"（第 3 页）
+  //     ⇒ 平色底必须整片刷成该色，不许插值成渐变；
+  //  ③ "多边形画笔还是只能生成矩形框"
+  //     ⇒ 选区必须按顶点走，不能退化成外接矩形。
+  String clampDbg = '';
+  probe(
+    'repair.write_stays_inside_the_selection',
+    () async {
+      final f = _WatermarkFixture();
+      final w = f.image.width;
+      final h = f.image.height;
+      final original = RgbaImage(w, h, Uint8List.fromList(f.image.pixels));
+      final selection = selectionMaskOf(
+        width: w,
+        height: h,
+        rect: _WatermarkFixture.rect,
+      );
+      final object = buildWatermarkMask(original, _WatermarkFixture.rect);
+      final region = intersectPageMasks(object.mask, selection);
+      final flat = detectFlatBackground(original, _WatermarkFixture.rect);
+      final img = RgbaImage(w, h, Uint8List.fromList(f.image.pixels));
+      final stats = flat != null
+          ? fillRegionWithColor(img, selection, flat.rgb)
+          : repairRegionInPlace(img, region);
+      var leaked = 0;
+      for (var i = 0; i < w * h; i++) {
+        if (selection[i] != 0) continue;
+        final p = i * 4;
+        if (img.pixels[p] != original.pixels[p] ||
+            img.pixels[p + 1] != original.pixels[p + 1] ||
+            img.pixels[p + 2] != original.pixels[p + 2]) {
+          leaked++;
+        }
+      }
+      clampDbg = 'flat=${flat?.hex} leaked=$leaked '
+          'filled=${stats.filledPixels}';
+      return leaked == 0 && stats.filledPixels > 0;
+    },
+    () async {
+      // 故障：不夹选区（上一轮的实际实现）⇒ 物体掩膜长到框外，外圈被改。
+      final f = _WatermarkFixture();
+      final w = f.image.width;
+      final h = f.image.height;
+      final original = RgbaImage(w, h, Uint8List.fromList(f.image.pixels));
+      final selection = selectionMaskOf(
+        width: w,
+        height: h,
+        rect: _WatermarkFixture.rect,
+      );
+      final object = buildWatermarkMask(original, _WatermarkFixture.rect);
+      final img = RgbaImage(w, h, Uint8List.fromList(f.image.pixels));
+      repairRegionInPlace(img, object.mask);
+      var leaked = 0;
+      for (var i = 0; i < w * h; i++) {
+        if (selection[i] != 0) continue;
+        final p = i * 4;
+        if (img.pixels[p] != original.pixels[p] ||
+            img.pixels[p + 1] != original.pixels[p + 1] ||
+            img.pixels[p + 2] != original.pixels[p + 2]) {
+          leaked++;
+        }
+      }
+      // 注意语义：故障路径返回的是"绿判据是否仍然成立"。不夹选区必然有外泄
+      // ⇒ 返回 false ⇒ 变红。若这里返回 true，说明这条断言是装饰品。
+      return leaked == 0;
+    },
+    () => '绿=选区外零改动 / 故障=不夹选区 ⇒ 外圈像素被改 | $clampDbg',
+  );
+
+  probe(
+    'repair.flat_backdrop_is_filled_with_its_own_colour',
+    // 第 3 页的真实几何：黑色横带 + 下方紫色头发，水印条紧贴黑带下沿。
+    // 旧行为从下方插值 ⇒ 洞底被拉出一条黑→紫的渐变。
+    () async {
+      final img = _solid(240, 200, 0x000000);
+      _fillRect(img, 0, 120, 240, 200, 0x8A6AB0);
+      final box = IntRect(40, 96, 200, 120);
+      final flat = detectFlatBackground(img, box);
+      if (flat == null) return false;
+      final selection = selectionMaskOf(
+        width: 240,
+        height: 200,
+        rect: box,
+      );
+      final target = RgbaImage(240, 200, Uint8List.fromList(img.pixels));
+      fillRegionWithColor(target, selection, flat.rgb);
+      var offColour = 0;
+      for (var y = 96; y < 120; y++) {
+        for (var x = 40; x < 200; x++) {
+          final i = (y * 240 + x) * 4;
+          if (target.pixels[i] > 8 ||
+              target.pixels[i + 1] > 8 ||
+              target.pixels[i + 2] > 8) {
+            offColour++;
+          }
+        }
+      }
+      return offColour == 0;
+    },
+    () async {
+      // 故障：只插值不直填 ⇒ 贴底那几行被紫色拉出色偏。
+      final img = _solid(240, 200, 0x000000);
+      _fillRect(img, 0, 120, 240, 200, 0x8A6AB0);
+      final box = IntRect(40, 96, 200, 120);
+      final target = RgbaImage(240, 200, Uint8List.fromList(img.pixels));
+      repairRegionInPlace(
+        target,
+        selectionMaskOf(width: 240, height: 200, rect: box),
+      );
+      var tinted = 0;
+      for (var y = 112; y < 120; y++) {
+        for (var x = 40; x < 200; x++) {
+          final i = (y * 240 + x) * 4;
+          if (target.pixels[i + 2] > 60) tinted++;
+        }
+      }
+      // 故障路径返回"绿判据是否仍成立"：插值必然把紫色拉进来 ⇒ false ⇒ 变红。
+      return tinted == 0;
+    },
+    () => '绿=整片刷成黑底（零色偏）/ 故障=插值 ⇒ 洞底被紫色拉出渐变',
+  );
+
+  probe(
+    'repair.smooth_gradient_is_not_snapped_to_a_flat_colour',
+    // 反面守卫：别把"平色检测"做成"见谁都平"。角色衣物/网点是渐变，
+    // 一旦被刷成一块平色就是"纹理被抹平"（第 7 页的原症状）。
+    () async {
+      final img = _solid(200, 160, 0x000000);
+      for (var y = 0; y < 160; y++) {
+        for (var x = 0; x < 200; x++) {
+          final i = (y * 200 + x) * 4;
+          final v = (20 + x * 180 ~/ 199).clamp(0, 255);
+          img.pixels[i] = v ~/ 3;
+          img.pixels[i + 1] = v ~/ 2;
+          img.pixels[i + 2] = v;
+        }
+      }
+      final box = IntRect(60, 50, 140, 110);
+      final strict = detectFlatBackground(img, box);
+      final loose = detectFlatBackground(
+        img,
+        box,
+        minShare: 0.0,
+        maxDeviation: 1000,
+      );
+      return strict == null && loose != null;
+    },
+    () async {
+      // 故障：阈值不设限 ⇒ 渐变被当成平色（证明这条断言真的在挡事）。
+      final img = _solid(200, 160, 0x000000);
+      for (var y = 0; y < 160; y++) {
+        for (var x = 0; x < 200; x++) {
+          final i = (y * 200 + x) * 4;
+          final v = (20 + x * 180 ~/ 199).clamp(0, 255);
+          img.pixels[i] = v ~/ 3;
+          img.pixels[i + 1] = v ~/ 2;
+          img.pixels[i + 2] = v;
+        }
+      }
+      final flat = detectFlatBackground(
+        img,
+        IntRect(60, 50, 140, 110),
+        minShare: 0.0,
+        maxDeviation: 1000,
+      );
+      return flat == null;
+    },
+    () => '绿=渐变不被当成平色 / 故障=阈值不设限 ⇒ 渐变被判成平色',
+  );
+
+  probe(
+    'repair.weak_edge_plurality_does_not_make_a_flat_backdrop',
+    // 第 10 页水印的真实几何：块右/上贴着白色页边，左/下是渐变闪粉。三条边
+    // 的"多数色"都是白，但其中两条只有 30%~50% —— 只看"谁票数最高"会把整块
+    // 刷成白色（用户截图里那块突兀的白方块）。这里要求平色判定必须"有底气"。
+    () async {
+      final img = _solid(240, 160, 0xFFFFFF);
+      // 上半是白页边，下半是白→墨绿的水平渐变（颜色分散在很多桶里）。
+      for (var y = 40; y < 160; y++) {
+        for (var x = 0; x < 240; x++) {
+          final i = (y * 240 + x) * 4;
+          final t = x / 239.0;
+          img.pixels[i] = (255 * (1 - t) + 46 * t).round();
+          img.pixels[i + 1] = (255 * (1 - t) + 107 * t).round();
+          img.pixels[i + 2] = (255 * (1 - t) + 90 * t).round();
+        }
+      }
+      final flat = detectFlatBackground(img, IntRect(60, 60, 200, 120));
+      return flat == null;
+    },
+    () async {
+      // 故障：把"占比门槛"拆掉（minShare 0）⇒ 弱多数也被当成平色。
+      final img = _solid(240, 160, 0xFFFFFF);
+      for (var y = 40; y < 160; y++) {
+        for (var x = 0; x < 240; x++) {
+          final i = (y * 240 + x) * 4;
+          final t = x / 239.0;
+          img.pixels[i] = (255 * (1 - t) + 46 * t).round();
+          img.pixels[i + 1] = (255 * (1 - t) + 107 * t).round();
+          img.pixels[i + 2] = (255 * (1 - t) + 90 * t).round();
+        }
+      }
+      final flat = detectFlatBackground(
+        img,
+        IntRect(60, 60, 200, 120),
+        minShare: 0.0,
+      );
+      return flat == null;
+    },
+    () => '绿=弱多数不判平色（不刷白块）/ 故障=拆掉占比门槛 ⇒ 渐变被刷成白色',
+  );
+
+  probe(
+    'repair.texture_quality_actually_changes_pixels',
+    // 纹理档曾经是个**静默空操作**：写入区域=整片选区时，pad=3 的窗口里放不下
+    // 一个干净的 8×8 patch，候选源为空直接 return，输出与结构档逐字节相同。
+    // 用户看到的就是"AI 修复填充点了没反应"。
+    () async {
+      final img = _noise(200, 160);
+      final mask = selectionMaskOf(
+        width: 200,
+        height: 160,
+        rect: IntRect(50, 40, 150, 120),
+      );
+      final a = RgbaImage(200, 160, Uint8List.fromList(img.pixels));
+      final b = RgbaImage(200, 160, Uint8List.fromList(img.pixels));
+      repairRegionInPlace(a, mask, quality: RepairQuality.structural);
+      final stats = repairRegionInPlace(
+        b,
+        mask,
+        quality: RepairQuality.texture,
+      );
+      var diff = 0;
+      for (var i = 0; i < a.pixels.length; i++) {
+        if (a.pixels[i] != b.pixels[i]) diff++;
+      }
+      return stats.textured && diff > 0;
+    },
+    () async {
+      // 故障：洞超过纹理档上限（引擎主动放弃纹理）⇒ stats.textured=false，
+      // 也就是"点了 AI 修复填充但什么也没合成"。绿判据要求 textured=true，
+      // 这里返回 false ⇒ 变红。
+      final img = _noise(400, 400);
+      final mask = selectionMaskOf(
+        width: 400,
+        height: 400,
+        rect: IntRect(20, 20, 400, 380),
+      );
+      final b = RgbaImage(400, 400, Uint8List.fromList(img.pixels));
+      final stats = repairRegionInPlace(
+        b,
+        mask,
+        quality: RepairQuality.texture,
+      );
+      return stats.textured;
+    },
+    () => '绿=纹理档真的改写像素 / 故障=候选源为空 ⇒ 与结构档逐字节相同',
+  );
+
+  probe(
+    'selection_mask_follows_the_polygon_not_the_bounding_box',
+    () async {
+      final rect = IntRect(10, 10, 90, 90);
+      final tri = [
+        [10.0, 10.0],
+        [90.0, 10.0],
+        [10.0, 90.0],
+      ];
+      final mask = selectionMaskOf(
+        width: 100,
+        height: 100,
+        rect: rect,
+        polygon: tri,
+      );
+      // 直角三角形的外接框右上角 / 右下角在轮廓外，必须为 0。
+      final outsideTop = mask[14 * 100 + 88] == 0;
+      final outsideBottom = mask[88 * 100 + 14] == 0;
+      final inside = mask[12 * 100 + 12] != 0;
+      // 同一个轮廓也用来过滤 OCR 检测框，判点逻辑必须一致。
+      final hit = pointInPolygon(tri, 14, 14);
+      final miss = pointInPolygon(tri, 88, 88);
+      return outsideTop && outsideBottom && inside && hit && !miss;
+    },
+    () async {
+      // 故障：只按外接矩形（上一轮）⇒ 轮廓外被算进选区。
+      final mask = selectionMaskOf(
+        width: 100,
+        height: 100,
+        rect: IntRect(10, 10, 90, 90),
+      );
+      return mask[14 * 100 + 88] == 0;
+    },
+    () => '绿=三角形轮廓外不写入 / 故障=只用外接矩形 ⇒ 右上角被算进选区',
+  );
+
+  probe(
+    'selection_never_exceeds_the_block_box',
+    // 真实数据的实锤：`003.webp` 那条手绘 lasso（196 顶点）包围盒高 108px，
+    // 而水印块框只有 50px 高 —— 下缘压到蓝色头发上。纯按多边形涂黑，头发
+    // 会被一起刷黑，用户看到的就是"修图范围又多了一圈"。
+    // 规则：**形状**听多边形，**边界**钉死块框；交集为空才整条放行。
+    () async {
+      final lasso = [
+        [10.0, 10.0],
+        [90.0, 10.0],
+        [90.0, 90.0],
+        [10.0, 90.0],
+      ];
+      final mask = selectionMaskOf(
+        width: 100,
+        height: 100,
+        rect: IntRect(30, 30, 70, 70),
+        polygon: lasso,
+      );
+      final clippedOutside = mask[12 * 100 + 12] == 0;
+      final keptInside = mask[50 * 100 + 50] != 0;
+      // 例外：画笔完全落在块框外时不能变成"点了没反应"。
+      final far = selectionMaskOf(
+        width: 100,
+        height: 100,
+        rect: IntRect(2, 2, 8, 8),
+        polygon: lasso,
+      );
+      final farKept = far[50 * 100 + 50] != 0;
+      return clippedOutside && keptInside && farKept;
+    },
+    () async {
+      // 故障：只按多边形（上一轮）⇒ 轮廓伸出块框的部分照样被写入。
+      final mask = rasterizePolygon(
+        width: 100,
+        height: 100,
+        polygon: [
+          [10.0, 10.0],
+          [90.0, 10.0],
+          [90.0, 90.0],
+          [10.0, 90.0],
+        ],
+      );
+      return mask[12 * 100 + 12] == 0;
+    },
+    () => '绿=轮廓被块框裁掉·框外不写 / 故障=只按轮廓 ⇒ 框外也写',
+  );
+
+  probe(
+    'inpaint.model_is_optional_and_never_blocks_the_local_path',
+    // 模型是**可选增强**：没装时必须立刻回退本地算法，不能抛异常、不能把
+    // 修复按钮变成"点了报错"。面板文案也要按 isInstalled 如实区分。
+    () async {
+      final img = _solid(32, 32, 0xFFFFFF);
+      final mask = selectionMaskOf(
+        width: 32,
+        height: 32,
+        rect: IntRect(8, 8, 24, 24),
+      );
+      final res = await InpaintModel.inpaintRegion(
+        rgba: img.pixels,
+        width: 32,
+        height: 32,
+        regionMask: mask,
+      );
+      final behaves = InpaintModel.isInstalled ? res != null : res == null;
+      return behaves &&
+          codeHas(_panelPath, 'aiModelReady') &&
+          codeHas(_studioPath, 'InpaintModel.isInstalled');
+    },
+    () async {
+      // 故障：入口不判"模型缺失"（直接把 null 会话交给推理）⇒ 修复按钮抛错。
+      return !codeHas(
+        'lib/foundation/translation_project/inpaint_model.dart',
+        'if (!isInstalled) return null;',
+      );
+    },
+    () => '绿=缺模型静默回退 + 面板如实标注 / 故障=缺模型直接抛错',
+  );
+
+  probe(
+    'inpaint.tensor_layout_is_channel_planar',
+    // 🔴 P48 五轮最难查的一条：模型声明 `[1,3,512,512]`，ORT **严格按声明
+    // 顺序**消费那块扁平内存（CHW）。按 HWC 填 `(y*size+x)*3+c` 不会报错、
+    // 不会崩，只是把三个通道整体错位 —— 实测症状是「水印原样保留 + 整片
+    // 噪声块」，肉眼极容易误判成"模型质量差"。
+    () async {
+      const n = 512;
+      final plane = n * n;
+      final chwOk = inpaintImageIndex(0, 0, 0, n) == 0 &&
+          inpaintImageIndex(0, 0, 1, n) == 1 &&
+          inpaintImageIndex(0, 1, 0, n) == n &&
+          inpaintImageIndex(1, 0, 0, n) == plane &&
+          inpaintImageIndex(2, 0, 0, n) == 2 * plane;
+      // 生产代码必须**真的调用**这个函数（填与读各一次以上），否则断言只
+      // 测了一个没人用的工具函数。
+      final src =
+          code('lib/foundation/translation_project/inpaint_model.dart');
+      final used = 'inpaintImageIndex('.allMatches(src).length;
+      return chwOk && used >= 5;
+    },
+    () async {
+      // 故障路径：换成 HWC 公式，同一组探针必须挂。
+      const n = 512;
+      int hwc(int c, int y, int x) => (y * n + x) * 3 + c;
+      final plane = n * n;
+      return hwc(0, 0, 0) == 0 &&
+          hwc(0, 0, 1) == 1 &&
+          hwc(0, 1, 0) == n &&
+          hwc(1, 0, 0) == plane &&
+          hwc(2, 0, 0) == 2 * plane;
+    },
+    () => '绿=通道平面寻址（chw）/ 故障=按 HWC 寻址（同一组探针必挂）',
+  );
+
+  probe(
+    'inpaint.model_really_erases_what_the_mask_covers',
+    // 只验"模型可选/不阻塞"是不够的：那只能证明它不崩。这条直接量像素 ——
+    // 条纹布上刷一块纯白水印，掩膜盖住它，看模型能不能把条纹接回去。
+    // 判据是"与干净原图的差"降到水印态的 1/3 以下，所以没擦掉就不算过。
+    () async {
+      if (!InpaintModel.isInstalled) return true; // 本机已装，此分支不会走
+      const w = 96;
+      const h = 96;
+      final blob = IntRect(30, 30, 66, 66);
+      final clean = _stripes(w, h);
+      final dirty = _stripes(w, h);
+      _paintBlob(dirty, blob.left, blob.top, blob.right, blob.bottom);
+      final mask = selectionMaskOf(width: w, height: h, rect: blob);
+      final res = await InpaintModel.inpaintRegion(
+        rgba: dirty.pixels,
+        width: w,
+        height: h,
+        regionMask: mask,
+      );
+      if (res == null) return false;
+      final out = RgbaImage(w, h, res.rgba);
+      final before = _meanAbsDiff(dirty, clean, blob);
+      final after = _meanAbsDiff(out, clean, blob);
+      // 选区外必须逐字节不变。
+      var leaked = 0;
+      for (var i = 0; i < w * h; i++) {
+        if (mask[i] != 0) continue;
+        final p = i * 4;
+        if (out.pixels[p] != dirty.pixels[p] ||
+            out.pixels[p + 1] != dirty.pixels[p + 1] ||
+            out.pixels[p + 2] != dirty.pixels[p + 2]) {
+          leaked++;
+        }
+      }
+      return leaked == 0 && before > 25 && after < before / 3;
+    },
+    () async {
+      // 故障路径：掩膜故意**盖错位置**（盖左上角，水印在正中）⇒ 水印原样留下，
+      // after 与 before 同量级，判据必挂。这条能挂才说明它真在量"擦除"。
+      if (!InpaintModel.isInstalled) return false;
+      const w = 96;
+      const h = 96;
+      final blob = IntRect(30, 30, 66, 66);
+      final wrongMask = IntRect(2, 2, 14, 14);
+      final clean = _stripes(w, h);
+      final dirty = _stripes(w, h);
+      _paintBlob(dirty, blob.left, blob.top, blob.right, blob.bottom);
+      final mask = selectionMaskOf(width: w, height: h, rect: wrongMask);
+      final res = await InpaintModel.inpaintRegion(
+        rgba: dirty.pixels,
+        width: w,
+        height: h,
+        regionMask: mask,
+      );
+      if (res == null) return false;
+      final out = RgbaImage(w, h, res.rgba);
+      final before = _meanAbsDiff(dirty, clean, blob);
+      final after = _meanAbsDiff(out, clean, blob);
+      return before > 25 && after < before / 3;
+    },
+    () => '绿=掩膜对准水印⇒与原图差降到 1/3 以下 / 故障=掩膜盖错⇒判据必挂',
   );
 
   probe(
