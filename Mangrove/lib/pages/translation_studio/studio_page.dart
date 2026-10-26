@@ -38,6 +38,7 @@ import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/translation_project/artifact_reconciliation.dart';
 import 'package:mangrove/foundation/translation_project/block_artifacts.dart';
 import 'package:mangrove/foundation/translation_project/block_group.dart';
+import 'package:mangrove/foundation/translation_project/context_repair.dart';
 import 'package:mangrove/foundation/translation_project/cross_page_block.dart';
 import 'package:mangrove/foundation/translation_project/edit_command.dart';
 import 'package:mangrove/foundation/translation_project/finished_export.dart';
@@ -1282,6 +1283,10 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         for (var i = 0; i < blocks.length; i++) {
           cancel.throwIfCanceled();
           final block = blocks[i];
+          // 🔴 P48 四轮：水印块**不做识别**。水印的语义是"擦掉"，识别出
+          // "ROKARICOMICS.COM" 只会白白消耗 OCR 调用，还会把水印文字写进
+          // 批翻译的源文本（占 token、污染术语表）。
+          if (block.isWatermark) continue;
           if (block.sourceText.trim().isNotEmpty) continue;
           final crop = StudioBlockOps.cropWindow(
             block.xyxy,
@@ -1347,7 +1352,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           // 面板上的【翻译】是**单块**动作、不看这个标记，误标一次点击就能回来。
           // 🔴 水印块（管线第 0 步产物）即使被误标了文本也不进自动翻译批次：
           // 它的去处是抹字通道而非译文字段，进翻译只会白白消耗 token。
-          if (StudioSfxOps.isMarkedSfx(block) || block.kind == 'watermark') continue;
+          if (StudioSfxOps.isMarkedSfx(block) || block.isWatermark) continue;
           final source = block.sourceText.trim();
           if (source.isEmpty || block.hasTranslation) continue;
           targets.add(i);
@@ -2458,7 +2463,21 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   ///    也绝不对已抹底图重复 inpaint）；
   /// 4. 掩膜与现有 `mask/` 取并集；
   /// 5. 先写 mask + inpainted，再重画整页 result（本块译文出现、他块不丢）。
-  Future<void> _repairSelectedBlock() async {
+  Future<void> _repairSelectedBlock() =>
+      _repairSelectedBlockImpl(quality: RepairQuality.structural);
+
+  /// 单块【AI 修复填充】：同一条掩膜链路，填色换成**块级纹理合成**。
+  ///
+  /// 与 [RepairStats] 的结构档差别只在 `quality`：结构档适合纯色/渐变底
+  /// （黑底水印、白气泡），纹理档会从上下文环带里找最相似的 patch 覆盖回去，
+  /// 用于角色衣物、网点渐变这类有纹理的底。两条都作用于**所有类型**的块 ——
+  /// 对话/拟声词的抹字同样吃这套（第 10 页"还留着半个字"就是结构档不够）。
+  Future<void> _aiFillSelectedBlock() =>
+      _repairSelectedBlockImpl(quality: RepairQuality.texture);
+
+  Future<void> _repairSelectedBlockImpl({
+    required RepairQuality quality,
+  }) async {
     final project = _project;
     final pageKey = _selectedPageKey;
     final block = _currentBlock;
@@ -2496,9 +2515,45 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         return;
       }
       final rects = block.eraseRects;
-      // 字形级掩膜（255 = 本块要抹的笔画）。
-      final maskPage = buildMaskPage(original, rects);
-      if (maskPage.isEmpty) {
+      final poly = block.polygon;
+      final hasPoly = poly != null && poly.length >= 3;
+      Uint8List erasedMask;
+      var maskSource = 'glyph';
+      if (block.isWatermark) {
+        // 🔴 水印是**整体图形**（圆标 + 底盘 + 字），不是笔画集合。按字形掩膜
+        // 擦只会抹掉白字、把紫色底盘原样留在黑底上（第 3 页实测）。这里改用
+        // 物体级掩膜：外扩 30% 上下文窗口 → 预测底图 → 残差种子 → 聚类生长。
+        final object = buildWatermarkMask(original, block.rect, polygon: poly);
+        if (object.isEmpty) {
+          if (mounted) {
+            context.showMessage(message: 'Nothing to erase here.'.tl);
+          }
+          return;
+        }
+        erasedMask = object.mask;
+        maskSource = object.fallback
+            ? 'object-fallback(seeds=${object.seedPixels})'
+            : 'object(seeds=${object.seedPixels} px=${object.totalPixels})';
+      } else {
+        // 对话 / 拟声词：字形掩膜 ⊕ 残差补漏。Otsu 对低对比度、细描边、
+        // 半透明字会漏，漏掉的部分表现为"擦完还留着半个字"（第 10 页）。
+        final glyph = buildMaskPage(original, rects);
+        erasedMask = unionMasks(
+          added: buildResidualTextMask(original, rects),
+          existing: glyph.pixels,
+        );
+        maskSource = 'glyph+residual(strokes=${glyph.strokes})';
+      }
+      if (hasPoly) {
+        // 多边形是用户画的精确范围：只处理轮廓内的像素。
+        final polyMask = rasterizePolygon(
+          width: original.width,
+          height: original.height,
+          polygon: poly,
+        );
+        erasedMask = intersectPageMasks(erasedMask, polyMask);
+      }
+      if (!maskHasAny(erasedMask)) {
         if (mounted) {
           context.showMessage(
             message: 'No lettering detected inside this block.'.tl,
@@ -2506,38 +2561,26 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         }
         return;
       }
-      // 🔴 P48 阶段 3：多边形块按**轮廓**精确擦除 —— 把顶点栅格化成整页掩膜，
-      // 与字形掩膜取交，只抹轮廓内部真正有笔画的像素。矩形块（无 polygon）
-      // 保持原路径，字节级不变。
-      final poly = block.polygon;
-      final precise = poly != null && poly.length >= 3;
-      Uint8List erasedMask = maskPage.pixels;
-      if (poly != null && poly.length >= 3) {
-        final polyMask = rasterizePolygon(
-          width: original.width,
-          height: original.height,
-          polygon: poly,
-        );
-        erasedMask = intersectPageMasks(maskPage.pixels, polyMask);
-        if (!maskHasAny(erasedMask)) {
-          if (mounted) {
-            context.showMessage(
-              message: 'No lettering detected inside this block.'.tl,
-            );
-          }
-          return;
-        }
-      }
-      // 在原图**副本**上只擦这一块；块外像素与原图逐字节相同。
+      // 在原图**副本**上只修这一块；块外像素与原图逐字节相同。
       final erased = RgbaImage(
         original.width,
         original.height,
         Uint8List.fromList(original.pixels),
       );
-      if (precise) {
-        erasePageMaskInPlace(erased, erasedMask);
-      } else {
-        TextInpainter.erase(erased, rects);
+      // 🔴 填色不再走 TextInpainter 的"最近邻 + 松弛"：水印/长条洞会被填成
+      // 放射性条纹。改用方向性插值（结构档）或叠加纹理合成（纹理档）。
+      final stats = repairRegionInPlace(
+        erased,
+        erasedMask,
+        quality: quality,
+      );
+      if (stats.filledPixels == 0) {
+        if (mounted) {
+          context.showMessage(
+            message: 'No lettering detected inside this block.'.tl,
+          );
+        }
+        return;
       }
 
       final root = project.workspace;
@@ -2601,7 +2644,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       Log.info(
         'Translation Studio',
         'block repaired: page=$pageKey block=$_selectedBlock '
-        'strokes=${maskPage.strokes} hadExistingInpainted=${existingInpainted != null}',
+        'quality=${quality.name} mask=$maskSource '
+        'filled=${stats.filledPixels} textured=${stats.textured} '
+        'hadExistingInpainted=${existingInpainted != null}',
       );
       if (LocalManager().isInitialized) LocalManager().notifyListeners();
       if (!mounted) return;
@@ -2875,18 +2920,43 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
             );
 
       final poly = block.polygon;
-      final regionMask = (poly != null && poly.length >= 3)
-          ? rasterizePolygon(
-              width: original.width,
-              height: original.height,
-              polygon: poly,
-            )
-          : rasterizeRect(
-              width: original.width,
-              height: original.height,
-              rect: block.rect,
-            );
-      final changed = mosaicPageMaskInPlace(base, regionMask, blockSize: 12);
+      // 🔴 水印用**物体级**掩膜（把紫色底盘一并圈进来）。之前用矩形/多边形
+      // 直接盖，结果紫底被原样保留成一条紫杠 —— 用户实测的原话就是"马赛克
+      // 也还留着紫色"。普通块仍用轮廓/矩形（马赛克本来就是区域级操作）。
+      Uint8List regionMask;
+      if (block.isWatermark) {
+        final object = buildWatermarkMask(
+          original,
+          block.rect,
+          polygon: poly,
+        );
+        regionMask = object.isEmpty
+            ? rasterizeRect(
+                width: original.width,
+                height: original.height,
+                rect: block.rect,
+              )
+            : object.mask;
+      } else {
+        regionMask = (poly != null && poly.length >= 3)
+            ? rasterizePolygon(
+                width: original.width,
+                height: original.height,
+                polygon: poly,
+              )
+            : rasterizeRect(
+                width: original.width,
+                height: original.height,
+                rect: block.rect,
+              );
+      }
+      // 向底色融合（0.75）：黑底读作近黑、裙子读作裙子色，只留一点纹理，
+      // 不再是一块紫方块。经典"保留原色"的马赛克对水印没有意义。
+      final changed = mosaicWithBackgroundInPlace(
+        base,
+        regionMask,
+        blockSize: 12,
+      );
       if (changed == 0) {
         if (mounted) {
           context.showMessage(message: 'Nothing to erase here.'.tl);
@@ -5637,8 +5707,10 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         onRecognise: _blockOpBusy || _pageKeys.isEmpty
             ? null
             : () => _recogniseSelectedBlock(),
-        // 🔴 P48：拟声词块默认不译（保留原字），因此不显示【翻译】。
-        onTranslate: _blockOpBusy || _pageKeys.isEmpty || block.isOnomatopoeia
+        // 🔴 P48 四轮：拟声词**仍然需要翻译**（用户人工验收确认：不规则字形使
+        // 识别与翻译更难，但需求存在，留待后续单独做"异形字"通道）。这里不再
+        // 按类型隐藏【翻译】；只有水印块走专用面板、根本不存在翻译入口。
+        onTranslate: _blockOpBusy || _pageKeys.isEmpty
             ? null
             : () => _translateSelectedBlock(),
         // 🔴 2026-10-09 续：单块级修图 / 复原。禁用条件与识别/翻译相同（busy
@@ -5646,6 +5718,11 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         onRepair: _blockOpBusy || _pageKeys.isEmpty
             ? null
             : () => _repairSelectedBlock(),
+        // 🔴 P48 四轮：【AI 修复填充】对所有类型可用 —— 水印要它还原底图，
+        // 对话/拟声词也要它（结构档在纹理底上会留痕）。
+        onAiFill: _blockOpBusy || _pageKeys.isEmpty
+            ? null
+            : () => _aiFillSelectedBlock(),
         // 🔴 P48：水印面板的擦除（去水印）与马赛克。擦除与修图共用一条像素
         // 链路，只是水印块不要求译文。
         onErase: _blockOpBusy || _pageKeys.isEmpty

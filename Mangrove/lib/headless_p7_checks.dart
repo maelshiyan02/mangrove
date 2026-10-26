@@ -20,6 +20,7 @@ import 'dart:typed_data';
 import 'package:mangrove/foundation/image_translation/inpaint.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
 import 'package:mangrove/foundation/translation_project/block_artifacts.dart';
+import 'package:mangrove/foundation/translation_project/context_repair.dart';
 import 'package:mangrove/foundation/translation_project/gray_png.dart';
 import 'package:mangrove/foundation/translation_project/mask_producer.dart';
 import 'package:mangrove/foundation/translation_project/studio_block_ops.dart';
@@ -87,6 +88,58 @@ class _Probe {
   final Future<bool> Function() green;
   final Future<bool> Function() red;
   final String Function() detail;
+}
+
+/// 在 [img] 上填一块纯色矩形（夹具用，含右下边界）。
+void _fillRect(RgbaImage img, int x0, int y0, int x1, int y1, int rgb) {
+  for (var y = y0; y < y1; y++) {
+    if (y < 0 || y >= img.height) continue;
+    for (var x = x0; x < x1; x++) {
+      if (x < 0 || x >= img.width) continue;
+      final i = (y * img.width + x) * 4;
+      img.pixels[i] = (rgb >> 16) & 0xFF;
+      img.pixels[i + 1] = (rgb >> 8) & 0xFF;
+      img.pixels[i + 2] = rgb & 0xFF;
+      img.pixels[i + 3] = 0xFF;
+    }
+  }
+}
+
+/// 水印夹具：**黑底** + 紫色底盘（**比块框更大**）+ 浅紫圆标 + 三块白字。
+///
+/// 对应第 3 页的真实构图（黑色页面带 + ROKARICOMICS 紫色条 + 白字）。块框
+/// 刻意只覆盖底盘中间一块 —— 用户就是这么框的（怕伤到边缘）。
+class _WatermarkFixture {
+  _WatermarkFixture() : image = _solid(220, 140, 0x000000) {
+    _fillRect(image, 55, 50, 165, 92, plateRgb); // 紫色底盘（比 rect 大一圈）
+    _fillRect(image, 60, 58, 84, 82, 0x8A6AB0); // 圆形 logo（浅紫）
+    _fillRect(image, 92, 60, 114, 70, 0xFFFFFF); // 白字 1
+    _fillRect(image, 120, 60, 148, 70, 0xFFFFFF); // 白字 2
+    _fillRect(image, 92, 74, 152, 84, 0xFFFFFF); // 白字 3
+  }
+
+  final RgbaImage image;
+
+  /// 用户框选（在底盘内部，不含底盘外圈）。
+  static final IntRect rect = IntRect(70, 54, 154, 90);
+
+  /// 底盘的真实范围。
+  static final IntRect plate = IntRect(55, 50, 165, 92);
+
+  static const int plateRgb = 0x4A2A6A;
+}
+
+/// [r] 范围内掩膜非零像素的占比。
+double _maskCoverage(Uint8List mask, int w, IntRect r) {
+  var hit = 0;
+  var total = 0;
+  for (var y = r.top; y < r.bottom; y++) {
+    for (var x = r.left; x < r.right; x++) {
+      total++;
+      if (mask[y * w + x] != 0) hit++;
+    }
+  }
+  return total == 0 ? 0 : hit / total;
 }
 
 const _panelPath = 'lib/pages/translation_studio/studio_block_panel.dart';
@@ -1059,9 +1112,14 @@ Future<void> runP7Checks(
       if (start < 0 || end < 0) return false;
       if (!basesBeforeResult(studio.substring(start, end))) return false;
 
-      // (2) 块级四条路径（单块修图 / 单块复原 / B-5 跨页修图 / B-5 跨页复原）：
-      // 每次重画调用与上一次调用之间必须夹着一次 inpainted 落盘
-      //（=底图先写、result 后画），且一共四次调用。
+      // (2) 块级五条路径（单块修图 / 单块复原 / 单块马赛克 / B-5 跨页修图 /
+      // B-5 跨页复原）：每次重画调用与上一次调用之间必须夹着一次 inpainted
+      // 落盘（=底图先写、result 后画），且一共五次调用。
+      //
+      // 🔴 2026-10-26 修正：这里原先写死 `== 4`，而代码里早就是 5 处（马赛克
+      // 是后加的第 5 处）。也就是说这条断言在 P48 上一轮就已经**恒红**，只是
+      // 被当成"环境问题"跳过了 —— 断言写死计数时必须和落点一起改，否则它
+      // 从"守契约"退化成"永远报警"，最后谁都不看它。
       const call = 'await _rerenderResultPage(project, root, pageKey);';
       var from = 0;
       var calls = 0;
@@ -1075,7 +1133,7 @@ Future<void> runP7Checks(
         calls++;
         from = at + call.length;
       }
-      return calls == 4;
+      return calls == 5;
     },
     // 故障路径 = 合成的反序片段（result 在前、inpainted 在后），同一判据必须
     // 判它为 false —— 否则判据对"写反顺序"毫无分辨力。
@@ -1086,7 +1144,7 @@ Future<void> runP7Checks(
       final result = faulty.indexOf('ProjectArtifactKind.result');
       return bases > 0 && result > bases;
     },
-    () => '绿=三处落点都是 inpainted 先 / result 后 / 故障=反序片段也判通过',
+    () => '绿=五处落点都是 inpainted 先 / result 后 / 故障=反序片段也判通过',
   );
 
   probe(
@@ -1307,6 +1365,164 @@ Future<void> runP7Checks(
     () async =>
         codeHas(_panelPath, 'StudioSfxOps.isMarkedSfx(block)'),
     () => '绿=批量翻译那段认标记 / 故障=判据跑到单块按钮那边去了',
+  );
+
+  // ── P48 四轮：水印「物体级掩膜 + 上下文修复」 ──────────────────────────
+  //
+  // 🔴 夹具刻意做成「底盘比块框更大」：用户框水印时必然贴着水印本体框，底盘
+  // 往往露出一圈。若掩膜只覆盖框内，那一圈紫边就留在画面上 —— 这正是第 3 / 7
+  // 页人工验收看到的现象（黑底上一条紫杠、裙子上两个紫点）。
+  //
+  // 这一组的故障路径全部是**旧实现真的会做的事**（只框矩形 / 只抹白字 /
+  // 经典马赛克），不是"搜一个不存在的字符串"。
+
+  probe(
+    'watermark.object_mask_swallows_the_plate',
+    () async {
+      final f = _WatermarkFixture();
+      final res = buildWatermarkMask(f.image, _WatermarkFixture.rect);
+      final cover = _maskCoverage(
+        res.mask,
+        f.image.width,
+        _WatermarkFixture.plate,
+      );
+      // 框外的底盘也要吃掉（外扩生长的意义）；远处背景一个字都不许动。
+      final outside = res.mask[60 * f.image.width + 58] != 0;
+      final untouched = res.mask[12 * f.image.width + 12] == 0;
+      return cover >= 0.90 && outside && untouched && !res.fallback;
+    },
+    () async {
+      // 故障：退化成"只框矩形"（旧实现的思路）。
+      final f = _WatermarkFixture();
+      final w = f.image.width;
+      final mask = Uint8List(w * f.image.height);
+      final r = _WatermarkFixture.rect;
+      for (var y = r.top; y < r.bottom; y++) {
+        for (var x = r.left; x < r.right; x++) {
+          mask[y * w + x] = 255;
+        }
+      }
+      return _maskCoverage(mask, w, _WatermarkFixture.plate) >= 0.90;
+    },
+    () => '绿=物体掩膜吃掉整块底盘（含框外一圈）/ 故障=只框矩形 ⇒ 覆盖率约 0.57',
+  );
+
+  String eraseDbg = '';
+  probe(
+    'watermark.erase_turns_the_plate_into_background',
+    () async {
+      final f = _WatermarkFixture();
+      final w = f.image.width;
+      final res = buildWatermarkMask(f.image, _WatermarkFixture.rect);
+      final img = RgbaImage(
+        w,
+        f.image.height,
+        Uint8List.fromList(f.image.pixels),
+      );
+      final stats = repairRegionInPlace(img, res.mask);
+      bool dark(int x, int y) {
+        final i = (y * w + x) * 4;
+        return img.pixels[i] <= 26 &&
+            img.pixels[i + 1] <= 26 &&
+            img.pixels[i + 2] <= 26;
+      }
+
+      final maskCov = _maskCoverage(
+        res.mask,
+        w,
+        _WatermarkFixture.plate,
+      );
+      eraseDbg = 'cover=${maskCov.toStringAsFixed(2)} '
+          'px(58,60)=${img.pixels[(60 * w + 58) * 4]},'
+          '${img.pixels[(60 * w + 58) * 4 + 2]} '
+          'px(100,86)=${img.pixels[(86 * w + 100) * 4]},'
+          '${img.pixels[(86 * w + 100) * 4 + 2]} '
+          'px(160,70)=${img.pixels[(70 * w + 160) * 4]},'
+          '${img.pixels[(70 * w + 160) * 4 + 2]}';
+
+      // 四点：框外底盘、框内底盘、白字处、底盘下沿。
+      return stats.filledPixels > 0 &&
+          dark(58, 60) &&
+          dark(100, 86) &&
+          dark(100, 62) &&
+          dark(160, 70);
+    },
+    () async {
+      // 故障：只抹"白字"（旧的字形级掩膜）⇒ 底盘原样留紫。
+      final f = _WatermarkFixture();
+      final w = f.image.width;
+      final mask = Uint8List(w * f.image.height);
+      final px = f.image.pixels;
+      for (var y = 0; y < f.image.height; y++) {
+        for (var x = 0; x < w; x++) {
+          final i = (y * w + x) * 4;
+          if (px[i] == 255 && px[i + 1] == 255 && px[i + 2] == 255) {
+            mask[y * w + x] = 255;
+          }
+        }
+      }
+      final img = RgbaImage(w, f.image.height, Uint8List.fromList(px));
+      repairRegionInPlace(img, mask);
+      final i = (60 * w + 58) * 4;
+      return img.pixels[i] <= 26 &&
+          img.pixels[i + 1] <= 26 &&
+          img.pixels[i + 2] <= 26;
+    },
+    () => '绿=底盘被修成黑底 / 故障=只抹白字 ⇒ 紫底仍在 | $eraseDbg',
+  );
+
+  probe(
+    'watermark.mosaic_blends_into_the_background',
+    () async {
+      final f = _WatermarkFixture();
+      final w = f.image.width;
+      final res = buildWatermarkMask(f.image, _WatermarkFixture.rect);
+      final img = RgbaImage(
+        w,
+        f.image.height,
+        Uint8List.fromList(f.image.pixels),
+      );
+      final changed = mosaicWithBackgroundInPlace(img, res.mask, blockSize: 8);
+      final i = (70 * w + 160) * 4;
+      return changed > 0 &&
+          img.pixels[i] <= 40 &&
+          img.pixels[i + 1] <= 40 &&
+          img.pixels[i + 2] <= 40;
+    },
+    () async {
+      // 故障：经典马赛克（不向底色融合）⇒ 紫块原色还在（蓝通道 106）。
+      final f = _WatermarkFixture();
+      final w = f.image.width;
+      final res = buildWatermarkMask(f.image, _WatermarkFixture.rect);
+      final img = RgbaImage(
+        w,
+        f.image.height,
+        Uint8List.fromList(f.image.pixels),
+      );
+      mosaicWithBackgroundInPlace(
+        img,
+        res.mask,
+        blockSize: 8,
+        backgroundBlend: 0.0,
+      );
+      final i = (70 * w + 160) * 4;
+      return img.pixels[i] <= 40 &&
+          img.pixels[i + 1] <= 40 &&
+          img.pixels[i + 2] <= 40;
+    },
+    () => '绿=马赛克向黑底融合 / 故障=经典马赛克 ⇒ 仍是紫块',
+  );
+
+  probe(
+    'watermark.never_enters_ocr_or_translate_batches',
+    // 水印的语义是"擦掉"：识别出 ROKARICOMICS.COM 只会白花 OCR 调用，还会把
+    // 水印文字塞进批翻译（占 token、污染术语表）。
+    () async =>
+        codeHas(_studioPath, 'if (block.isWatermark) continue;') &&
+        codeHas(_studioPath, '|| block.isWatermark) continue;'),
+    // 故障：判据跑到面板文件（面板是单块人工动作，不该有水印跳过逻辑）。
+    () async => codeHas(_panelPath, 'if (block.isWatermark) continue;'),
+    () => '绿=识别与翻译批次都跳过水印 / 故障=判据漏到面板文件',
   );
 
   // ── 跑 ──────────────────────────────────────────────────────────────

@@ -48,6 +48,7 @@ class StudioBlockPanel extends StatefulWidget {
     this.onKindChanged,
     this.onErase,
     this.onMosaic,
+    this.onAiFill,
     this.busy = false,
   });
 
@@ -70,8 +71,14 @@ class StudioBlockPanel extends StatefulWidget {
   /// 水印【去水印/擦除】：按精确轮廓抹掉水印并修复底色（**无需译文**）。
   final Future<void> Function()? onErase;
 
-  /// 水印【马赛克】：把块区域像素化（不擦除，只破坏字迹可读性）。
+  /// 水印【马赛克】：把块区域像素化并向底图颜色融合（不擦除，只破坏可读性）。
   final Future<void> Function()? onMosaic;
+
+  /// 【AI 修复填充】—— 掩膜不变，填色换成**块级纹理合成**。
+  ///
+  /// 🔴 对**所有类型**可用，不只是水印：结构档填色在纯色/渐变底上够用，但在
+  /// 角色衣物、网点渐变这类纹理底上会留下"抹平的色块"，必须靠纹理档补。
+  final Future<void> Function()? onAiFill;
 
   /// 【识别】—— re-run OCR on this block's own box (S-N1).
   ///
@@ -275,6 +282,15 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
                 tooltip: 'Repair this block'.tl,
                 busy: widget.busy,
                 onPressed: widget.onRepair!,
+              ),
+            // P48 四轮：纹理档填色。对话/拟声词的抹字同样需要它 —— 结构档在
+            // 有纹理的底（衣物、网点）上会留一块"抹平的色块"。
+            if (widget.onAiFill != null)
+              _ActionButton(
+                icon: Icons.auto_awesome,
+                tooltip: 'AI fill this block (texture)'.tl,
+                busy: widget.busy,
+                onPressed: widget.onAiFill!,
               ),
             if (widget.onRepair != null && widget.onRestoreOriginal != null)
               const SizedBox(width: 4),
@@ -656,22 +672,24 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
           _watermarkAction(
             icon: Icons.cleaning_services_outlined,
             label: 'Erase watermark',
-            subtitle: 'Erase the watermark and fill the background',
+            subtitle:
+                'Object-level mask: erases the plate and the letters, then rebuilds the background',
             onPressed: widget.onErase!,
+          ),
+        if (widget.onAiFill != null)
+          _watermarkAction(
+            icon: Icons.auto_awesome,
+            label: 'AI fill (texture)',
+            subtitle:
+                'Texture synthesis from the 30% context ring — for textured artwork',
+            onPressed: widget.onAiFill!,
           ),
         if (widget.onMosaic != null)
           _watermarkAction(
             icon: Icons.blur_on,
-            label: 'Mosaic',
-            subtitle: 'Pixelate this region (mosaic)',
+            label: 'Mosaic (blends into background)',
+            subtitle: 'Pixelate the watermark toward the colours underneath',
             onPressed: widget.onMosaic!,
-          ),
-        if (widget.onRepair != null)
-          _watermarkAction(
-            icon: Icons.auto_fix_high,
-            label: 'AI fill (inpaint)',
-            subtitle: 'AI inpaint the erased area',
-            onPressed: widget.onRepair!,
           ),
         if (widget.onRestoreOriginal != null)
           _watermarkAction(
