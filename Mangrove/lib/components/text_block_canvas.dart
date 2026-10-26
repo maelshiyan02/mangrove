@@ -162,6 +162,7 @@ class CanvasTextBlock {
     this.picked = false,
     this.polygon,
     this.kind = 'dialogue',
+    this.shape = 'rect',
   });
 
   final int index;
@@ -184,6 +185,16 @@ class CanvasTextBlock {
   /// 水印和对话框长得一样、拟声词和物体文字也长得一样时，一页上十几个块
   /// 谁是谁只能靠点开面板看 —— 配色是唯一不占空间的区分手段。
   final String kind;
+
+  /// 几何形状：`rect`（矩形）或 `ellipse`（圆/椭圆）。
+  ///
+  /// 🔴 与 [polygon] 的关系：多边形优先 —— 有轮廓就画轮廓（不可缩放），
+  /// 没有轮廓时按本字段画椭圆或矩形。椭圆由 [rect] 外接框决定，宽≠高即椭圆，
+  /// 因此 8 个缩放手柄天然可用（这正是用户要的"可以上下左右调整高度和宽度"）。
+  final String shape;
+
+  /// 是否为椭圆块。
+  bool get isEllipse => shape == 'ellipse';
 
   final String translation;
   final String sourceText;
@@ -310,6 +321,12 @@ class CanvasTextBlock {
     groupOrdinal: groupOrdinal,
     groupIsLink: groupIsLink,
     picked: picked,
+    // 🔴 P48 七轮补齐：这三个字段以前**没被复制**，于是"拖块时的实时预览"
+    // 会整块退化 —— 多边形块变回外接矩形、类型色掉回默认蓝、椭圆变矩形。
+    // 松手后模型没变所以看不出来，但拖拽过程中的画面一直是错的。
+    polygon: polygon,
+    kind: kind,
+    shape: shape,
   );
 
   /// 🔴 **Value equality, and it exists for one reason: repair cost.**
@@ -364,7 +381,23 @@ class CanvasTextBlock {
         other.groupId == groupId &&
         other.groupOrdinal == groupOrdinal &&
         other.groupIsLink == groupIsLink &&
-        other.picked == picked;
+        other.picked == picked &&
+        // 🔴 P48 七轮：`kind` / `shape` / `polygon` 都必须参与判等。
+        // 在此之前它们被漏掉了，于是"把块改成椭圆""换成水印色"这类**纯外观**
+        // 修改不会触发重绘 —— 面板值变了、画布还是旧的，只能靠翻页骗一次重绘。
+        other.kind == kind &&
+        other.shape == shape &&
+        _samePolygon(other.polygon, polygon);
+  }
+
+  /// [Offset] 列表逐项比较（`polygon` 是可变引用，不能比身份）。
+  static bool _samePolygon(List<Offset>? a, List<Offset>? b) {
+    if (a == null || b == null) return a == b;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   @override
@@ -396,6 +429,8 @@ class CanvasTextBlock {
     groupOrdinal,
     groupIsLink,
     picked,
+    kind,
+    shape,
   ]);
 }
 
@@ -669,10 +704,17 @@ class PageCanvasPainter extends CustomPainter {
       }
       // P48 · 自由画笔块：先画轮廓。轮廓在就是"这块的形状"，矩形只是外接框。
       final polyPath = _polygonPath(block);
+      // P48 七轮 · 第三种形状：椭圆/圆。有多边形时多边形优先（轮廓就是形状，
+      // 且不可缩放）；没有轮廓时按外接框画椭圆，宽≠高即椭圆。
+      final ellipse = polyPath == null && block.isEllipse;
       if (polyPath != null) {
         _paintPolygon(canvas, polyPath, block, selected);
+      } else if (ellipse) {
+        if (showBoxes || selected || block.picked) {
+          _paintEllipse(canvas, rect, block, selected);
+        }
       }
-      if ((showBoxes || selected) && polyPath == null) {
+      if ((showBoxes || selected) && polyPath == null && !ellipse) {
         if (selected) {
           // 选中 = 同色加粗 + 更宽白晕。颜色仍按**类型**走，只靠粗细表达
           // "选中"：换成统一的青色会让"这块是水印还是对话框"重新变得不可辨。
@@ -732,7 +774,8 @@ class PageCanvasPainter extends CustomPainter {
           );
         }
       }
-      _paintText(canvas, block, rect, selected);
+      _paintText(canvas, block, ellipse ? _inscribedRect(rect) : rect, selected,
+          boxScale: ellipse ? _ellipseInset : 1.0);
       // 🔴 Handles are drawn from `paint` rather than inside `_paintText`: that
       // method returns early for empty text, so a freshly created (still empty)
       // block would have shown no handles at all — precisely the block the user
@@ -742,6 +785,9 @@ class PageCanvasPainter extends CustomPainter {
       // 动只会让"轮廓"和"外接框"变成两套互相矛盾的尺寸（人工验收原话：
       // "多边形是不需要再多一层外面的矩形框的，因为无法改变大小和形状，
       // 我们创造的是不规则形状"）。整块拖动移动仍然有效。
+      //
+      // 🔴 椭圆块**要**手柄：用户明确要求"圆形文字块是需要外围再有一圈矩形框
+      // 用于大小调节的"，所以它的外接框（虚线）既是提示也是缩放入口。
       if (selected && showResizeHandles && polyPath == null) {
         _paintHandles(canvas, rect);
       }
@@ -1039,6 +1085,74 @@ class PageCanvasPainter extends CustomPainter {
     }
   }
 
+  /// 椭圆块的内接矩形比例：`1/√2 ≈ 0.7071`。
+  ///
+  /// 🔴 椭圆里能放下的**最大面积矩形**就是宽高各乘 1/√2。文字若不收进这个
+  /// 内接矩形，长句会顶到椭圆边缘之外 —— 视觉上像是"字跑到气泡外面去了"，
+  /// 而它其实只是按外接框排的版。
+  static const double _ellipseInset = 0.7071067811865476;
+
+  static Rect _inscribedRect(Rect rect) => Rect.fromCenter(
+    center: rect.center,
+    width: rect.width * _ellipseInset,
+    height: rect.height * _ellipseInset,
+  );
+
+  /// 画椭圆块（第三种形状）。
+  ///
+  /// 描边纪律与矩形/多边形完全一致：白晕 + 类型色双层，选中只靠**更粗**表达
+  /// （颜色始终属于块类型，不能因为选中就变青，否则"这是水印还是对话框"又
+  /// 重新变得不可辨）。
+  ///
+  /// 🔴 选中时额外画一圈**虚线外接矩形** —— 这是用户明确要求的区分手段：
+  /// "相比于矩形文字块，圆形文字块外围的这圈矩形框应该用虚线表示，这些可以
+  /// 更好的区分。" 它同时是"这块能拖大小"的可见承诺（8 个手柄就摆在这条
+  /// 虚线上）。未选中时不画：一页十几个椭圆块都挂虚线框会变成噪声。
+  void _paintEllipse(
+    Canvas canvas,
+    Rect rect,
+    CanvasTextBlock block,
+    bool selected,
+  ) {
+    if (!rect.isFinite || rect.isEmpty) return;
+    final kindColor = _kindColor(block.kind);
+    final tint = block.picked ? const Color(0xFFFFB300) : kindColor;
+    if (selected || block.picked) {
+      canvas.drawOval(rect, Paint()..color = tint.withValues(alpha: 0.16));
+    }
+    canvas.drawOval(
+      rect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = selected ? 4.4 : 3.2
+        ..color = const Color(0xFFFFFFFF),
+    );
+    canvas.drawOval(
+      rect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = selected ? 2.4 : 1.6
+        ..color = tint,
+    );
+    if (!selected) return;
+    _paintDashedRect(
+      canvas,
+      rect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0
+        ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.85),
+    );
+    _paintDashedRect(
+      canvas,
+      rect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..color = tint,
+    );
+  }
+
   /// Eight square handles: four corners plus four edge midpoints.
   void _paintHandles(Canvas canvas, Rect rect) {
     final fill = Paint()..color = selection;
@@ -1087,7 +1201,13 @@ class PageCanvasPainter extends CustomPainter {
     }
   }
 
-  void _paintText(Canvas canvas, CanvasTextBlock block, Rect rect, bool selected) {
+  void _paintText(
+    Canvas canvas,
+    CanvasTextBlock block,
+    Rect rect,
+    bool selected, {
+    double boxScale = 1.0,
+  }) {
     final text = block.displayText;
     if (text.isEmpty) return;
     // P33：默认值与 result 出图统一（原来是 1.15，成品侧是 1.2）。
@@ -1153,8 +1273,11 @@ class PageCanvasPainter extends CustomPainter {
     // the canvas's own ellipsis, not the translation).
     final fitted = _fitFontSize(
       text: text,
-      boxWidth: block.rect.width,
-      boxHeight: block.rect.height,
+      // 🔴 椭圆块要按**内接矩形**量尺寸（[boxScale] < 1），否则字号是按外接框
+      // 算的，字会超出椭圆边界。源像素与画布两侧同乘这个系数，字号判据与
+      // 出图规则保持同一套。
+      boxWidth: block.rect.width * boxScale,
+      boxHeight: block.rect.height * boxScale,
       lineHeight: block.lineHeight,
       maxFontSize: block.hasFormat && block.fontSize > 0 ? block.fontSize : null,
       build: build,

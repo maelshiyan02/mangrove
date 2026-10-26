@@ -13,6 +13,7 @@
 /// 掩膜极性沿用全项目的约定：**255 = 需要处理，0 = 保留**。
 library;
 
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:mangrove/foundation/image_translation/inpaint.dart';
@@ -112,6 +113,59 @@ Uint8List rasterizeRect({
   return out;
 }
 
+/// 把**椭圆**栅格化成整页掩膜（第三种形状：圆/椭圆文字块）。
+///
+/// 椭圆由 [rect] 的**外接框**唯一决定：宽 = 高时是圆，宽 ≠ 高时是椭圆。判据用
+/// 归一化距离 `dx²/rx² + dy²/ry² ≤ 1`（像素中心取样），不做抗锯齿 —— 掩膜是
+/// 二值写入边界，半覆盖像素按"中心在内即处理"归属，与 [rasterizePolygon] 的
+/// 扫描线口径一致。
+///
+/// 🔴 为什么不能拿外接矩形顶替：椭圆块的四个角在框内、但**不属于这块文字**。
+/// 按矩形擦会把气泡外的画格线、其他块的笔画一起抹掉 —— 这正是用户当初要
+/// 多边形精确擦除的同一个理由。
+Uint8List rasterizeEllipse({
+  required int width,
+  required int height,
+  required IntRect rect,
+}) {
+  final out = Uint8List(width * height);
+  if (width <= 0 || height <= 0) return out;
+  final rx = rect.width / 2.0;
+  final ry = rect.height / 2.0;
+  if (rx <= 0 || ry <= 0) return out;
+  final cx = rect.left + rx;
+  final cy = rect.top + ry;
+  final invRx = 1.0 / (rx * rx);
+  final invRy = 1.0 / (ry * ry);
+
+  var y0 = rect.top;
+  var y1 = rect.bottom;
+  var x0 = rect.left;
+  var x1 = rect.right;
+  if (y0 < 0) y0 = 0;
+  if (x0 < 0) x0 = 0;
+  if (y1 > height) y1 = height;
+  if (x1 > width) x1 = width;
+
+  for (var y = y0; y < y1; y++) {
+    final dy = (y + 0.5) - cy;
+    final fy = dy * dy * invRy;
+    if (fy > 1.0) continue;
+    final row = y * width;
+    // 每行解析求 |dx| 上限，避免整框逐像素乘除；再按像素中心判归属。
+    final dxMax = math.sqrt((1.0 - fy) / invRx);
+    var start = (cx - dxMax).floor();
+    var end = (cx + dxMax).ceil();
+    if (start < x0) start = x0;
+    if (end > x1) end = x1;
+    for (var x = start; x < end; x++) {
+      final dx = (x + 0.5) - cx;
+      if (dx * dx * invRx + fy <= 1.0) out[row + x] = 255;
+    }
+  }
+  return out;
+}
+
 /// 选区的**唯一真相**：写入的硬边界。
 ///
 /// 🔴 P48 五轮：修图的写入范围必须**恰好等于用户画的那个范围**。此前的实现
@@ -132,12 +186,19 @@ Uint8List rasterizeRect({
 ///
 /// 唯一例外：交集为空（画笔整个画在块框外面）。这时说明用户是**有意**在框
 /// 外作业，退回纯多边形，否则会"点了没反应"。
+/// [ellipse] 为真时（第三种形状：圆/椭圆块），没有多边形就以**椭圆**而不是
+/// 外接矩形作为选区 —— 矩形会把框内四角属于邻居的像素一起写掉。
 Uint8List selectionMaskOf({
   required int width,
   required int height,
   required IntRect rect,
   List<List<double>>? polygon,
+  bool ellipse = false,
 }) {
+  Uint8List boxMask() => ellipse
+      ? rasterizeEllipse(width: width, height: height, rect: rect)
+      : rasterizeRect(width: width, height: height, rect: rect);
+
   if (polygon != null && polygon.length >= 3) {
     final mask = rasterizePolygon(
       width: width,
@@ -151,11 +212,11 @@ Uint8List selectionMaskOf({
         break;
       }
     }
-    // 退化多边形（顶点共线、面积≈0）时栅格化结果为空 —— 这时退回矩形，
+    // 退化多边形（顶点共线、面积≈0）时栅格化结果为空 —— 这时退回块框，
     // 否则"点了没反应"。
-    if (!any) return rasterizeRect(width: width, height: height, rect: rect);
+    if (!any) return boxMask();
 
-    final box = rasterizeRect(width: width, height: height, rect: rect);
+    final box = boxMask();
     final clipped = Uint8List(mask.length);
     var kept = 0;
     for (var i = 0; i < mask.length; i++) {
@@ -166,7 +227,7 @@ Uint8List selectionMaskOf({
     // 交集为空 ⇒ 画笔整个画在块框外，说明用户是有意在框外作业。
     return kept == 0 ? mask : clipped;
   }
-  return rasterizeRect(width: width, height: height, rect: rect);
+  return boxMask();
 }
 
 /// 点是否落在多边形内（射线法）。用于把 OCR 检测框过滤到画笔轮廓内。

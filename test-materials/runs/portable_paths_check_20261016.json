@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "command": "portable-paths-check",
+  "passed": true,
+  "checks": [
+    {
+      "name": "probe: implicit signature from deployed exe (2 levels up)",
+      "passed": true,
+      "detail": "found=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_portablea3a7ee3e/project"
+    },
+    {
+      "name": "probe: implicit signature from debug exe (5 levels up)",
+      "passed": true,
+      "detail": "found=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_portablea3a7ee3e/project"
+    },
+    {
+      "name": "probe: explicit mangrove.portable marker wins without ComicLibrary",
+      "passed": true,
+      "detail": "found=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_portablea3a7ee3e/flag"
+    },
+    {
+      "name": "probe: unsigned ancestor chain resolves to null",
+      "passed": true,
+      "detail": "found=null"
+    },
+    {
+      "name": "probe: deeper than maxAscent (6) resolves to null",
+      "passed": true,
+      "detail": "found=null"
+    },
+    {
+      "name": "library: dead absolute path self-heals to portable downloads",
+      "passed": true,
+      "detail": "path=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_portablea3a7ee3e/project/ComicLibrary/downloads healed=true rel=ComicLibrary/downloads"
+    },
+    {
+      "name": "library: portable-relative stored value replays against current root",
+      "passed": true,
+      "detail": "path=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_portablea3a7ee3e/project/ComicLibrary/downloads"
+    },
+    {
+      "name": "library: existing custom absolute path is untouched (no rewrite)",
+      "passed": true,
+      "detail": "path=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_portablea3a7ee3e/external_drive/library healed=false rel=null"
+    },
+    {
+      "name": "library: no portable context -> null (platform default fallback)",
+      "passed": true,
+      "detail": "path=null"
+    },
+    {
+      "name": "btRoot: dead projects root rebases to portable projects",
+      "passed": true,
+      "detail": "rebased=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_portablea3a7ee3e/project/ComicLibrary/projects"
+    },
+    {
+      "name": "btRoot: existing root is left alone",
+      "passed": true,
+      "detail": "rebased=null"
+    },
+    {
+      "name": "btRoot: empty setting auto-enables portable projects root",
+      "passed": true,
+      "detail": "auto=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_portablea3a7ee3e/project/ComicLibrary/projects"
+    },
+    {
+      "name": "project directory: dead absolute path rebases by downloads tail",
+      "passed": true,
+      "detail": "rebased=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_portablea3a7ee3e/project/ComicLibrary/downloads/Some Comic"
+    },
+    {
+      "name": "project directory: missing tail does NOT fabricate a path",
+      "passed": true,
+      "detail": "rebased=null"
+    },
+    {
+      "name": "project directory: existing path needs no rebase",
+      "passed": true,
+      "detail": "rebased=null"
+    },
+    {
+      "name": "comic_source: portable directory is discovered",
+      "passed": true,
+      "detail": "dir=C:/Users/ADMINI~1/AppData/Local/Temp/mangrove_portablea3a7ee3e/project/comic_source"
+    },
+    {
+      "name": "relativeToPortable: path outside the portable root maps to null",
+      "passed": true,
+      "detail": "rel=null"
+    },
+    {
+      "name": "relativeToPortable: path inside maps to relative form",
+      "passed": true,
+      "detail": "rel=ComicLibrary/projects"
+    }
+  ]
+}

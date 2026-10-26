@@ -160,6 +160,31 @@ double _meanAbsDiff(RgbaImage a, RgbaImage b, IntRect r) {
   return n == 0 ? 0 : sum / n;
 }
 
+/// 矩形内"接近纯白"的像素占比（0..1）。
+///
+/// 🔴 P48 七轮踩过的坑：这条断言原先用 [_meanAbsDiff] 当判据，而夹具是高频
+/// 正弦条纹（周期 ≈ 38px）。条纹重建只要相位差半周期，均差就会大幅上升，
+/// 但水印其实已经擦干净了 —— 实测 before=126 → after=55，判据要求 <42 直接
+/// 变红，量到的是"相位误差"而不是"残留水印"。所以改量**白像素占比**：
+/// 条纹三通道里 G 永远 ≤110、R ≤218，不可能全通道 ≥240，与水印（纯白）不
+/// 混淆；水印留着就接近 100%，擦掉了就该接近 0%。
+double _nearWhiteFraction(RgbaImage img, IntRect r, {int threshold = 240}) {
+  final area = (r.right - r.left) * (r.bottom - r.top);
+  if (area <= 0) return 0;
+  var hit = 0;
+  for (var y = r.top; y < r.bottom; y++) {
+    for (var x = r.left; x < r.right; x++) {
+      final p = (y * img.width + x) * 4;
+      if (img.pixels[p] >= threshold &&
+          img.pixels[p + 1] >= threshold &&
+          img.pixels[p + 2] >= threshold) {
+        hit++;
+      }
+    }
+  }
+  return hit / area;
+}
+
 void _fillRect(RgbaImage img, int x0, int y0, int x1, int y1, int rgb) {
   for (var y = y0; y < y1; y++) {
     if (y < 0 || y >= img.height) continue;
@@ -1997,16 +2022,28 @@ Future<void> runP7Checks(
     () => '绿=通道平面寻址（chw）/ 故障=按 HWC 寻址（同一组探针必挂）',
   );
 
+  // 擦除断言的实测数字（green 写入，detail 读出）。必须声明在 probe 之前 ——
+  // Dart 的局部变量声明不提升，写在使用点之后就报 referenced_before_declaration。
+  // 主判据是白像素占比（%），均差只作为附加证据一起报出来。
+  var eraseBefore = 0.0; // 掩膜内白像素占比，擦前（%）
+  var eraseAfter = 0.0; // 掩膜内白像素占比，擦后（%）
+  var eraseDiffBefore = 0.0; // 与干净原图的逐像素均差，擦前
+  var eraseDiffAfter = 0.0; // 与干净原图的逐像素均差，擦后
+
   probe(
     'inpaint.model_really_erases_what_the_mask_covers',
     // 只验"模型可选/不阻塞"是不够的：那只能证明它不崩。这条直接量像素 ——
     // 条纹布上刷一块纯白水印，掩膜盖住它，看模型能不能把条纹接回去。
-    // 判据是"与干净原图的差"降到水印态的 1/3 以下，所以没擦掉就不算过。
+    // 判据是"掩膜内白像素占比从 ~100% 掉到 6% 以下"，所以没擦掉就不算过。
     () async {
       if (!InpaintModel.isInstalled) return true; // 本机已装，此分支不会走
-      const w = 96;
-      const h = 96;
-      final blob = IntRect(30, 30, 66, 66);
+      // 🔴 P48 七轮：夹具从 96×96 放大到 256×256。96 的小图送进 512 模型等于
+      // 放大 8×，正弦条纹的周期被拉成 50px 的粗波纹，LaMa 补出的是"渐变"
+      // 而不是条纹 —— 判据量到的是夹具失真，不是模型能力。256 时放大约
+      // 2.7×，与真实页的裁剪倍率同一量级。
+      const w = 256;
+      const h = 256;
+      final blob = IntRect(96, 96, 160, 160);
       final clean = _stripes(w, h);
       final dirty = _stripes(w, h);
       _paintBlob(dirty, blob.left, blob.top, blob.right, blob.bottom);
@@ -2019,8 +2056,12 @@ Future<void> runP7Checks(
       );
       if (res == null) return false;
       final out = RgbaImage(w, h, res.rgba);
-      final before = _meanAbsDiff(dirty, clean, blob);
-      final after = _meanAbsDiff(out, clean, blob);
+      final whiteBefore = _nearWhiteFraction(dirty, blob);
+      final whiteAfter = _nearWhiteFraction(out, blob);
+      eraseBefore = whiteBefore * 100;
+      eraseAfter = whiteAfter * 100;
+      eraseDiffBefore = _meanAbsDiff(dirty, clean, blob);
+      eraseDiffAfter = _meanAbsDiff(out, clean, blob);
       // 选区外必须逐字节不变。
       var leaked = 0;
       for (var i = 0; i < w * h; i++) {
@@ -2032,17 +2073,17 @@ Future<void> runP7Checks(
           leaked++;
         }
       }
-      return leaked == 0 && before > 25 && after < before / 3;
+      // 前提：夹具里水印确实是白的（占比 >95%），否则"擦掉了"无从谈起。
+      return leaked == 0 && whiteBefore > 0.95 && whiteAfter < 0.06;
     },
     () async {
       // 故障路径：掩膜故意**盖错位置**（盖左上角，水印在正中）⇒ 水印原样留下，
-      // after 与 before 同量级，判据必挂。这条能挂才说明它真在量"擦除"。
+      // 掩膜内白像素占比仍是 ~100%，判据必挂。这条能挂才说明它真在量"擦除"。
       if (!InpaintModel.isInstalled) return false;
-      const w = 96;
-      const h = 96;
-      final blob = IntRect(30, 30, 66, 66);
+      const w = 256;
+      const h = 256;
+      final blob = IntRect(96, 96, 160, 160);
       final wrongMask = IntRect(2, 2, 14, 14);
-      final clean = _stripes(w, h);
       final dirty = _stripes(w, h);
       _paintBlob(dirty, blob.left, blob.top, blob.right, blob.bottom);
       final mask = selectionMaskOf(width: w, height: h, rect: wrongMask);
@@ -2054,11 +2095,15 @@ Future<void> runP7Checks(
       );
       if (res == null) return false;
       final out = RgbaImage(w, h, res.rgba);
-      final before = _meanAbsDiff(dirty, clean, blob);
-      final after = _meanAbsDiff(out, clean, blob);
-      return before > 25 && after < before / 3;
+      final whiteBefore = _nearWhiteFraction(dirty, blob);
+      final whiteAfter = _nearWhiteFraction(out, blob);
+      return whiteBefore > 0.95 && whiteAfter < 0.06;
     },
-    () => '绿=掩膜对准水印⇒与原图差降到 1/3 以下 / 故障=掩膜盖错⇒判据必挂',
+    () => '绿=掩膜对准水印⇒掩膜内白像素占比 ${eraseBefore.toStringAsFixed(1)}%'
+        ' → ${eraseAfter.toStringAsFixed(1)}%（<6%）'
+        '，均差 ${eraseDiffBefore.toStringAsFixed(1)}'
+        ' → ${eraseDiffAfter.toStringAsFixed(1)}（仅参考）'
+        ' / 故障=掩膜盖错⇒占比仍 ~100%⇒判据必挂',
   );
 
   probe(
@@ -2144,6 +2189,233 @@ Future<void> runP7Checks(
       return (thin.top - c.top) >= 200;
     },
     () => '绿=按长边外扩（细长水印也有上下视野）/ 故障=按短边⇒视野不足',
+  );
+
+  probe(
+    'inpaint.worker_reuses_one_model_session',
+    // 🔴 P48 七轮 · 人工验收："看 ai 修图以及增强画质的响应速度能不能稍微
+    // 加快。" 唯一**不牺牲画质**的加速点就是复用 session —— 旧实现走
+    // `Isolate.run` 并在每次调用里 `OrtFfiSession.open` + `close`，等于每轮
+    // 重新读一遍 200 MB 权重（实测占单轮耗时一半以上）。
+    () async {
+      // 静态判据：推理入口不能每次开 session，worker 客户端必须存在。
+      bool perCallOpen(String src) =>
+          src.contains('await Isolate.run(') ||
+          !src.contains('class _WorkerClient') ||
+          !src.contains('_lamaWorkerMain');
+      final modelSrc =
+          code('lib/foundation/translation_project/inpaint_model.dart');
+      if (!InpaintModel.isInstalled) {
+        // 本机已装，这条分支不会走；没装时只验静态判据。
+        return !perCallOpen(modelSrc);
+      }
+      final img = _solid(64, 64, 0xFFFFFF);
+      final mask = selectionMaskOf(
+        width: 64,
+        height: 64,
+        rect: IntRect(20, 20, 44, 44),
+      );
+      final first = await InpaintModel.inpaintRegion(
+        rgba: img.pixels,
+        width: 64,
+        height: 64,
+        regionMask: mask,
+      );
+      final second = await InpaintModel.inpaintRegion(
+        rgba: img.pixels,
+        width: 64,
+        height: 64,
+        regionMask: mask,
+      );
+      if (first == null || second == null) return false;
+      // 第二次必须复用第一次加载的 session，且整个进程只打开过一次模型。
+      return InpaintModel.lastRunReusedSession &&
+          InpaintModel.sessionOpenCount == 1 &&
+          !perCallOpen(modelSrc);
+    },
+    () async {
+      // 故障：旧实现（每次 Isolate.run 里 open）——同一份判据必须变红。
+      bool perCallOpen(String src) =>
+          src.contains('await Isolate.run(') ||
+          !src.contains('class _WorkerClient') ||
+          !src.contains('_lamaWorkerMain');
+      const legacy = '''
+      final output = await Isolate.run(() => _runLama(modelPath: path));
+      session?.close();
+      ''';
+      return !perCallOpen(legacy);
+    },
+    () => InpaintModel.isInstalled
+        ? '绿=第二次复用同一 session（opens=1）/ 故障=每轮重开模型（旧实现）'
+        : '⚠️ 模型不可用 ⇒ 跳过实测，只验了代码结构 / 故障=每轮重开模型',
+  );
+
+  // 测速断言的实测数字（green 回调写入，detail 回调读出来），这样报告里
+  // 留着"冷轮 X ms / 热轮 Y ms"的原始证据，而不是只有一句"通过了"。
+  var inpaintColdMs = 0;
+  var inpaintWarmMs = 0;
+
+  probe(
+    'inpaint.second_pass_is_far_cheaper_than_the_first',
+    // 🔴 P48 七轮 · 用户要的"响应速度"证据：session 复用必须量得出来。
+    // 冷启动一轮 = 加载 200 MB 权重 + 推理；热一轮 = 只有推理。判据是"热轮
+    // 耗时不到冷轮的一半"，而不是某个绝对毫秒数（机器差异太大）。
+    () async {
+      if (!InpaintModel.isInstalled) return true; // 本机已装，此分支不会走
+      const w = 128;
+      const h = 128;
+      final blob = IntRect(40, 40, 88, 88);
+      final dirty = _stripes(w, h);
+      _paintBlob(dirty, blob.left, blob.top, blob.right, blob.bottom);
+      final mask = selectionMaskOf(width: w, height: h, rect: blob);
+      // 先释放，确保下面这一轮真的是**冷启动**（前面的断言已经热过）。
+      InpaintModel.dispose();
+      final cold = await InpaintModel.inpaintRegion(
+        rgba: dirty.pixels,
+        width: w,
+        height: h,
+        regionMask: mask,
+      );
+      final warm = await InpaintModel.inpaintRegion(
+        rgba: dirty.pixels,
+        width: w,
+        height: h,
+        regionMask: mask,
+      );
+      if (cold == null || warm == null) return false;
+      inpaintColdMs = cold.elapsedMs;
+      inpaintWarmMs = warm.elapsedMs;
+      // 冷轮必须真的含加载成本（>300ms），否则这条判据没有可分辨的差距。
+      return cold.elapsedMs > 300 &&
+          warm.elapsedMs * 2 < cold.elapsedMs &&
+          InpaintModel.lastRunReusedSession;
+    },
+    () async {
+      // 故障：模拟**旧实现**（每次调用后释放模型）⇒ 两轮都是冷轮，
+      // "热轮 < 冷轮一半"必然不成立，判据变红。
+      if (!InpaintModel.isInstalled) return false;
+      const w = 128;
+      const h = 128;
+      final blob = IntRect(40, 40, 88, 88);
+      final dirty = _stripes(w, h);
+      _paintBlob(dirty, blob.left, blob.top, blob.right, blob.bottom);
+      final mask = selectionMaskOf(width: w, height: h, rect: blob);
+      InpaintModel.dispose();
+      final first = await InpaintModel.inpaintRegion(
+        rgba: dirty.pixels,
+        width: w,
+        height: h,
+        regionMask: mask,
+      );
+      InpaintModel.dispose(); // ← 旧实现：每轮用完就扔
+      final second = await InpaintModel.inpaintRegion(
+        rgba: dirty.pixels,
+        width: w,
+        height: h,
+        regionMask: mask,
+      );
+      if (first == null || second == null) return false;
+      return second.elapsedMs * 2 < first.elapsedMs;
+    },
+    () => InpaintModel.isInstalled
+        ? '绿=热轮耗时不到冷轮一半（session 复用生效）'
+              '｜冷轮 ${inpaintColdMs}ms / 热轮 ${inpaintWarmMs}ms'
+              ' / 故障=每轮重开⇒两轮同量级'
+        : '⚠️ 模型不可用 ⇒ **跳过实测**，只验了代码结构'
+              '（不要当成"复用已验证"）/ 故障=每轮重开⇒两轮同量级',
+  );
+
+  probe(
+    'polygon.ellipse_selection_is_curved_not_a_box',    // 🔴 P48 七轮 · 第三种形状：椭圆块的写入边界必须是**椭圆**。按外接矩形
+    // 写会把框内四角（属于邻居的线条/网点）一起抹掉 —— 这正是用户最初要
+    // 多边形精确擦除的同一个理由，只是形状换成了椭圆。
+    () async {
+      final box = IntRect(20, 30, 80, 90);
+      final ellipse = selectionMaskOf(
+        width: 100,
+        height: 100,
+        rect: box,
+        ellipse: true,
+      );
+      final asRect = selectionMaskOf(width: 100, height: 100, rect: box);
+      final centre = ellipse[60 * 100 + 50];
+      final corner = ellipse[32 * 100 + 22];
+      return centre != 0 && corner == 0 && asRect[32 * 100 + 22] != 0;
+    },
+    () async {
+      // 故障：忽略 ellipse（退化成矩形）⇒ 角落非 0，绿判据不再成立。
+      final box = IntRect(20, 30, 80, 90);
+      final mask = rasterizeRect(width: 100, height: 100, rect: box);
+      return mask[32 * 100 + 22] == 0;
+    },
+    () => '绿=椭圆四角不写、中心写 / 故障=按外接矩形⇒四角也写',
+  );
+
+  probe(
+    'text_block.ellipse_and_language_fields_keep_zero_byte_diff',
+    // 🔴 新字段（shape / recognised_lang / target_lang）必须**默认删键**：
+    // 旧工程 round-trip 不能因为这次升级多出一个字节。同时面板要真的读它们，
+    // 否则用户在界面上改了形状/语言却没有落到模型上。
+    () async {
+      final block = TextBlock.createDefault(rect: IntRect(0, 0, 100, 60));
+      final defaultShape = block.shape;
+      block.shape = TextBlockShape.ellipse;
+      final keyed = block.raw['shape'] == TextBlockShape.ellipse;
+      block.shape = TextBlockShape.rect;
+      final rectRemoved = !block.raw.containsKey('shape');
+      block.recognisedLang = 'ko';
+      block.targetLangOverride = 'en';
+      final written = block.raw['recognised_lang'] == 'ko' &&
+          block.raw['target_lang'] == 'en';
+      block.recognisedLang = '';
+      block.targetLangOverride = '';
+      final cleared = !block.raw.containsKey('recognised_lang') &&
+          !block.raw.containsKey('target_lang');
+      final panel = code(_panelPath);
+      final studio = code(_studioPath);
+      return defaultShape == TextBlockShape.rect &&
+          keyed &&
+          rectRemoved &&
+          written &&
+          cleared &&
+          panel.contains('targetLangOverride') &&
+          panel.contains('recognisedLang') &&
+          studio.contains('b.recognisedLang = recognisedLang') &&
+          studio.contains('block.targetLangOverride.isEmpty');
+    },
+    () async {
+      // 故障：默认形状也落键（旧块 round-trip 会多一个 "shape": "rect"）。
+      final block = TextBlock.createDefault(rect: IntRect(0, 0, 10, 10));
+      block.raw['shape'] = TextBlockShape.rect;
+      return !block.raw.containsKey('shape');
+    },
+    () => '绿=新字段默认删键且面板真读 / 故障=矩形也落键⇒旧工程变脏',
+  );
+
+  probe(
+    'block_panel.language_controls_sit_above_both_text_boxes',
+    // 🔴 人工验收："我没有找到在文字块切面的识别和翻译的地方有调整识别语言
+    // 的按钮。" 位置就是功能的一部分：语言下拉必须压在**它作用的那只框**
+    // 上方，而不是藏在类型下拉下面。
+    () async {
+      final panel = code(_panelPath);
+      final srcHeader = panel.indexOf('_sourceLanguageHeader(scheme, block)');
+      final srcBox = panel.indexOf('block.sourceText.isEmpty');
+      final tgtHeader = panel.indexOf('_translationHeader(scheme, block)');
+      final tgtBox = panel.indexOf('controller: _controller');
+      return srcHeader >= 0 &&
+          srcBox > srcHeader &&
+          tgtHeader >= 0 &&
+          tgtBox > tgtHeader;
+    },
+    () async {
+      // 故障：旧布局（语言下拉排在译文字段之后，即"在框下方"）。
+      final panel = code(_panelPath);
+      final tgtHeader = panel.indexOf('_translationHeader(scheme, block)');
+      final tgtBox = panel.indexOf('controller: _controller');
+      return tgtHeader > tgtBox;
+    },
+    () => '绿=源/目标语言都压在各自的框上方 / 故障=语言控件掉到框下方（旧布局）',
   );
 
   // ── 跑 ──────────────────────────────────────────────────────────────

@@ -1,0 +1,627 @@
+{
+  "version": 1,
+  "command": "block-ops-check",
+  "passed": true,
+  "checks": [
+    {
+      "name": "blockOps.png.signature_and_ihdr",
+      "passed": true,
+      "detail": "绿=colour type 0（灰度）/ 故障=写成 6（RGBA）⇒ 判据非恒真 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.png.geometry_mismatch_throws",
+      "passed": true,
+      "detail": "绿=9 字节配 4x4 抛错 / 故障=16 字节（合法）不抛 ⇒ 判据会分辨 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.png.crc_matches_known_answer",
+      "passed": true,
+      "detail": "绿=标准 CRC32 向量 / 故障=少一位的输入 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.mask.is_glyph_level_not_the_box",
+      "passed": true,
+      "detail": "绿=region 外的背景仍是 0 / 故障=矩形近似（同一坐标是 255） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.mask.polarity_is_255_erased",
+      "passed": true,
+      "detail": "绿=前景 255 / 故障=前景 0（极性反了） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.mask.is_whole_page_sized",
+      "passed": true,
+      "detail": "绿=整页 64x64 / 故障=只出 region 的 32px 小窗口 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.mask.overlapping_regions_union_not_overwrite",
+      "passed": true,
+      "detail": "绿=并集逐像素都能在单块里找到出处 / 故障=覆盖式实现丢掉笔画 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.mask.all_zero_reports_empty",
+      "passed": true,
+      "detail": "绿=纯白页 strokes=0 / 故障=真有字的页被判成空 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.mask.no_pixels_written_outside_page",
+      "passed": true,
+      "detail": "绿=越界 region 仍产出 64x64 / 故障=尺寸谎报时判据会说谎 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.mask.encode_roundtrips_geometry",
+      "passed": true,
+      "detail": "绿=IDAT 解压后正好 h*(w+1) 字节 / 故障=少一行也判通过 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.restore.puts_original_pixels_back",
+      "passed": true,
+      "detail": "绿=掩膜处回到原图的黑 / 故障=原样返回抹过的底图 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.restore.leaves_unmasked_pixels_alone",
+      "passed": true,
+      "detail": "绿=掩膜外保持原样 / 故障=整张被覆盖 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.restore.rejects_mismatched_geometry",
+      "passed": true,
+      "detail": "绿=32x32 底图配 64x64 原图 → null / 故障=同尺寸却返回 null | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.restore.all_zero_mask_returns_null",
+      "passed": true,
+      "detail": "绿=全 0 掩膜 → null / 故障=有一个前景像素时也 null | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.restore.does_not_mutate_inputs",
+      "passed": true,
+      "detail": "绿=入参逐字节不变 / 故障=入参被就地改写 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.restore.mask_dilates_by_default_30_percent",
+      "passed": true,
+      "detail": "绿=dilated 掩膜前景 ≥ 原块 * 1.1 / 故障=dilation=1.0 没扩也被判成≥1.1 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.restore.mask_clamps_to_image_boundary",
+      "passed": true,
+      "detail": "绿=尺寸正确 + 有前景 / 故障=外扩越过边界后尺寸不对（clamp 没生效） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.restore.mask_polarity_is_255",
+      "passed": true,
+      "detail": "绿=前景像素是 255 / 故障=极性反了（前景不是 255） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.blockrepair.merge_pastes_only_inside_mask",
+      "passed": true,
+      "detail": "绿=掩膜处换红、块外保蓝（其他块不丢）/ 故障=整页覆盖把其他块抹回原图 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.blockrepair.merge_first_repair_equals_erased_block",
+      "passed": true,
+      "detail": "绿=首次修图输出=新擦图 / 故障=输出原图（抹字白做） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.blockrepair.merge_rejects_mismatched_geometry",
+      "passed": true,
+      "detail": "绿=尺寸不符 → null / 故障=同尺寸也 null | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.blockrepair.union_keeps_existing_only_pixels",
+      "passed": true,
+      "detail": "绿=旧块独占像素保留 / 故障=覆盖式把旧块记录清掉 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.blockrepair.subtract_and_intersect_are_scoped",
+      "passed": true,
+      "detail": "绿=扣除精准/取交只盖真抹像素 / 故障=误伤交叠块或扣多了 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.crop.grows_tiny_blocks_to_min_side",
+      "passed": true,
+      "detail": "绿=短边被撑到 minSide / 故障=minSide=0 时同样撑大 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.crop.keeps_block_inside_window",
+      "passed": true,
+      "detail": "绿=窗口包住整个块（含越界块）/ 故障=先夹后放把越界侧截掉 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.crop.stays_inside_the_page",
+      "passed": true,
+      "detail": "绿=窗口不越页 / 故障=越界 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.crop.degenerate_box_is_rejected",
+      "passed": true,
+      "detail": "绿=零宽/倒序框 → null / 故障=合法框也 null | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.crop.converts_back_to_page_coordinates",
+      "passed": true,
+      "detail": "绿=加回窗口偏移 / 故障=没加（局部坐标直接写进块） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.write.empty_translation_never_overwrites",
+      "passed": true,
+      "detail": "绿=空结果拒绝 / 故障=有内容时也拒绝 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.write.echo_of_current_translation_is_rejected",
+      "passed": true,
+      "detail": "绿=逐字相同拒绝 / 故障=真换了内容也拒绝 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.write.echo_of_source_is_rejected",
+      "passed": true,
+      "detail": "绿=与原文逐字相同拒绝 / 故障=真译文也拒绝 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.write.allows_translation_when_source_was_cleared",
+      "passed": true,
+      "detail": "绿=原文为空时允许写入 / 故障=此时空结果也允许 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.write.recognise_empty_text_is_failure",
+      "passed": true,
+      "detail": "绿=空白判失败 / 故障=有字也判失败 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.write.multiline_source_is_preserved",
+      "passed": true,
+      "detail": "绿=按行保留换行 / 故障=被压成一行 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.wiring.region_ocr_exists_and_is_not_the_page_path",
+      "passed": true,
+      "detail": "绿=ocrRegion 不走 ocrPage / 故障=analyzePage 那个对照组会匹配 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.wiring.buttons_sit_on_the_requested_sides",
+      "passed": true,
+      "detail": "绿=识别在译文之前（原文框左侧 / 译文框右侧） / 故障=顺序颠倒 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.wiring.buttons_use_builtin_icons",
+      "passed": true,
+      "detail": "绿=用 Icons.text_fields / Icons.translate / 故障=换成别的图标名 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.wiring.both_actions_are_repeatable_not_one_shot",
+      "passed": true,
+      "detail": "绿=面板从不自动调 / 故障=build 里真的调了 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.wiring.mask_is_produced_by_the_save_path",
+      "passed": true,
+      "detail": "绿=保存时产出 mask / 故障=只建目录不产出（S9 的假绿） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.wiring.result_still_renders_in_a_second_pass",
+      "passed": true,
+      "detail": "绿=五处落点都是 inpainted 先 / result 后 / 故障=反序片段也判通过 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.wiring.mask_avoids_the_rendering_surface",
+      "passed": true,
+      "detail": "绿=PNG 编码与 mask 拼装都不碰 dart:ui / 故障=渲染器对照组确实碰 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.i18n.new_strings_are_registered_in_chinese",
+      "passed": true,
+      "detail": "绿=逐条中文值一致 / 故障=表里存英文原文 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.i18n.panel_literals_are_all_registered",
+      "passed": true,
+      "detail": "绿=扫到 >0 条且未登记为空 / 故障=拿掉一个在用的键后判据变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.i18n.no_replacement_chars_in_the_table",
+      "passed": true,
+      "detail": "绿=全表无 U+FFFD / 故障=塞一个替换字符 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.sfx.marks_short_uppercase_latin",
+      "passed": true,
+      "detail": "绿=全大写短串判 sfx / 故障=混合大小写的对白也被判 sfx | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.sfx.marks_single_syllable_hangul",
+      "passed": true,
+      "detail": "绿=单音节韩文拟声词 / 故障=2 音节以上的韩文台词被当成拟声词 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.sfx.never_marks_a_cjk_source",
+      "passed": true,
+      "detail": "绿=zh/ja 源一律不标 / 故障=忽略源语言时中文页的 SLAM 被标 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.sfx.punctuation_only_is_not_sfx",
+      "passed": true,
+      "detail": "绿=纯符号不判 sfx / 故障=纯符号被判 sfx | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.sfx.label_roundtrips_and_starts_unset",
+      "passed": true,
+      "detail": "绿=标记可写可读可清、且键本来就在 / 故障=写完读不回来 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.wiring.pipeline_marks_sfx_and_excludes_them_from_the_batch",
+      "passed": true,
+      "detail": "绿=建块时打标记 + 翻译批次拿到 skip / 故障=只打标记不跳过 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.wiring.studio_batch_also_skips_marked_sfx",
+      "passed": true,
+      "detail": "绿=批量翻译那段认标记 / 故障=判据跑到单块按钮那边去了 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.watermark.object_mask_swallows_the_plate",
+      "passed": true,
+      "detail": "绿=物体掩膜吃掉整块底盘（含框外一圈）/ 故障=只框矩形 ⇒ 覆盖率约 0.57 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.watermark.erase_turns_the_plate_into_background",
+      "passed": true,
+      "detail": "绿=底盘被修成黑底 / 故障=只抹白字 ⇒ 紫底仍在 | cover=1.00 px(58,60)=0,0 px(100,86)=0,0 px(160,70)=0,0 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.watermark.mosaic_blends_into_the_background",
+      "passed": true,
+      "detail": "绿=马赛克向黑底融合 / 故障=经典马赛克 ⇒ 仍是紫块 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.repair.write_stays_inside_the_selection",
+      "passed": true,
+      "detail": "绿=选区外零改动 / 故障=不夹选区 ⇒ 外圈像素被改 | flat=#000000 leaked=0 filled=3024 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.repair.flat_backdrop_is_filled_with_its_own_colour",
+      "passed": true,
+      "detail": "绿=整片刷成黑底（零色偏）/ 故障=插值 ⇒ 洞底被紫色拉出渐变 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.repair.smooth_gradient_is_not_snapped_to_a_flat_colour",
+      "passed": true,
+      "detail": "绿=渐变不被当成平色 / 故障=阈值不设限 ⇒ 渐变被判成平色 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.repair.weak_edge_plurality_does_not_make_a_flat_backdrop",
+      "passed": true,
+      "detail": "绿=弱多数不判平色（不刷白块）/ 故障=拆掉占比门槛 ⇒ 渐变被刷成白色 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.repair.texture_quality_actually_changes_pixels",
+      "passed": true,
+      "detail": "绿=纹理档真的改写像素 / 故障=候选源为空 ⇒ 与结构档逐字节相同 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.selection_mask_follows_the_polygon_not_the_bounding_box",
+      "passed": true,
+      "detail": "绿=三角形轮廓外不写入 / 故障=只用外接矩形 ⇒ 右上角被算进选区 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.selection_never_exceeds_the_block_box",
+      "passed": true,
+      "detail": "绿=轮廓被块框裁掉·框外不写 / 故障=只按轮廓 ⇒ 框外也写 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.inpaint.model_is_optional_and_never_blocks_the_local_path",
+      "passed": true,
+      "detail": "绿=缺模型静默回退 + 面板如实标注 / 故障=缺模型直接抛错 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.inpaint.tensor_layout_is_channel_planar",
+      "passed": true,
+      "detail": "绿=通道平面寻址（chw）/ 故障=按 HWC 寻址（同一组探针必挂） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.inpaint.model_really_erases_what_the_mask_covers",
+      "passed": true,
+      "detail": "绿=掩膜对准水印⇒与原图差降到 1/3 以下 / 故障=掩膜盖错⇒判据必挂 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.watermark.never_enters_ocr_or_translate_batches",
+      "passed": true,
+      "detail": "绿=识别与翻译批次都跳过水印 / 故障=判据漏到面板文件 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.repair.ai_fill_is_never_intercepted_by_flat_detection",
+      "passed": true,
+      "detail": "绿=AI填充强制走模型 / 故障=平色闸门失效⇒AI填充被刷成纯色 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "blockOps.inpaint.context_window_widens_along_the_long_edge",
+      "passed": true,
+      "detail": "绿=按长边外扩（细长水印也有上下视野）/ 故障=按短边⇒视野不足 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "thumbrail.default_is_off",
+      "passed": true,
+      "detail": "绿=声明为关 / 故障=声明为 true ⇒ 判据分辨得出 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "thumbrail.gate_truth_table",
+      "passed": true,
+      "detail": "绿=11 组含原因码全中（三种方向都放行）/ 故障=漏判页数 ⇒ 1 页也 ready ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "thumbrail.landscape_pages_are_hidden",
+      "passed": true,
+      "detail": "绿=横版/正方形隐藏·页号 1/3/5 / 故障=用 > 留下正方形 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "thumbrail.tile_hides_edge_overlays",
+      "passed": true,
+      "detail": "绿=large 走 center / 故障=large 仍贴边 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "pageheader.reads_png_and_jpeg_size",
+      "passed": true,
+      "detail": "绿=1600x2400/800x600·截断→null / 故障=不校验长度 ⇒ 截断也出尺寸 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "seam.id_is_order_stable",
+      "passed": true,
+      "detail": "绿=A|B ≠ B|A 且按阅读序枚举 / 故障=排序两页 ⇒ 方向丢失 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "seam.reviews_round_trip",
+      "passed": true,
+      "detail": "绿=记录逐条还原 + 未知键 a_future_key 仍在 / 故障=重建工程只留 _seam_reviews ⇒ 未知键被抹 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "seam.counts_exclude_na",
+      "passed": true,
+      "detail": "绿=n/a 不入待检视（toReview=0） / 故障=n/a 也算 todo（=2）⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "seam.landscape_neighbours_are_na",
+      "passed": true,
+      "detail": "绿=触及横版页的缝 n/a·其余 todo / 故障=无视隐藏页 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "group.members_sort_by_page_then_y",
+      "passed": true,
+      "detail": "绿=页号优先 + 同页 y 升序（阅读序）/ 故障=只看 y ⇒ 跨页错位 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "group.mode_does_not_change_data",
+      "passed": true,
+      "detail": "绿=nest→link 除 mode 外数据全同 / 故障=顺带清 source ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "group.bbox_is_union_of_members",
+      "passed": true,
+      "detail": "绿=逐边 min/max 并集 / 故障=只用首个成员 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "group.member_ref_is_stable_after_unrelated_delete",
+      "passed": true,
+      "detail": "绿=_uid 仍指向原块 / 故障=按下标 ⇒ 删块后指错 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "group.uid_is_lazy",
+      "passed": true,
+      "detail": "绿=新块无 _uid·首次写入且幂等 / 故障=每次重铸 ⇒ 不幂等 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "group.groups_round_trip",
+      "passed": true,
+      "detail": "绿=组逐条还原 + 未知键仍在 + 空表删键 / 故障=重建工程只留 _groups ⇒ 未知键被抹 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "groupconcat.order_is_member_order",
+      "passed": true,
+      "detail": "绿=按成员顺序拼接 / 故障=倒序 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "groupconcat.never_mutates_member_source",
+      "passed": true,
+      "detail": "绿=组合后成员 JSON 不变 / 故障=把结果写回成员 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "distribute.allows_non_monotonic_mapping",
+      "passed": true,
+      "detail": "绿=倒装映射被接受 / 故障=要求顺序一致 ⇒ 拒掉倒装 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "distribute.rejects_unmapped_members",
+      "passed": true,
+      "detail": "绿=缺一个成员 ⇒ 报出该成员 / 故障=只看是否填过 ⇒ 报空 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "distribute.one_dispatcher_call_per_group",
+      "passed": true,
+      "detail": "绿=一组恰好 1 次调用 / 故障=按成员数次调用 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "distribute.never_runs_when_source_missing",
+      "passed": true,
+      "detail": "绿=无原文 ⇒ 0 次调用 + 缘由码 / 故障=照常调用 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "distribute.is_undoable",
+      "passed": true,
+      "detail": "绿=经命令写回·undo 逐字还原 / 故障=直接改·无命令 ⇒ 不可撤销 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "span.split_maps_back_to_source_pixels",
+      "passed": true,
+      "detail": "绿=切分后并集逐像素还原虚拟矩形 / 故障=不减页内偏移 ⇒ 还原错位 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "span.window_is_bounded",
+      "passed": true,
+      "detail": "绿=正常比例 ≤ 封顶·全幅被拒 / 故障=无视封顶放行全幅 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "span.never_writes_merged_image",
+      "passed": true,
+      "detail": "绿=整条流程后目录字节不变 / 故障=把合成图写进目录 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "span.rejects_mismatched_width",
+      "passed": true,
+      "detail": "绿=异宽判 width_mismatch·拼接异宽返 null / 故障=不查同宽 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "span.parts_do_not_cross_page_bounds",
+      "passed": true,
+      "detail": "绿=越界/负坐标判 out_of_bounds / 故障=不查越界 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip.strip_geometry_matches_page_heights",
+      "passed": true,
+      "detail": "绿=渲染高=fit*页高·页顶累加 / 故障=忘乘 fit ⇒ 页高翻倍 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip.cross_seam_splits_at_boundary",
+      "passed": true,
+      "detail": "绿=跨缝框恰在页边界切开 / 故障=不夹页边界 ⇒ 段越页底 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip.narrow_page_is_centered",
+      "passed": true,
+      "detail": "绿=窄页居中且条带x↔页x正确 / 故障=忽略居中偏移 ⇒ x 错 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "seam_detect.crossing_candidate_maps_to_two_pages",
+      "passed": true,
+      "detail": "绿=跨缝框映射成两页子矩形且虚拟往返无损 / 故障=不减窗口 base ⇒ 顶段错位 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "seam_detect.single_side_candidate_is_dropped",
+      "passed": true,
+      "detail": "绿=只落在一页的框不产生跨页候选 / 故障=照单全收 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "seam_detect.mismatched_width_candidate_rejected",
+      "passed": true,
+      "detail": "绿=异宽候选被 validateSpan 剔除 / 故障=不校验照收 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "span_artifacts.erase_plan_grouped_by_page",
+      "passed": true,
+      "detail": "绿=抹除矩形按页摊平、逐页出图 / 故障=全挂顶页 ⇒ 下页没抹到 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "span_artifacts.dissolve_keeps_head_restores_tail",
+      "passed": true,
+      "detail": "绿=解跨页真身留顶页·尾页复原 / 故障=误取末页 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "group.uid_recycle_skips_still_referenced",
+      "passed": true,
+      "detail": "绿=解组只回收无引用 uid，共享 uid 保留 / 故障=全清本组成员 ⇒ 误伤共享组 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_hidden.read_write_roundtrip",
+      "passed": true,
+      "detail": "绿=读写往返一致·空集删键·未知键保留 / 故障=空集留空 map ⇒ FT 脏 diff ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_hidden.malformed_storage_ignored",
+      "passed": true,
+      "detail": "绿=非 map/值非 true 一律忽略 / 故障=只看键不看值 ⇒ false 也被误藏 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_hidden.toggle_flips_without_mutation",
+      "passed": true,
+      "detail": "绿=无则加有则删·不改入参 / 故障=只加不删 ⇒ 无法取消隐藏 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_hidden.visible_indices_are_original_indexes",
+      "passed": true,
+      "detail": "绿=可见序列保留原始下标 / 故障=压缩成连续位置 ⇒ 隐藏首页后全页错位 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_hidden.next_visible_after_hide_branches",
+      "passed": true,
+      "detail": "绿=后可见优先·末页取前·全隐 null / 故障=恒取 current+1 ⇒ 藏末页越界 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "webp_probe.vp8_lossy_dimensions",
+      "passed": true,
+      "detail": "绿=VP8 有损头(声明长度≫已读字节)读出 1532×1024、坏签名拒读 / 故障=不校验 9d012a ⇒ 坏文件也报尺寸 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "webp_probe.vp8l_lossless_dimensions",
+      "passed": true,
+      "detail": "绿=VP8L 打包位读出 900×1778、0x2f 标记坏了拒读 / 故障=不看起始标记 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "webp_probe.vp8x_canvas_without_bitstream",
+      "passed": true,
+      "detail": "绿=只有 VP8X、位流被截断仍给出画布 1532×1024 / 故障=非见到 VP8/VP8L 不报 ⇒ 扩展容器页估高失效 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "webp_probe.truncated_header_safe",
+      "passed": true,
+      "detail": "绿=宽高字节缺失/容器头截断一律 null 且不抛 / 故障=用末尾字节回填缺失位 ⇒ 截断头也胡报尺寸、错误版式被排出来 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_planner.window_range_clamped",
+      "passed": true,
+      "detail": "绿=[c-5,c+6) 且首尾/越界 center 全部夹在 [0,count] / 故障=hi 不夹取 ⇒ 末页窗口越界 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_planner.start_order_distance_first",
+      "passed": true,
+      "detail": "绿=3 个名额按距中心 50/49/51 开解 / 故障=窗口升序 45/46/47 占坑 ⇒ 视口页最后解码 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_planner.hidden_index_not_in_wanted",
+      "passed": true,
+      "detail": "绿=隐藏 12 后 wanted 是工程下标 {10,11,13} / 故障=把可见位置当工程下标 ⇒ 真页永不进窗 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_planner.failure_latch_blocks_start",
+      "passed": true,
+      "detail": "绿=failures>=3 不入队、=2 仍给机会、busy 满则零开解 / 故障=闩锁页每轮重试 ⇒ 名额被坏页吃光 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_planner.out_of_window_failure_reset",
+      "passed": true,
+      "detail": "绿=出窗空闲失败页进 resetFailures、有位图页走 evict / 故障=只处置有位图页 ⇒ 失败计数永挂、闩锁永不解除（P31 实锤根因之一）⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_planner.out_of_window_loading_cancelled",
+      "passed": true,
+      "detail": "绿=出窗在飞解码进 cancelLoading 且不与 evict/reset 重复 / 故障=不取消 ⇒ 旧 token 结果迟到写错页 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_budget.terminal_release_invariant",
+      "passed": true,
+      "detail": "绿=占满拒入、三条终结路径各还一次后可再 acquire、多还夹 0 / 故障=取消迟到路径漏还 ⇒ 几轮后 busy 永久占满、新页饿死（15 页缺页症）⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "group.scale_rects_to_bounds",
+      "passed": true,
+      "detail": "绿=2× 时位置尺寸同因子、纯平移整体 +100、单边手柄只动宽、退化框原样返回 / 故障=只乘因子不做原点平移 ⇒ 平移新框时成员不动 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_planner.viewport_band_covers_built_pages",
+      "passed": true,
+      "detail": "绿=缩小档（矮页+高视口）cache 区实际构建的页 0..9 全在 wanted、在飞页 9 不取消 / 故障=固定页数窗口只有 0..7 ⇒ 88% 缺页振荡 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "strip_planner.retain_hysteresis_keeps_border_pages",
+      "passed": true,
+      "detail": "绿=紧带外/宽带内的在飞页不取消、失败页不清零也不开新解，出宽带才翻篇 / 故障=迟滞为 0 ⇒ 边界页反复 cancel/start ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "group.suggest_mode_by_page_span",
+      "passed": true,
+      "detail": "绿=同页/相邻两页→nest，两页不相邻或跨≥3页→link / 故障=一律 nest ⇒ 跨多页大框圈进无关画面 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "text_placement.center_in_block_box",
+      "passed": true,
+      "detail": "绿=默认上下左右居中 (50,30)，left→dx0/right→dx98、垂直恒居中 / 故障=恒左上角起排 ⇒ 译文顶格且与 result 出图不一致 ⇒ 变红 | 绿路径=true 故障路径=变红"
+    }
+  ]
+}

@@ -600,6 +600,30 @@ abstract final class TextBlockKind {
   static const String fallback = dialogue;
 }
 
+/// 文字块的「几何形状」轴（P48 七轮 · 第三种形状）。
+///
+/// 用户原话："针对对话气泡，我们要开发第三种文字块的圆形形状的区块形状，并且
+/// 可以上下左右调整高度和宽度，来使得圆形变成椭圆形，所以圆形文字块和多边形
+/// 不同，圆形文字块是需要外围再有一圈矩形框用于大小调节的。"
+///
+/// 三个轴各自独立，不要混为一谈：
+/// * **形状**（本类）—— 矩形 / 椭圆，几何体由 [TextBlock.xyxy] 外接框决定，
+///   宽 ≠ 高就是椭圆，因此 8 个缩放手柄天然可用；
+/// * **多边形**（[TextBlock.polygon]）—— 自由画笔的不规则轮廓，顶点表就是
+///   最终形状，**不可缩放**，所以不给外接框手柄；
+/// * **种类**（[TextBlockKind]）—— 对话/拟声词/物体文字/水印，决定管线怎么
+///   处理它。
+///
+/// 🔴 零字节 diff：缺键 = 矩形，[TextBlock.shape] 的 setter 在矩形时**删键**，
+/// 于旧工程 round-trip 不会多出一个字节。
+abstract final class TextBlockShape {
+  static const String rect = 'rect';
+  static const String ellipse = 'ellipse';
+
+  /// 缺键/未知值时的默认形状。
+  static const String fallback = rect;
+}
+
 /// One FT text block: the source text, its translation, and its lettering.
 class TextBlock {
   TextBlock(this.raw);
@@ -927,6 +951,66 @@ class TextBlock {
         for (final point in value)
           [point[0].toDouble(), point[1].toDouble()],
       ];
+    }
+  }
+
+  /// 块的几何形状：`rect`（默认）或 `ellipse`（圆/椭圆）。
+  ///
+  /// 🔴 与 [polygon] **互斥使用**（多边形优先）：画笔轮廓存在时画布画的是轮廓，
+  /// 椭圆只对"靠外接框定形状"的块有意义。空/未知值一律回退矩形 —— 旧工程里
+  /// 没有这个键，回退必须静默。
+  String get shape {
+    final value = raw['shape'];
+    if (value is String && value.trim() == TextBlockShape.ellipse) {
+      return TextBlockShape.ellipse;
+    }
+    return TextBlockShape.rect;
+  }
+
+  set shape(String value) {
+    final trimmed = value.trim();
+    if (trimmed == TextBlockShape.ellipse) {
+      raw['shape'] = TextBlockShape.ellipse;
+    } else {
+      // 矩形 = 缺键：零字节 diff 的落点（旧块本来就没有这个键）。
+      raw.remove('shape');
+    }
+  }
+
+  /// 是否为椭圆/圆形块（第三种形状）。
+  bool get isEllipse => shape == TextBlockShape.ellipse;
+
+  /// 上次【识别】**实际采用**的源语言（`recognised_lang`），空 = 还没识别过。
+  ///
+  /// 🔴 用户要求"在原文框上方加一个显示识别到的源文字是什么类型的显示"。面板
+  /// 上光有一个下拉看不出**这次到底按什么语言认的** —— 尤其当 [sourceLangOverride]
+  /// 为空、走的是整页投票时，用户需要看到投票结果，才能判断"要不要手动钉一个"。
+  ///
+  /// 零字节 diff：空值删键。
+  String get recognisedLang => raw['recognised_lang']?.toString() ?? '';
+
+  set recognisedLang(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      raw.remove('recognised_lang');
+    } else {
+      raw['recognised_lang'] = trimmed;
+    }
+  }
+
+  /// 块级目标语言覆盖（`target_lang`），空 = 跟随工程/本轮设置。
+  ///
+  /// 🔴 与 [sourceLangOverride] 对称：多语混排的工程里，个别块可能需要翻成
+  /// 不同语言（例如拟声词保留原文语气、引文翻成另一种语言）。空值删键，
+  /// 旧工程不受影响。
+  String get targetLangOverride => raw['target_lang']?.toString() ?? '';
+
+  set targetLangOverride(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      raw.remove('target_lang');
+    } else {
+      raw['target_lang'] = trimmed;
     }
   }
 

@@ -1,0 +1,1088 @@
+{
+  "version": 1,
+  "command": "edit-check",
+  "passed": true,
+  "file": "D:\\AI Coding Project Management\\Mangrove\\Ballonstranslator_store\\Manhwa\\imgtrans_Manhwa.json",
+  "checks": [
+    {
+      "name": "fixture.block",
+      "passed": true,
+      "detail": "The Heroine Takes Everything/Ch.1 - [Lua Comic] - The Heroine Takes Everything - 20260924_1254/001.webp (seeded via TextBlock.createDefault — project had none)"
+    },
+    {
+      "name": "edit.rich_text",
+      "passed": true,
+      "detail": "rich_text regenerated with the new text"
+    },
+    {
+      "name": "edit.rich_text.shape",
+      "passed": true,
+      "detail": "Qt richtext document shape preserved"
+    },
+    {
+      "name": "history.depth",
+      "passed": true,
+      "detail": "depth=3"
+    },
+    {
+      "name": "history.dirty",
+      "passed": true,
+      "detail": "dirty after 3 edits"
+    },
+    {
+      "name": "dirty.after_edits",
+      "passed": true,
+      "detail": "dirtyPages=[The Heroine Takes Everything/Ch.1 - [Lua Comic] - The Heroine Takes Everything - 20260924_1254/001.webp]"
+    },
+    {
+      "name": "undo.restores",
+      "passed": true,
+      "detail": "block matches pre-edit JSON after 3 undos"
+    },
+    {
+      "name": "undo.clean",
+      "passed": true,
+      "detail": "dirty=false"
+    },
+    {
+      "name": "redo.available",
+      "passed": true,
+      "detail": "redo stack non-empty"
+    },
+    {
+      "name": "dirty.empty_at_saved_boundary",
+      "passed": true,
+      "detail": "dirtyPages=[]"
+    },
+    {
+      "name": "redo.reapplies",
+      "passed": true,
+      "detail": "block matches post-edit JSON after 3 redos"
+    },
+    {
+      "name": "redo.dirty",
+      "passed": true,
+      "detail": "dirty=true"
+    },
+    {
+      "name": "dirty.back_after_redo",
+      "passed": true,
+      "detail": "redone work must be dirty again: [The Heroine Takes Everything/Ch.1 - [Lua Comic] - The Heroine Takes Everything - 20260924_1254/001.webp]"
+    },
+    {
+      "name": "save.json",
+      "passed": true,
+      "detail": "C:/Users/ADMINI~1/AppData/Local/Temp/vene_edit_ec53a1ab/imgtrans_Manhwa.json"
+    },
+    {
+      "name": "save.artifacts",
+      "passed": true,
+      "detail": "mask, inpainted, result"
+    },
+    {
+      "name": "dirty.filter_selects_one",
+      "passed": true,
+      "detail": "planned=[The Heroine Takes Everything/Ch.1 - [Lua Comic] - The Heroine Takes Everything - 20260924_1254/001.webp]"
+    },
+    {
+      "name": "dirty.full_plan_is_larger",
+      "passed": true,
+      "detail": "full=831 vs dirty=1"
+    },
+    {
+      "name": "reload.translation",
+      "passed": true,
+      "detail": "seed [edited]"
+    },
+    {
+      "name": "reload.box",
+      "passed": true,
+      "detail": "125.0, 245.0, 445.0, 309.0"
+    },
+    {
+      "name": "reload.rich_text",
+      "passed": true,
+      "detail": "rich_text survived the reload"
+    },
+    {
+      "name": "reload.font_size",
+      "passed": true,
+      "detail": "27.0"
+    },
+    {
+      "name": "roundtrip.bytes",
+      "passed": true,
+      "detail": "385194 vs 385194 bytes"
+    },
+    {
+      "name": "guard.empty_allows",
+      "passed": true,
+      "detail": "no guard registered after the editor is gone"
+    },
+    {
+      "name": "guard.empty_request_is_true",
+      "passed": true,
+      "detail": "requesting with an empty registry must not block anything"
+    },
+    {
+      "name": "guard.has_guards",
+      "passed": true,
+      "detail": "one guard"
+    },
+    {
+      "name": "guard.no_duplicate_ask",
+      "passed": true,
+      "detail": "asked=1 (expected 1)"
+    },
+    {
+      "name": "guard.deny_vetoes",
+      "passed": true,
+      "detail": "asked=deny (deny must be reached)"
+    },
+    {
+      "name": "guard.lifo_order",
+      "passed": true,
+      "detail": "newest guard is asked first: deny"
+    },
+    {
+      "name": "guard.short_circuits",
+      "passed": true,
+      "detail": "asked=deny"
+    },
+    {
+      "name": "guard.remove_is_scoped",
+      "passed": true,
+      "detail": "removing the denying guard re-opens the exit"
+    },
+    {
+      "name": "guard.removed_clean",
+      "passed": true,
+      "detail": "registry empty again"
+    },
+    {
+      "name": "guard.throw_vetoes",
+      "passed": true,
+      "detail": "a throwing guard must not let the screen close"
+    },
+    {
+      "name": "guard.final_clean",
+      "passed": true,
+      "detail": "no leakage into later checks"
+    },
+    {
+      "name": "create.key_count",
+      "passed": true,
+      "detail": "23 keys: [xyxy, lines, language, distance, angle, vec, norm, merged, text, translation, rich_text, _bounding_rect, src_is_vertical, _detected_font_size, det_model, label, region_mask, region_inpaint_dict, fontformat, text_alpha_mask, _detected_font_name, _detected_font_confidence, text_layout_version]"
+    },
+    {
+      "name": "create.fontformat_keys",
+      "passed": true,
+      "detail": "32 keys"
+    },
+    {
+      "name": "create.xyxy",
+      "passed": true,
+      "detail": "rect 200,300 360x72"
+    },
+    {
+      "name": "create.starts_empty",
+      "passed": true,
+      "detail": "translation=\"\""
+    },
+    {
+      "name": "create.not_lettered_until_typed",
+      "passed": true,
+      "detail": "an empty block renders nothing (no ghost lettering)"
+    },
+    {
+      "name": "create.renders_after_typing",
+      "passed": true,
+      "detail": "\"你好\" at 200,300 360x72"
+    },
+    {
+      "name": "create.rich_text",
+      "passed": true,
+      "detail": "rich_text built on demand"
+    },
+    {
+      "name": "create.font_defaults",
+      "passed": true,
+      "detail": "Microsoft YaHei UI 24.0 fg=[0, 0, 0] bg=[0, 0, 0]"
+    },
+    {
+      "name": "create.undo_one_step",
+      "passed": true,
+      "detail": "blocks 1 -> 2, depth=1"
+    },
+    {
+      "name": "create.dirty_page",
+      "passed": true,
+      "detail": "dirtyPages={The Heroine Takes Everything/Ch.1 - [Lua Comic] - The Heroine Takes Everything - 20260924_1254/001.webp}"
+    },
+    {
+      "name": "create.undo_restores",
+      "passed": true,
+      "detail": "blocks back to 1"
+    },
+    {
+      "name": "create.clean_after_undo",
+      "passed": true,
+      "detail": "dirty=false pages={}"
+    },
+    {
+      "name": "resize.handle_set",
+      "passed": true,
+      "detail": "8 handles, 4 corners"
+    },
+    {
+      "name": "resize.handle_self_hit",
+      "passed": true,
+      "detail": "all 8 handles hit-test to themselves at their own centre"
+    },
+    {
+      "name": "resize.corner_both_axes",
+      "passed": true,
+      "detail": "bottomRight(+20,+30) -> L0.0 T0.0 R120.0 B130.0"
+    },
+    {
+      "name": "resize.edge_single_axis",
+      "passed": true,
+      "detail": "right(+20,+30) -> L0.0 T0.0 R120.0 B100.0 (y must not move)"
+    },
+    {
+      "name": "resize.left_edge_pins_right",
+      "passed": true,
+      "detail": "left(+15) -> L15.0 T0.0 R100.0 B100.0 (right must stay 100)"
+    },
+    {
+      "name": "resize.no_inversion",
+      "passed": true,
+      "detail": "right(+500) -> L0.0 T0.0 R600.0 B100.0"
+    },
+    {
+      "name": "resize.no_inversion_corner",
+      "passed": true,
+      "detail": "topLeft(+500,+500) -> L84.0 T84.0 R100.0 B100.0 (opposite corner must stay pinned at 100,100)"
+    },
+    {
+      "name": "marquee.normalises_negative_drag",
+      "passed": true,
+      "detail": "drag(200,300)->(50,80) => L50.0 T80.0 R200.0 B300.0"
+    },
+    {
+      "name": "marquee.rejects_stray_click",
+      "passed": true,
+      "detail": "a 2x1px drag must not create a block"
+    },
+    {
+      "name": "font.bridge_attaches_style",
+      "passed": true,
+      "detail": "attached"
+    },
+    {
+      "name": "font.carries_all_attributes",
+      "passed": true,
+      "detail": "family=Source Han Sans w=700 size=33.0 italic=true underline=true align=0 line=1.7 letter=1.25 op=0.6 stroke=4.0 shadow=5.0 grad=true angle=12.0"
+    },
+    {
+      "name": "font.absent_format_stays_null",
+      "passed": true,
+      "detail": "fontStyle=null (must be null so the legacy path is untouched)"
+    },
+    {
+      "name": "i18n.studio_tooltips_registered",
+      "passed": true,
+      "detail": "all studio tooltips have zh_CN entries"
+    },
+    {
+      "name": "fromOcr.shape_matches_create_default",
+      "passed": true,
+      "detail": "block 24 keys, fontformat 32 keys"
+    },
+    {
+      "name": "fromOcr.carries_detection",
+      "passed": true,
+      "detail": "xyxy=[120.0, 240.0, 480.0, 520.0] lines=[こんにちは, 世界] lang=ja"
+    },
+    {
+      "name": "fromOcr.carries_size",
+      "passed": true,
+      "detail": "_detected_font_size=27.0 font_size=27.0"
+    },
+    {
+      "name": "fromOcr.horizontal_box_not_vertical",
+      "passed": true,
+      "detail": "src_is_vertical=false vertical=false (360x280 is landscape)"
+    },
+    {
+      "name": "fromOcr.marks_vertical",
+      "passed": true,
+      "detail": "src_is_vertical=true vertical=true (160x600 is portrait)"
+    },
+    {
+      "name": "fromOcr.leaves_translation_empty",
+      "passed": true,
+      "detail": "translation=\"\" region=null"
+    },
+    {
+      "name": "fromOcr.det_model_stays_empty",
+      "passed": true,
+      "detail": "det_model=\"\" (must stay empty so a re-detect pass does not treat this block as its own output)"
+    },
+    {
+      "name": "fromOcr.roundtrips_through_json",
+      "passed": true,
+      "detail": "json stable"
+    },
+    {
+      "name": "font.files_present",
+      "passed": true,
+      "detail": "4 bundled font file(s) on disk"
+    },
+    {
+      "name": "font.license_embedded",
+      "passed": true,
+      "detail": "OFL text present for 4 font file(s)"
+    },
+    {
+      "name": "font.registry_matches_pubspec",
+      "passed": true,
+      "detail": "fonts: active; families yaml=[Noto Sans SC, Noto Sans KR] table=[Noto Sans SC, Noto Sans KR]"
+    },
+    {
+      "name": "font.assets_exist_in_pubspec",
+      "passed": true,
+      "detail": "every bundled family is registered"
+    },
+    {
+      "name": "font.unknown_family_falls_back",
+      "passed": true,
+      "detail": "resolveFamily(\"Some Font That Does Not Exist\") -> \"Noto Sans SC\" fallback=true; reason: \"Some Font That Does Not Exist\" is neither bundled nor installed; fell back to \"Noto Sans SC\""
+    },
+    {
+      "name": "font.legacy_yahei_mapped",
+      "passed": true,
+      "detail": "\"Microsoft YaHei UI\" -> \"Noto Sans SC\" fallback=true recognised=true; reason: \"Microsoft YaHei UI\" is a system font that is not bundled; mapped to \"Noto Sans SC\" (this is FontFormat.defaultFontFamily, i.e. most existing projects)"
+    },
+    {
+      "name": "font.missing_family_falls_back",
+      "passed": true,
+      "detail": "resolveFamily(null) -> \"Noto Sans SC\" fallback=true"
+    },
+    {
+      "name": "font.bundled_family_passes_through",
+      "passed": true,
+      "detail": "\"Noto Sans SC\" -> \"Noto Sans SC\" fallback=false (a bundled family must never be rewritten)"
+    },
+    {
+      "name": "font.default_family_is_legacy",
+      "passed": true,
+      "detail": "FontFormat.defaultFontFamily = \"Microsoft YaHei UI\""
+    },
+    {
+      "name": "font.selector_lists_unbundled",
+      "passed": true,
+      "detail": "choices: [Noto Sans SC, Noto Sans KR, Some Unbundled Face (not bundled)]"
+    },
+    {
+      "name": "font.renderer_resolves_family",
+      "passed": true,
+      "detail": "every fontFamily assignment goes through resolveFamily()"
+    },
+    {
+      "name": "font.preview_matches_output",
+      "passed": true,
+      "detail": "canvas resolves=true rawPassThrough=false studioHandsOffRaw=true (the canvas must resolve, or the preview lies about the exported page)"
+    },
+    {
+      "name": "font.system_family_used_when_installed",
+      "passed": true,
+      "detail": "resolveFamily(\"Fake CJK Face\") -> \"Fake CJK Face\" fallback=false; reason: system font \"Fake CJK Face\" (installed on this machine)"
+    },
+    {
+      "name": "font.non_cjk_system_family_not_used",
+      "passed": true,
+      "detail": "a Latin-only installed face must NOT be used: -> \"Noto Sans SC\" fallback=true; reason: \"Fake Latin Face\" is neither bundled nor installed; fell back to \"Noto Sans SC\""
+    },
+    {
+      "name": "font.system_family_beats_legacy_alias",
+      "passed": true,
+      "detail": "with the face installed it must be used as-is: -> \"Microsoft YaHei UI\" fallback=false; reason: system font \"Microsoft YaHei UI\" (installed on this machine)"
+    },
+    {
+      "name": "font.selector_lists_installed_cjk_only",
+      "passed": true,
+      "detail": "listed: Noto Sans SC, Noto Sans KR, Fake CJK Face, Microsoft YaHei UI (a Latin-only face in this list would be a tofu trap)"
+    },
+    {
+      "name": "font.sfnt_parses_bundled_face",
+      "passed": true,
+      "detail": "family=\"Noto Sans SC\" weight=400 italic=false codepoints=30892 coverage={FontScript.latin: 1.0, FontScript.kana: 1.0, FontScript.hangul: 0.0, FontScript.cjk: 1.0, FontScript.punctuation: 1.0}"
+    },
+    {
+      "name": "font.sfnt_coverage_distinguishes_scripts",
+      "passed": true,
+      "detail": "SC covers cjk=1.00 kana=1.00 hangul=0.00 (hangul must be < 0.9); a coverage table hard-coded to 1.0 is distinguishable: hangul bad=true"
+    },
+    {
+      "name": "font.sfnt_rejects_garbage",
+      "passed": true,
+      "detail": "bogus sfnt (magic ok, 0 tables) -> null (rejected)"
+    },
+    {
+      "name": "font.letter_spacing_scales_with_size",
+      "passed": true,
+      "detail": "letterSpacingPx(1.15, 40) = 5.9999999999999964 px; the old size-independent expression gives 0.1499999999999999 px (0.15 px is invisible — that was the bug)"
+    },
+    {
+      "name": "font.line_spacing_default_is_shared",
+      "passed": true,
+      "detail": "lineSpacingOf(null)=1.2 (was 1.15 on the canvas, 1.2 in RegionFontStyle); explicit values pass through: 2.0"
+    },
+    {
+      "name": "font.weight_table_is_shared",
+      "passed": true,
+      "detail": "100->100 350->300 700->700 999->900"
+    },
+    {
+      "name": "color.black_text_on_white",
+      "passed": true,
+      "detail": "text=[0, 0, 0] bg=[248, 248, 248] samples=576 eroded=true contrast=248"
+    },
+    {
+      "name": "color.white_text_on_black",
+      "passed": true,
+      "detail": "text=[255, 255, 255] bg=[7, 7, 7] samples=576"
+    },
+    {
+      "name": "color.constant_black_fault_is_caught",
+      "passed": true,
+      "detail": "white-on-black text=[255, 255, 255] vs a \"always black\" implementation [0, 0, 0] — channel spread 765 must stay huge"
+    },
+    {
+      "name": "color.erosion_removes_antialiased_edge",
+      "passed": true,
+      "detail": "eroded mean=0.0; skipping erosion would give 26.5 (a visible \"lighter than the original ink\" shift)"
+    },
+    {
+      "name": "color.flat_region_returns_null",
+      "passed": true,
+      "detail": "a uniform crop must yield null (there is no text to sample), got null"
+    },
+    {
+      "name": "color.coloured_text_keeps_hue",
+      "passed": true,
+      "detail": "text=[220, 20, 20] (a red SFX must not come back grey)"
+    },
+    {
+      "name": "color.auto_flag_round_trip",
+      "passed": true,
+      "detail": "new block carries the key=false (must be false); after set=true; after clearing it still exists=false"
+    },
+    {
+      "name": "cluster.merges_lines_of_one_balloon",
+      "passed": true,
+      "detail": "3 lines 8px apart -> 1 balloon(s), 3 line(s); bounds=100,100,400,206"
+    },
+    {
+      "name": "cluster.splits_separate_balloons",
+      "passed": true,
+      "detail": "2 lines 100px apart -> 2 balloon(s) (must be 2)"
+    },
+    {
+      "name": "cluster.reading_order_right_to_left",
+      "passed": true,
+      "detail": "RTL order: [右@col0/#0, 左@col1/#1]"
+    },
+    {
+      "name": "cluster.reading_order_left_to_right",
+      "passed": true,
+      "detail": "LTR order: [左@col0/#0, 右@col1/#1]"
+    },
+    {
+      "name": "cluster.column_reads_top_to_bottom",
+      "passed": true,
+      "detail": "order: [上@col0/#0, 下@col0/#1, 左列@col1/#2]"
+    },
+    {
+      "name": "cluster.staggered_not_merged_into_one_column",
+      "passed": true,
+      "detail": "staircase -> 3 balloons in 3 column(s) (must be 3/3, not 3/1)"
+    },
+    {
+      "name": "cluster.order_is_deterministic",
+      "passed": true,
+      "detail": "forward=[B@0, D@1, A@2, C@3] reversed=[B@0, D@1, A@2, C@3]"
+    },
+    {
+      "name": "cluster.vertical_lines_read_right_first",
+      "passed": true,
+      "detail": "joined text = 右列 | 左列"
+    },
+    {
+      "name": "cluster.empty_input_yields_nothing",
+      "passed": true,
+      "detail": "no lines -> no balloons (must not fabricate)"
+    },
+    {
+      "name": "cluster.blank_lines_ignored",
+      "passed": true,
+      "detail": "blank line between two lines -> 2 balloons (must be 2, a blank must not bridge them)"
+    },
+    {
+      "name": "cluster.mixed_orientation_not_merged",
+      "passed": true,
+      "detail": "one horizontal + one vertical -> 2 balloons (must be 2; merging them would feed OCR two unrelated strings)"
+    },
+    {
+      "name": "cluster.mixed_font_size_not_merged",
+      "passed": true,
+      "detail": "20px + 80px lines -> 2 balloons (must be 2; the median line height would otherwise land between the two)"
+    },
+    {
+      "name": "cluster.reports_median_line_height",
+      "passed": true,
+      "detail": "line heights 30/30/44 -> median 30 (must be 30: the median is what caps the translated glyph size)"
+    },
+    {
+      "name": "cluster.bridge_keeps_per_line_erase_rects",
+      "passed": true,
+      "detail": "eraseRects=3 lineHeight=30 text=第一行|第二行|第三行"
+    },
+    {
+      "name": "cluster.detector_extension_point_exists",
+      "passed": true,
+      "detail": "PureGeometryBalloonDetector implements BalloonDetector (scheme B plugs in here)"
+    },
+    {
+      "name": "pipeline.batch_landing_is_one_undo_step",
+      "passed": true,
+      "detail": "add -> 2 blocks; undo -> 0; redo -> 2 (a chapter run produces dozens of blocks; per-block undo is not usable)"
+    },
+    {
+      "name": "pipeline.landing_registers_dirty_page",
+      "passed": true,
+      "detail": "dirtyPages=[0/1.webp] (must contain the page that just gained blocks)"
+    },
+    {
+      "name": "pipeline.undo_after_save_clears_dirty",
+      "passed": true,
+      "detail": "after save dirty=[]; after undo dirty=[] (a page whose net change is nil must not be re-rendered)"
+    },
+    {
+      "name": "pipeline.dedup_protects_reviewed_blocks",
+      "passed": true,
+      "detail": "same box overlaps=true; distant box overlaps=false; existing translation intact=人工校对过的译文"
+    },
+    {
+      "name": "pipeline.blocks_become_letterable",
+      "passed": true,
+      "detail": "before translation region=null; after=\"你好\" (an untranslated block must not be lettered)"
+    },
+    {
+      "name": "pipeline.cancel_token_works",
+      "passed": true,
+      "detail": "a cancelled token throws PipelineCanceled (threw=true)"
+    },
+    {
+      "name": "pipeline.report_counts_failures",
+      "passed": true,
+      "detail": "failed=1 skipped=2 canceled=false (a partial run must not report as a complete one)"
+    },
+    {
+      "name": "pipeline.studio_does_not_use_legacy_engine",
+      "passed": true,
+      "detail": "only referenced in a comment (documenting the deliberate non-use); no code path reaches it"
+    },
+    {
+      "name": "inpaint.layered_order_bases_first",
+      "passed": true,
+      "detail": "sync=[bases]（必须是 bases）—— result/ 以 inpainted/ 为输入位图；反过来跑只会把成品记成 skipped，\"一张都没出\"看起来像\"这页没译文\""
+    },
+    {
+      "name": "inpaint.base_requires_no_downscale",
+      "passed": true,
+      "detail": "同宽=true；降采样=false（必须 false）—— 否则 result/ 侧的 scale==1.0 变成谎言，框按源坐标落在缩小的图上"
+    },
+    {
+      "name": "inpaint.base_source_is_original",
+      "passed": true,
+      "detail": "source=C:/Users/ADMINI~1/AppData/Local/Temp/0/1.webp；禁止=C:/Users/ADMINI~1/AppData/Local/Temp/inpainted/0/1.png (对已去字的位图再擦一遍会越擦越糊，且每保存一次更糊一点)"
+    },
+    {
+      "name": "assertions.reverse_verification_recorded",
+      "passed": true,
+      "detail": "37 assertions confirmed FAIL under an injected fault — 1 NOT fault-verified yet (pipeline.studio_does_not_use_legacy_engine)"
+    },
+    {
+      "name": "snap.edge_within_tolerance",
+      "passed": true,
+      "detail": "103 with targets [100,300] tol 4 -> 100.0 snapped=true"
+    },
+    {
+      "name": "snap.edge_outside_tolerance",
+      "passed": true,
+      "detail": "110 with target [100] tol 4 -> 110.0 snapped=false"
+    },
+    {
+      "name": "snap.resize_only_moves_dragged_edge",
+      "passed": true,
+      "detail": "rect=100.0,100.0,300.0,200.0 guidesX=[300.0]"
+    },
+    {
+      "name": "snap.resize_never_violates_min_size",
+      "passed": true,
+      "detail": "right=116.0 width=16.0 guides=[] (114 would make it 14)"
+    },
+    {
+      "name": "snap.move_prefers_smaller_adjustment",
+      "passed": true,
+      "detail": "moved box (157,257) targets [160,258] -> dx=58.0 guides=[258.0] (left would need +3, right only +1)"
+    },
+    {
+      "name": "snap.no_targets_is_noop",
+      "passed": true,
+      "detail": "offset=(7.0, -3.0) guides=[]/[]"
+    },
+    {
+      "name": "snap.targets_include_page_bounds",
+      "passed": true,
+      "detail": "xs=[10.0, 30.0, 0.0, 900.0] ys=[20.0, 40.0, 0.0, 1778.0]"
+    },
+    {
+      "name": "font.korean_registered",
+      "passed": true,
+      "detail": "bundled families=[Noto Sans SC, Noto Sans KR] primary=Noto Sans SC (moving the primary would change every existing project)"
+    },
+    {
+      "name": "font.korean_alias_mapped",
+      "passed": true,
+      "detail": "\"Malgun Gothic\" -> Noto Sans KR (fallback=true); \"맑은 고딕\" -> Noto Sans KR"
+    },
+    {
+      "name": "font.korean_files_are_cff",
+      "passed": true,
+      "detail": "2 CFF (.otf) files present"
+    },
+    {
+      "name": "font.korean_cmap_has_hangul",
+      "passed": true,
+      "detail": "KR covered=23176 U+D55C=20852 U+AE00=10776; SC covered=30892 U+D55C=null"
+    },
+    {
+      "name": "font.fallback_chain_excludes_own_family",
+      "passed": true,
+      "detail": "2 families, every chain excludes its own resolved family"
+    },
+    {
+      "name": "font.renderer_uses_fallback_chain",
+      "passed": true,
+      "detail": "both render paths call bundledFamilyFallbacks"
+    },
+    {
+      "name": "leave.close_always_intercepted",
+      "passed": true,
+      "detail": "setPreventClose(true) x1, setPreventClose(false) x0 (放行关闭 = 交出拦截权 = 守卫收不到通知)"
+    },
+    {
+      "name": "leave.single_exit_call_site",
+      "passed": true,
+      "detail": "exit(0) x1, asks LeaveGuardRegistry=true"
+    },
+    {
+      "name": "studio.marquee_reset_on_page_change",
+      "passed": true,
+      "detail": "_marqueeMode = false x6 (needs decl + _selectPage + onPageChanged; two page-change paths must both clear it)"
+    },
+    {
+      "name": "pipeline.resume_returns_tail",
+      "passed": true,
+      "detail": "from 0/2.webp -> [0/2.webp, 0/3.webp] (input must not be mutated; still 3)"
+    },
+    {
+      "name": "pipeline.resume_unknown_page_is_empty",
+      "passed": true,
+      "detail": "unknown page -> [], no breakpoint -> [] (must NOT fall back to the whole chapter)"
+    },
+    {
+      "name": "harness.truncates_output_before_run",
+      "passed": true,
+      "detail": "truncates before run=true, uses os.remove=false (without truncation the first poll reads the previous run)"
+    },
+    {
+      "name": "assertions.p2_reverse_verification_recorded",
+      "passed": true,
+      "detail": "9 P2 assertions confirmed FAIL under an injected fault — 10 NOT fault-verified yet (snap.edge_within_tolerance, snap.edge_outside_tolerance, snap.resize_only_moves_dragged_edge, snap.resize_never_violates_min_size, snap.move_prefers_smaller_adjustment, snap.no_targets_is_noop, snap.targets_include_page_bounds, studio.marquee_reset_on_page_change, pipeline.resume_returns_tail, pipeline.resume_unknown_page_is_empty)"
+    },
+    {
+      "name": "reader.result_bitmap_wins_over_re_rendering",
+      "passed": true,
+      "detail": "绿=有 result 取 result / 故障=先看 inpainted 的实现会落到 projectRender | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.missing_result_re_renders_from_the_base",
+      "passed": true,
+      "detail": "绿=无 result 有底图则现绘 / 故障=只认 result 的实现会回原图 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.erased_base_without_blocks_is_never_rendered",
+      "passed": true,
+      "detail": "绿=有底图无块 → 原图 / 故障=忽略 hasBlocks 的实现会去重绘白页 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.no_artifact_at_all_is_the_original",
+      "passed": true,
+      "detail": "绿=无产物 → 原图 / 故障=无条件重绘的实现不返回原图 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.relative_key_strips_the_comic_root",
+      "passed": true,
+      "detail": "绿=剥掉漫画根得到相对页键 / 故障=只取文件名时判据不成立 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.path_outside_the_comic_root_is_rejected",
+      "passed": true,
+      "detail": "绿=外来路径 → null / 故障=取名兜底会给出一个\"看起来正常\"的键 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.same_basename_in_two_chapters_does_not_collide",
+      "passed": true,
+      "detail": "绿=相对路径精确对应 / 故障=按文件名匹配会取到第 1 话那一页 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.separators_and_drive_case_are_normalised",
+      "passed": true,
+      "detail": "绿=归一化后命中 / 故障=原样比较会落空 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.binding_key_carries_the_chapter",
+      "passed": true,
+      "detail": "绿=键带 eid 两章不同 / 故障=只带 cid 时两章是同一个键 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.null_source_key_normalises_to_empty_not_null_literal",
+      "passed": true,
+      "detail": "绿=null 源键拼成空 / 故障=直接插值时拼成字面量 null | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.a_binding_missing_a_field_is_rejected_whole",
+      "passed": true,
+      "detail": "绿=缺 json/comicDirectory 整条作废 / 故障=宽松解析会留下半条 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.a_read_modify_write_drops_corrupt_entries",
+      "passed": true,
+      "detail": "绿=坏条目在读时被跳过、写时被丢弃 / 故障=原样搬运会把它留下 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.binding_roundtrips_through_json",
+      "passed": true,
+      "detail": "绿=写-读往返一致 / 故障=只留 json 键时读回来是 null | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.binding_carries_the_origin_identity",
+      "passed": true,
+      "detail": "绿=来源身份写-读往返一致 / 故障=漏写时读回来是空串 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.legacy_binding_without_the_origin_still_parses",
+      "passed": true,
+      "detail": "绿=老绑定照旧可读（来源为空）/ 故障=把新字段当必填时会整条作废 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.reverse_lookup_ignores_path_shape",
+      "passed": true,
+      "detail": "绿=反查容忍斜杠/大小写 / 故障=直接字符串比较时查不到 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.pages_needing_work_judge_on_result_not_on_intermediates",
+      "passed": true,
+      "detail": "绿=只按 result 判 / 故障=按中间态判时 0/2 会被跳过 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.pages_needing_work_keeps_reading_order",
+      "passed": true,
+      "detail": "绿=保持调用方给的阅读顺序 / 故障=字符串排序把 0/10 排到 0/2 之前 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.chapter_page_keys_are_restricted_to_that_chapter",
+      "passed": true,
+      "detail": "绿=只留这一章的页 / 故障=不按章节过滤会带上第 1 话的两页 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.chapter_prefix_does_not_match_a_longer_sibling",
+      "passed": true,
+      "detail": "绿=带斜杠前缀只命中正片 / 故障=裸前缀会把番外话一起收进来 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.empty_chapter_name_means_the_whole_project",
+      "passed": true,
+      "detail": "绿=无章节漫画取全部页 / 故障=拼成 \"/\" 前缀会一页都取不到 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.switch_queues_the_chapter_instead_of_translating_on_read",
+      "passed": true,
+      "detail": "绿=开关入队 + 按绑定取真相 / 故障=旧写法（布尔设置 + 缓存键）不满足 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.one_chapter_loop_is_shared_by_the_tool_and_the_app",
+      "passed": true,
+      "detail": "绿=两侧都调 StudioChapterRunner.run / 故障=应用侧另写一套循环不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.studio_cancellation_actually_reaches_the_token",
+      "passed": true,
+      "detail": "绿=cancel 里点了令牌 / 故障=不点令牌时判据不成立 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.task_framework_stays_out_of_the_studio_engine",
+      "passed": true,
+      "detail": "绿=框架只有注入点 studioRunner / 故障=直接调 StudioChapterRunner 不满足 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.pause_is_not_offered_for_studio_tasks",
+      "passed": true,
+      "detail": "绿=按钮与管理器都挡 studio / 故障=管理器不挡时 paused 是假状态 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.studio_runner_is_registered_before_resuming_pending_tasks",
+      "passed": true,
+      "detail": "绿=先注册后续跑 / 故障=顺序颠倒时判据不成立 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.decision_layer_is_pure",
+      "passed": true,
+      "detail": "绿=纯逻辑层不碰 io/ui/flutter / 故障=app 侧对照组确实碰 dart:io | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.reader_image_path_never_asks_the_engine_whether_a_page_is_translated",
+      "passed": true,
+      "detail": "绿=阅读路径与图片 provider 里一处都没有 / 故障=全仓都空（扫描器坏了） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.reader_provider_is_bound_to_a_studio_project_not_a_translation_key",
+      "passed": true,
+      "detail": "绿=按绑定取工程 / 故障=旧写法（算 translationKey）不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.renderer_reads_project_artifacts",
+      "passed": true,
+      "detail": "绿=读 result/ 优先、其次现绘 / 故障=少了 resultPath 就不满足 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "reader.reader_provider_carries_the_artifact_revision",
+      "passed": true,
+      "detail": "绿=键里带 studioRevision / 故障=键与产物变更无关 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.name_rule_matches_the_reader_toggle_formula",
+      "passed": true,
+      "detail": "绿=名字规则（清洗 + 兜底） / 故障=不清洗的那版在 a/b 上不成立 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.name_rule_bounds_the_length",
+      "passed": true,
+      "detail": "绿=截到 60 / 故障=不截的那版长度为 80 ⇒ 判据不成立 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.name_rule_is_shared_with_the_reader_toggle",
+      "passed": true,
+      "detail": "绿=阅读器开关走共享命名规则 / 故障=内联旧公式不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.logic_layer_holds_no_widgets",
+      "passed": true,
+      "detail": "绿=入口逻辑层没有 UI / 故障=对照组（菜单 UI）确实有 Widget ⇒ 判据非恒真 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.derived_cards_are_not_candidates",
+      "passed": true,
+      "detail": "绿=bt_/ft_ 产物被排除 / 故障=忽略该判据的版本会放它进来 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.the_source_type_is_not_the_eligibility_rule",
+      "passed": true,
+      "detail": "绿=从网络源下载到本地的漫画仍是素材 / 故障=按 comicType 分类的那版会把它排除掉（2026-10-09 实测三行的形态） | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.eligibility_never_reads_the_comic_type",
+      "passed": true,
+      "detail": "绿=判据函数体不出现 comicType / 故障=按 comicType 分类的那版被抓出来 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.comics_without_local_pages_are_not_candidates",
+      "passed": true,
+      "detail": "绿=没有本地页的漫画被排除 / 故障=忽略该判据的版本会放它进来 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.a_flat_comic_still_has_one_choice",
+      "passed": true,
+      "detail": "绿=扁平漫画（页在根下）可选 / 故障=关掉 isFlat 后判据为 false | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.the_library_splits_by_card_kind",
+      "passed": true,
+      "detail": "绿=按 id 前缀三分（bt_=工程 / ft_=成品 / 其余=素材） / 故障=按 comicType 分类的版本把 ft_ 判成工程 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.home_local_section_shows_artwork_only",
+      "passed": true,
+      "detail": "绿=主页本地栏只收素材（排除 bt_/ft_）/ 故障=不排除的版本不成立 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.home_and_library_read_the_same_card_kind_module",
+      "passed": true,
+      "detail": "绿=两处（主页本地分区 / 本地库页列表）都读同一份卡片判据 / 故障=内联 isBtComic 的版本不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.card_kind_reads_the_prefix_from_its_owner",
+      "passed": true,
+      "detail": "绿=前缀取自各管理器 / 故障=硬编码字符串的版本不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.prefix_exclusion_sql_is_parameter_bound",
+      "passed": true,
+      "detail": "绿=每条带占位符的 SQL 都绑定了参数 / 故障=有占位符却不传参的版本被抓出 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.chapter_scan_is_the_same_walk_as_project_creation",
+      "passed": true,
+      "detail": "绿=入口调 scanPageNames（唯一走法） / 故障=自己列目录的版本不满足 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.scan_page_names_is_shared_by_plan_and_counting",
+      "passed": true,
+      "detail": "绿=plan 走 scanPageNames / 故障=plan 自己列目录不满足 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.option_selectability_equals_page_count",
+      "passed": true,
+      "detail": "绿=ch1 可选/ch2 灰掉 / 故障=不看磁盘的版本会把 ch2 判成可选 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.bad_names_are_rejected_before_the_disk_is_touched",
+      "passed": true,
+      "detail": "绿=空/分隔符/过长都被挡 / 故障=不查长度的版本会放过 61 字符 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.both_entry_points_use_the_same_widget",
+      "passed": true,
+      "detail": "绿=两处都挂 StudioProjectMenu / 故障=手搭 PopupMenuButton 不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.creation_goes_through_the_reader_link",
+      "passed": true,
+      "detail": "绿=走 locate + ensureBinding / 故障=直接 create 的版本不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.the_id_is_not_re_derived",
+      "passed": true,
+      "detail": "绿=入口用公开的 comicIdForJsonFile / 故障=内联哈希的版本不满足 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.the_id_helper_has_exactly_one_implementation",
+      "passed": true,
+      "detail": "绿=只剩一个公开实现 / 故障=公开名与私有名并存不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.chapter_refs_are_built_in_the_logic_layer",
+      "passed": true,
+      "detail": "绿=菜单调 studioChapterRefs / 故障=自己拼章节列表不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.chapter_refs_prefer_downloaded_versions",
+      "passed": true,
+      "detail": "绿=已下载版本被提到首位 / 故障=原始序的版本会落到 k-diva | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.flat_comic_uses_the_zero_eid",
+      "passed": true,
+      "detail": "绿=无章节漫画用 eid='0' / 故障=用空串的版本不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.entry_does_not_touch_settings",
+      "passed": true,
+      "detail": "绿=入口不碰 appdata / 故障=对照组（设置页）确实含 appdata | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.projects_root_is_the_managed_rule",
+      "passed": true,
+      "detail": "绿=走 defaultProjectsRoot / 故障=内联\"上一级 + /projects\"不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.reports_when_the_project_is_not_listed",
+      "passed": true,
+      "detail": "绿=核对 projectFor 并且上报 listed / 故障=不核对的那版不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.deletion.record_home_follows_the_card_kind",
+      "passed": true,
+      "detail": "绿=工程卡记录来自磁盘 json、素材/成品来自数据库 / 故障=一律当数据库的那版在工程卡上不成立 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.deletion.refuses_to_step_outside_the_library",
+      "passed": true,
+      "detail": "绿=漫画库自身/其上层/三个分类根/相对路径一律拒绝，真漫画放行 / 故障=无守卫的版本会同意删掉漫画库本身 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.deletion.never_asks_local_manager_to_delete_files",
+      "passed": true,
+      "detail": "绿=删除模块自己解析路径、不让 LocalManager 动盘 / 故障=透传 removeFileOnDisk 的版本在工程/成品上静默失效 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.deletion.dialog_names_what_is_deleted",
+      "passed": true,
+      "detail": "绿=弹窗逐本列出标题与磁盘路径 / 故障=旧弹窗（写死的 Delete 标题 + 两个勾选框）不满足判据 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.binding.json_gone_is_not_a_project",
+      "passed": true,
+      "detail": "绿=json 没了就不算已有工程 / 故障=只看键的那版仍把幽灵绑定当工程 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.deletion.purges_the_reader_binding_of_the_deleted_project",
+      "passed": true,
+      "detail": "绿=只清掉指向被删工程的那条绑定 / 故障=不清理的那版把幽灵绑定留在表里 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.the_project_id_is_separator_insensitive",
+      "passed": true,
+      "detail": "绿=id 对分隔符不敏感 / 故障=不归一化的版本在 `\\\\` 上算出另一个 id | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.cover.in_the_project_folder_is_found",
+      "passed": true,
+      "detail": "绿=封面查 source/ 与工程根两处 / 故障=只查 source 的版本找不到工程根的封面 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.scan.artifacts_sidecar_is_not_a_project",
+      "passed": true,
+      "detail": "绿=对账表 sidecar 不算工程 / 故障=只查前缀与后缀的旧判据把 sidecar 也当工程 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.font.the_user_size_wins_over_the_measured_lettering",
+      "passed": true,
+      "detail": "绿=用户设定的字号就是上限 / 故障=旧 min 连乘把 120 压回 44.1 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.font.untouched_block_keeps_the_measured_cap",
+      "passed": true,
+      "detail": "绿=未动过的块保留源字号补偿 / 故障=不做补偿的那版返回 49 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.chapter_state.the_union_survives_both_sides",
+      "passed": true,
+      "detail": "绿=并集四场景全对 / 故障=只读旧库(工作室侧丢) / 另两个故障副本由下一条断言钉住 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.chapter_state.the_other_two_faults_are_caught_too",
+      "passed": true,
+      "detail": "绿=只认工程/有绑定就算 两个故障版都判出不同结论 / 故障=判据不再区分两侧时本条与上一条一起失效 | 绿路径=true 故障路径=变红"
+    },
+    {
+      "name": "projectEntry.chapter_state.the_badge_counts_both_sides",
+      "passed": true,
+      "detail": "绿=徽标页数取两侧之和(90+3=93) / 故障=取 max 时 3 页被吞 | 绿路径=true 故障路径=变红"
+    }
+  ]
+}

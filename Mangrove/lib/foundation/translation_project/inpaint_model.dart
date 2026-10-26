@@ -27,6 +27,7 @@
 /// 那条纪律。
 library;
 
+import 'dart:async';
 import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -55,6 +56,18 @@ class ModelInpaintResult {
 
 /// LaMa 修复的统一入口。
 abstract class InpaintModel {
+  /// 常驻推理 worker（见 [_lamaWorkerMain] 与 [_WorkerClient]）。
+  static final _WorkerClient _worker = _WorkerClient();
+
+  /// 最近一次推理是否**复用了**已经加载好的 session。
+  ///
+  /// 🔴 暴露出来是为了让 `headless_p7_checks` 能真的量到"第二次比第一次快"
+  /// 这件事，而不是去 grep 源码里有没有 `Isolate.run`。
+  static bool lastRunReusedSession = false;
+
+  /// worker 累计打开过几次模型 —— 用户感知的"模型加载了几次"。
+  static int sessionOpenCount = 0;
+
   /// 模型是否已下载（设置 → 翻译模型 → 图像修复）。
   static bool get isInstalled => TranslationModels.inpaintLama.isInstalled;
 
@@ -93,57 +106,51 @@ abstract class InpaintModel {
     if (bounds == null) return null;
 
     final crop = inpaintContextCrop(bounds, width, height, contextExpand);
-    final prepared = _prepareInputs(
+    final started = DateTime.now();
+    // 🔴 路径必须在**主 isolate 里**求值再捕获：`TranslationModels.*.filePath`
+    // 依赖 `App.dataPath`，新 isolate 里 App 未必初始化过，闭包里再取会抛。
+    final path = modelPath;
+    final reply = await _worker.run(
+      modelPath: path,
       rgba: rgba,
       width: width,
       height: height,
       regionMask: regionMask,
       crop: crop,
-      size: modelSize,
+      modelSize: modelSize,
     );
-    if (prepared == null) return null;
-
-    final started = DateTime.now();
-    // 🔴 路径必须在**主 isolate 里**求值再捕获：`TranslationModels.*.filePath`
-    // 依赖 `App.dataPath`，新 isolate 里 App 未必初始化过，闭包里再取会抛。
-    final path = modelPath;
-    final Float32List? output;
-    try {
-      output = await Isolate.run(
-        () => _runLama(
-          modelPath: path,
-          image: prepared.image,
-          mask: prepared.mask,
-          size: modelSize,
-        ),
-      );
-    } catch (_) {
+    if (reply == null || reply.rgba == null) {
       // 模型损坏 / 运行时不匹配 / 内存不足：交给调用方回退，不把异常抛到 UI。
       return null;
     }
-    if (output == null) return null;
-
-    final out = Uint8List.fromList(rgba);
-    var regionPixels = 0;
-    _compositeBack(
-      out: out,
-      pageWidth: width,
-      pageHeight: height,
-      regionMask: regionMask,
-      crop: crop,
-      model: output,
-      modelSize: modelSize,
-    );
-    for (var i = 0; i < regionMask.length; i++) {
-      if (regionMask[i] != 0) regionPixels++;
-    }
+    lastRunReusedSession = reply.reused;
+    sessionOpenCount = reply.opens;
     return ModelInpaintResult(
-      rgba: out,
-      regionPixels: regionPixels,
+      rgba: reply.rgba!.materialize().asUint8List(),
+      regionPixels: reply.regionPixels,
       crop: crop,
       elapsedMs: DateTime.now().difference(started).inMilliseconds,
     );
   }
+
+  /// 预热：在用户点按钮**之前**把模型加载好。
+  ///
+  /// 🔴 加速的真正瓶颈不是推理，而是 `OrtFfiSession.open` —— 一个 200 MB 级
+  /// 的 ONNX 图要把权重读进内存再初始化一遍计算图。把它挪到打开工作室之后
+  /// 的静默时机，第一次点【AI 修复填充】就不必再等它。失败静默：没有模型、
+  /// 运行时缺失都不该让工作室报错（用户可能根本不打算用 AI 填充）。
+  static Future<void> warmUp() async {
+    if (!isInstalled) return;
+    try {
+      final reply = await _worker.warm(modelPath);
+      if (reply != null) sessionOpenCount = reply.opens;
+    } catch (_) {
+      // 预热是纯优化，失败等于没预热。
+    }
+  }
+
+  /// 释放常驻 worker（退出工作室/切换工程时调用，回收 ~200 MB 常驻内存）。
+  static void dispose() => _worker.shutdown();
 }
 
 // ── 几何 ───────────────────────────────────────────────────────────────────
@@ -356,15 +363,385 @@ void _compositeBack({
 
 // ── isolate 内推理 ─────────────────────────────────────────────────────────
 
-Float32List? _runLama({
-  required String modelPath,
+/// 一次推理请求。整页 RGBA 与掩膜都用 [TransferableTypedData] 传 —— 它们是
+/// MB 级缓冲，普通消息会把字节复制两次（发送 + 接收各一次）。
+class _RunRequest {
+  const _RunRequest({
+    required this.id,
+    required this.modelPath,
+    required this.rgba,
+    required this.width,
+    required this.height,
+    required this.mask,
+    required this.crop,
+    required this.modelSize,
+  });
+
+  final int id;
+  final String modelPath;
+  final TransferableTypedData rgba;
+  final int width;
+  final int height;
+  final TransferableTypedData mask;
+  final IntRect crop;
+  final int modelSize;
+}
+
+/// 预热请求：只加载模型，不推理。
+class _WarmRequest {
+  const _WarmRequest(this.id, this.modelPath);
+
+  final int id;
+  final String modelPath;
+}
+
+/// worker 的回复。`rgba` 为 null 时 [error] 必定非空。
+class _RunReply {
+  const _RunReply({
+    required this.id,
+    required this.reused,
+    required this.opens,
+    this.rgba,
+    this.regionPixels = 0,
+    this.error,
+  });
+
+  final int id;
+
+  /// 本次是否复用了已加载的 session（false = 这次才打开模型）。
+  final bool reused;
+
+  /// 累计打开模型的次数。
+  final int opens;
+
+  final TransferableTypedData? rgba;
+  final int regionPixels;
+  final String? error;
+}
+
+/// 常驻推理 worker 的主循环。
+///
+/// 🔴 为什么是长驻 isolate 而不是每次 `Isolate.run`：LaMa 是一个 200 MB 级的
+/// ONNX 图，`OrtFfiSession.open` 要把权重读进内存并初始化计算图，实测占单轮
+/// 耗时的一半以上。人工验收要求"看 ai 修图以及增强画质的响应速度能不能稍微
+/// 加快"，而复用同一个 session 是唯一**不牺牲画质**的加速方式（降分辨率会掉
+/// 细节，用户已明确"AI 水平不够"是可接受下限，不能再往下压）。
+///
+/// 预处理 / 后处理也搬进来了：整页扫描、双线性重采样、写回都是 CPU 活，放在
+/// 这里跑，UI isolate 全程零占用。
+void _lamaWorkerMain(SendPort toMain) {
+  final inbox = ReceivePort();
+  toMain.send(inbox.sendPort);
+
+  OrtFfiSession? session;
+  String? sessionPath;
+  var opens = 0;
+
+  OrtFfiSession open(String path) {
+    final existing = session;
+    if (existing != null && sessionPath == path) return existing;
+    existing?.close();
+    final opened = OrtFfiSession.open(path);
+    session = opened;
+    sessionPath = path;
+    opens++;
+    return opened;
+  }
+
+  inbox.listen((message) {
+    if (message is _WarmRequest) {
+      try {
+        open(message.modelPath);
+        toMain.send(
+          _RunReply(id: message.id, reused: false, opens: opens),
+        );
+      } catch (e) {
+        toMain.send(
+          _RunReply(
+            id: message.id,
+            reused: false,
+            opens: opens,
+            error: '$e',
+          ),
+        );
+      }
+      return;
+    }
+    if (message is! _RunRequest) return;
+    final reused = session != null && sessionPath == message.modelPath;
+    try {
+      final active = open(message.modelPath);
+      final rgba = message.rgba.materialize().asUint8List();
+      final mask = message.mask.materialize().asUint8List();
+      final prepared = _prepareInputs(
+        rgba: rgba,
+        width: message.width,
+        height: message.height,
+        regionMask: mask,
+        crop: message.crop,
+        size: message.modelSize,
+      );
+      if (prepared == null) {
+        toMain.send(
+          _RunReply(
+            id: message.id,
+            reused: reused,
+            opens: opens,
+            error: 'prepare-failed',
+          ),
+        );
+        return;
+      }
+      final output = _runWithSession(
+        active,
+        image: prepared.image,
+        mask: prepared.mask,
+        size: message.modelSize,
+      );
+      if (output == null) {
+        toMain.send(
+          _RunReply(
+            id: message.id,
+            reused: reused,
+            opens: opens,
+            error: 'inference-failed',
+          ),
+        );
+        return;
+      }
+      final out = Uint8List.fromList(rgba);
+      var regionPixels = 0;
+      for (var i = 0; i < mask.length; i++) {
+        if (mask[i] != 0) regionPixels++;
+      }
+      _compositeBack(
+        out: out,
+        pageWidth: message.width,
+        pageHeight: message.height,
+        regionMask: mask,
+        crop: message.crop,
+        model: output,
+        modelSize: message.modelSize,
+      );
+      toMain.send(
+        _RunReply(
+          id: message.id,
+          reused: reused,
+          opens: opens,
+          rgba: TransferableTypedData.fromList([out]),
+          regionPixels: regionPixels,
+        ),
+      );
+    } catch (e) {
+      toMain.send(
+        _RunReply(
+          id: message.id,
+          reused: reused,
+          opens: opens,
+          error: '$e',
+        ),
+      );
+    }
+  });
+}
+
+/// 主 isolate 侧的 worker 句柄：负责启动、握手、排队、超时与重建。
+///
+/// 🔴 请求**串行化**：同一时刻只有一个推理在跑。并行跑两个 LaMa 推理只会让
+/// 两者都变慢（线程池被抢），而 UI 侧本来就靠 `_blockOpBusy` 或按钮禁用来
+/// 防连点；这里再用一条 Future 链兜底，避免 headless/批量路径意外并发。
+class _WorkerClient {
+  SendPort? _send;
+  ReceivePort? _receive;
+  Isolate? _isolate;
+  Future<void>? _starting;
+  int _nextId = 1;
+  final Map<int, Completer<_RunReply>> _pending = {};
+  Future<void> _chain = Future<void>.value();
+
+  /// 单次推理的兜底超时。模型正常时 512×512 一轮是几百毫秒级；给到 3 分钟
+  /// 是因为第一次要加载 200 MB 权重，低配机 + 冷缓存可能到十几秒。
+  static const Duration _runTimeout = Duration(minutes: 3);
+  static const Duration _startTimeout = Duration(seconds: 30);
+
+  Future<SendPort> _ensureStarted() async {
+    final existing = _send;
+    if (existing != null) return existing;
+    final starting = _starting;
+    if (starting != null) {
+      await starting;
+      final port = _send;
+      if (port != null) return port;
+      throw StateError('inpaint worker failed to start');
+    }
+    final future = _start();
+    _starting = future;
+    try {
+      await future;
+    } finally {
+      _starting = null;
+    }
+    final port = _send;
+    if (port == null) throw StateError('inpaint worker failed to start');
+    return port;
+  }
+
+  Future<void> _start() async {
+    final receive = ReceivePort();
+    _receive = receive;
+    final ready = Completer<SendPort>();
+    receive.listen((message) {
+      if (message is SendPort) {
+        if (!ready.isCompleted) ready.complete(message);
+        return;
+      }
+      if (message is _RunReply) {
+        _pending.remove(message.id)?.complete(message);
+        return;
+      }
+      // onError / onExit 都会落到这里（List<dynamic> 或 null）：
+      // worker 死了，把所有等待中的请求放掉，交给调用方回退本地算法。
+      _failPending('inpaint worker exited');
+    });
+    _isolate = await Isolate.spawn(
+      _lamaWorkerMain,
+      receive.sendPort,
+      debugName: 'mangrove-inpaint',
+      onError: receive.sendPort,
+      onExit: receive.sendPort,
+    );
+    _send = await ready.future.timeout(
+      _startTimeout,
+      onTimeout: () {
+        _resetWorker();
+        throw StateError('inpaint worker handshake timed out');
+      },
+    );
+  }
+
+  void _failPending(String reason) {
+    final pending = Map<int, Completer<_RunReply>>.from(_pending);
+    _pending.clear();
+    for (final entry in pending.entries) {
+      if (!entry.value.isCompleted) {
+        entry.value.complete(
+          _RunReply(
+            id: entry.key,
+            reused: false,
+            opens: 0,
+            error: reason,
+          ),
+        );
+      }
+    }
+  }
+
+  void _resetWorker() {
+    _isolate?.kill(priority: Isolate.immediate);
+    _isolate = null;
+    _receive?.close();
+    _receive = null;
+    _send = null;
+    _failPending('inpaint worker reset');
+  }
+
+  /// 串行执行 [action]，保证同一时刻只有一个推理在 worker 里跑。
+  Future<T> _serial<T>(Future<T> Function() action) {
+    final result = _chain.then((_) => action());
+    // 链条本身不能因为某次失败而断掉，否则后续请求全部拿不到执行机会。
+    _chain = result.then<void>((_) {}, onError: (_) {});
+    return result;
+  }
+
+  Future<_RunReply?> _dispatch(
+    Object message,
+    int id, {
+    required String modelPath,
+  }) async {
+    try {
+      final port = await _ensureStarted();
+      final completer = Completer<_RunReply>();
+      _pending[id] = completer;
+      port.send(message);
+      return await completer.future.timeout(
+        _runTimeout,
+        onTimeout: () {
+          _pending.remove(id);
+          // 超时的 worker 状态不可信（可能卡在 native 里），直接重建。
+          _resetWorker();
+          // 重建失败不影响「这一次」的结论：调用方回退本地算法。
+          unawaited(
+            Future<void>.microtask(() async {
+              try {
+                await _ensureStarted();
+              } catch (_) {}
+            }),
+          );
+          return _RunReply(
+            id: id,
+            reused: false,
+            opens: 0,
+            error: 'timeout',
+          );
+        },
+      );
+    } catch (e) {
+      return _RunReply(id: id, reused: false, opens: 0, error: '$e');
+    }
+  }
+
+  /// 跑一轮修复。任何失败都返回带 [error] 的 reply —— 调用方只看 `rgba`。
+  Future<_RunReply?> run({
+    required String modelPath,
+    required Uint8List rgba,
+    required int width,
+    required int height,
+    required Uint8List regionMask,
+    required IntRect crop,
+    required int modelSize,
+  }) {
+    return _serial(() {
+      final id = _nextId++;
+      return _dispatch(
+        _RunRequest(
+          id: id,
+          modelPath: modelPath,
+          rgba: TransferableTypedData.fromList([rgba]),
+          width: width,
+          height: height,
+          mask: TransferableTypedData.fromList([regionMask]),
+          crop: crop,
+          modelSize: modelSize,
+        ),
+        id,
+        modelPath: modelPath,
+      );
+    });
+  }
+
+  /// 只加载模型（预热）。
+  Future<_RunReply?> warm(String modelPath) {
+    return _serial(() {
+      final id = _nextId++;
+      return _dispatch(_WarmRequest(id, modelPath), id, modelPath: modelPath);
+    });
+  }
+
+  /// 彻底释放（退出工作室时）。
+  void shutdown() {
+    _resetWorker();
+    _chain = Future<void>.value();
+  }
+}
+
+/// 在给定 session 上跑一次推理（worker 内、同步、阻塞）。
+Float32List? _runWithSession(
+  OrtFfiSession session, {
   required Float32List image,
   required Float32List mask,
   required int size,
 }) {
-  OrtFfiSession? session;
   try {
-    session = OrtFfiSession.open(modelPath);
     // 输入名按仓库导出约定；若模型改过名字，退到"第一个/第二个输入"。
     final names = session.inputNames;
     final imageName = names.contains('image') ? 'image' : names.first;
@@ -392,7 +769,5 @@ Float32List? _runLama({
     return first.data;
   } catch (_) {
     return null;
-  } finally {
-    session?.close();
   }
 }

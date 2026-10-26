@@ -314,10 +314,13 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       // 拟声词时会投错（用户："明明是韩文但是检测成日文"）。面板上选过的
       // 语言就是这块的真相，不再让"自动"覆盖它。
       final blockLang = block.sourceLangOverride;
+      // 本次**实际采用**的源语言。面板要把这个值显示出来（"识别为：韩语"），
+      // 否则用户看不出这次是按块级覆盖认的、还是按整页投票认的。
+      final usedLang = blockLang.isEmpty ? _currentSourceLang() : blockLang;
       final detected = await PageTranslationPipeline().ocrRegion(
         bytes,
         IntRect(crop.left, crop.top, crop.right, crop.bottom),
-        sourceLang: blockLang.isEmpty ? _currentSourceLang() : blockLang,
+        sourceLang: usedLang,
       );
       // 🔴 P48 五轮：多边形块只认**轮廓内**的检测框。OCR 引擎没有"任意形状"
       // 输入，仍按外接矩形裁剪；但结果按中心点是否落在画笔轮廓内过滤 ——
@@ -376,12 +379,26 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           IntRect(crop.left, crop.top, crop.right, crop.bottom),
         );
       }
+      // 识别结果里出现最多的语言 = 这次**实际认出来的**语言。全体判 unknown
+      // 时退回本次请求用的语言（"按韩语去认，结果没标语言"仍是韩语）。
+      final langVotes = <String, int>{};
+      for (final b in blocks) {
+        final code = b.language.trim();
+        if (code.isEmpty || code == 'unknown') continue;
+        langVotes[code] = (langVotes[code] ?? 0) + 1;
+      }
+      final recognisedLang = langVotes.isEmpty
+          ? usedLang
+          : (langVotes.entries
+                .reduce((a, b) => a.value >= b.value ? a : b)
+                .key);
       _editBlock(
         pageKey,
         _selectedBlock,
         'Recognise',
         (b) {
           b.sourceText = text;
+          b.recognisedLang = recognisedLang;
           if (autoColor != null && b.colorIsAuto) {
             b.fontFormat?.foregroundColor = autoColor;
           }
@@ -393,7 +410,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       Log.info(
         'Studio Block',
         'recognise ${block.xyxy} crop=$crop lines=${lines.length} '
-        'box=$box',
+        'box=$box lang=$usedLang->$recognisedLang',
       );
     } catch (e, s) {
       Log.error('Studio Block', 'recognise failed', s);
@@ -428,9 +445,13 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       final lang = block.sourceLangOverride.isEmpty
           ? _currentSourceLang()
           : block.sourceLangOverride;
+      // P48 七轮：目标语言也支持块级覆盖（与源语言对称）。空 = 跟随工程。
+      final targetLang = block.targetLangOverride.isEmpty
+          ? _currentTargetLang()
+          : block.targetLangOverride;
       final response = await TranslationDispatcher.translateBatch(
         [source],
-        _currentTargetLang(),
+        targetLang,
         sourceLang: lang,
         sourceLangs: [lang],
         glossary: glossary,
@@ -462,7 +483,8 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       }
       Log.info(
         'Studio Block',
-        'translate ${block.xyxy} applied, glossary=${response.glossary.length}',
+        'translate ${block.xyxy} applied $lang->$targetLang '
+        'glossary=${response.glossary.length}',
       );
     } catch (e, s) {
       Log.error('Studio Block', 'translate failed', s);
@@ -498,14 +520,20 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
   /// 不再单独存 `_marqueeMode` 字段，避免状态分裂与两处不同步。
   bool _createMode = false;
 
-  /// 新建块形状：`'rect'`（矩形，拖框）或 `'polygon'`（多边形，自由画笔）。
+  /// 新建块形状：`'rect'`（矩形，拖框）、`'polygon'`（多边形，自由画笔）或
+  /// `'ellipse'`（圆/椭圆，拖框；宽≠高即椭圆 —— P48 七轮新增）。
   String _blockShape = 'rect';
 
   /// 新建块的识别类型，对应 [TextBlockKind]。
   String _newBlockKind = TextBlockKind.dialogue;
 
-  /// 派生：矩形创建模式（开创建 + 形状=矩形）。
-  bool get _marqueeActive => _createMode && _blockShape == 'rect';
+  /// 派生：拖框创建模式（开创建 + 形状是矩形**或椭圆**）。
+  ///
+  /// 🔴 椭圆也走拖框：它和矩形的**手势**完全一样，只是落块时多写一个
+  /// `shape` 键；所以它不能单开一条手势通道，否则两套拖拽逻辑会各漂各的。
+  bool get _marqueeActive =>
+      _createMode &&
+      (_blockShape == 'rect' || _blockShape == TextBlockShape.ellipse);
 
   /// 派生：多边形创建模式（开创建 + 形状=多边形）。
   bool get _polygonActive => _createMode && _blockShape == 'polygon';
@@ -1556,6 +1584,47 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     LeaveGuardRegistry.add(_leaveGuard);
     _load();
     WidgetsBinding.instance.addPostFrameCallback((_) => _autoCollapseSidebar());
+    // P48 七轮 · 响应速度：把 LaMa 的模型加载挪到用户点按钮**之前**。
+    //
+    // 🔴 延后 3 秒而不是立刻：200 MB 权重的读取会抢磁盘与内存带宽，跟首帧
+    // 抢只会让"打开工作室"本身变慢。而用户从打开到框选水印一般不止 3 秒，
+    // 预热完成时正好在点【AI 修复填充】的路上。失败静默（没装模型 / 运行时
+    // 缺失都不该在这里报错）。
+    Future<void>.delayed(const Duration(seconds: 3), () {
+      if (mounted) unawaited(InpaintModel.warmUp());
+    });
+  }
+
+  /// P48 七轮：整页 RGBA 解码缓存（最多 4 条）。
+  ///
+  /// 🔴 连续点【AI 修复填充】/【画面增强】时，每一轮都会重新解码同一张原图
+  /// （595×1159 WebP → 2.7 MB RGBA），实测占单轮 100–300 ms。推理仍是大头，
+  /// 但这部分纯属白花。键里带 **mtime + 文件长度**：重新下载原图后缓存自动
+  /// 失效，绝不会拿旧像素去修新图。
+  final Map<String, RgbaImage> _decodedPages = {};
+
+  /// 取一页的 RGBA（带缓存）。返回**副本** —— 调用方会在上面就地擦除/填充，
+  /// 共用同一份缓冲会把缓存污染成"已经修过的图"。
+  Future<RgbaImage?> _decodePageCached(File file) async {
+    if (!file.existsSync()) return null;
+    String key;
+    try {
+      final stat = await file.stat();
+      key = '${file.path}|${stat.modified.millisecondsSinceEpoch}|${stat.size}';
+    } catch (_) {
+      key = '${file.path}';
+    }
+    final hit = _decodedPages[key];
+    if (hit != null) {
+      return RgbaImage(hit.width, hit.height, Uint8List.fromList(hit.pixels));
+    }
+    final decoded = await decodeFullResolutionRgba(file);
+    if (decoded == null) return null;
+    if (_decodedPages.length >= 4) {
+      _decodedPages.remove(_decodedPages.keys.first);
+    }
+    _decodedPages[key] = decoded;
+    return RgbaImage(decoded.width, decoded.height, Uint8List.fromList(decoded.pixels));
   }
 
   @override
@@ -1563,6 +1632,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     if (_guardRegistered) LeaveGuardRegistry.remove(_leaveGuard);
     _stripController.dispose();
     _base?.dispose();
+    // 退出工作室时回收常驻推理 worker（约 200 MB 常驻内存）。用户离开这个
+    // 页面就不会再修图；下次进来 initState 会重新预热。
+    InpaintModel.dispose();
     // 侧栏是**祖先**的 state，此刻不能直接 setState（会被判为 build/dispose
     // 期间标记脏），推到下一帧再做。
     final pane = _pane;
@@ -2012,6 +2084,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       // 用户反馈"都是黑色容易混淆" —— 一页十几个块时只能靠点开面板才知道
       // 哪块是水印。
       kind: block.kind,
+      // P48 七轮 · 第三种形状：椭圆/圆。形状必须传给画布，否则"点选圆形块"
+      // 在界面上与矩形块毫无区别（这正是用户要的"用不同形状区分"）。
+      shape: block.shape,
       ownerPageKey: ownerPageKey,
       // B-3/B-4：组装饰（nest 大框 / link 连线 / 序号）与建组点选高亮。
       groupId: tag?.groupId,
@@ -2347,7 +2422,13 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     );
     // 🔴 P48：新建块按当前预设的识别类型落盘（对话/拟声词/水印）。
     block.kind = _newBlockKind;
-    if (polygon != null) block.polygon = polygon;
+    if (polygon != null) {
+      // 轮廓优先：多边形块的形状由顶点表表达，外接框只是包围盒。
+      block.polygon = polygon;
+    } else if (_blockShape == TextBlockShape.ellipse) {
+      // P48 七轮 · 第三种形状：拖框出来的就是椭圆（宽≠高时是椭圆，相等时是圆）。
+      block.shape = TextBlockShape.ellipse;
+    }
     final command = captureBlockListEdit(
       page.rawBlocks,
       () => page.addBlock(block),
@@ -2572,6 +2653,10 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     final pageKey = _selectedPageKey;
     final block = _currentBlock;
     if (project == null || pageKey == null || block == null) return;
+    // P48 七轮：整轮耗时（解码 + 擦除 + 推理 + 落盘）。用户要"响应速度快不快"
+    // 的**可见证据** —— 进度卡片只说"在做"，做完得说"用了多久"，否则一次
+    // 加速改动在界面上完全是不可见的。
+    final opStarted = DateTime.now();
     // 🔴 水印块**不翻译** —— 去水印只需要"擦掉"，因此不要求译文存在。对话/
     // 拟声词块仍要求先有译文再修图（修图后要填译文，没译文等于白擦）。
     if (!block.isWatermark && block.translation.trim().isEmpty) {
@@ -2605,7 +2690,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           : 'Erasing…'.tl;
     });
     try {
-      final original = await decodeFullResolutionRgba(originalFile);
+      final original = await _decodePageCached(originalFile);
       if (original == null) {
         if (mounted) {
           context.showMessage(
@@ -2628,6 +2713,9 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         height: original.height,
         rect: block.rect,
         polygon: poly,
+        // P48 七轮：椭圆块的写入边界是**椭圆**，不是外接矩形 —— 框内四角
+        // 属于邻居，按矩形写会把别人的笔画一起抹掉。
+        ellipse: block.isEllipse,
       );
       Uint8List erasedMask;
       var maskSource = 'glyph';
@@ -2671,7 +2759,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       final inpaintedFile0 = File(project.artifactPath('inpainted', pageKey));
       RgbaImage? priorInpainted;
       if (fromInpainted && inpaintedFile0.existsSync()) {
-        final decoded = await decodeFullResolutionRgba(inpaintedFile0);
+        final decoded = await _decodePageCached(inpaintedFile0);
         if (decoded != null &&
             decoded.width == original.width &&
             decoded.height == original.height) {
@@ -2824,7 +2912,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       final root = project.workspace;
       final inpaintedFile = File(project.artifactPath('inpainted', pageKey));
       final existingInpainted = inpaintedFile.existsSync()
-          ? await decodeFullResolutionRgba(inpaintedFile)
+          ? await _decodePageCached(inpaintedFile)
           : null;
       final merged = mergeRepairedInpainted(
         erasedBlock: erased,
@@ -2879,18 +2967,28 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
       await _rerenderResultPage(project, root, pageKey);
       await ArtifactReconciliation.write(project);
 
+      final totalMs = DateTime.now().difference(opStarted).inMilliseconds;
       Log.info(
         'Translation Studio',
         'block repaired: page=$pageKey block=$_selectedBlock '
         'quality=${quality.name} engine=$engine mask=$maskSource '
         'filled=${stats.filledPixels} textured=${stats.textured} '
+        'total=${totalMs}ms reusedSession=${InpaintModel.lastRunReusedSession} '
         'hadExistingInpainted=${existingInpainted != null}',
       );
       if (LocalManager().isInitialized) LocalManager().notifyListeners();
       if (!mounted) return;
       setState(() {});
       await _loadBase(pageKey, resetSelection: false);
-      if (mounted) context.showMessage(message: 'Block repaired.'.tl);
+      if (mounted) {
+        // 耗时写进提示：加速改动必须在界面上**看得见**，否则用户无法判断
+        // "这次是不是真的比上次快"。
+        context.showMessage(
+          message: 'Block repaired in @a s.'.tlParams({
+            'a': (totalMs / 1000).toStringAsFixed(1),
+          }),
+        );
+      }
     } catch (e, s) {
       Log.error('Translation Studio', 'block repair failed', s);
       if (mounted) {
@@ -3012,6 +3110,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           height: original.height,
           rect: block.rect,
           polygon: poly,
+          ellipse: block.isEllipse,
         );
         dilated = unionMasks(
           added: buildRestorationMask(original, block.rect),
@@ -3137,7 +3236,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     }
     setState(() => _blockOpBusy = true);
     try {
-      final original = await decodeFullResolutionRgba(originalFile);
+      final original = await _decodePageCached(originalFile);
       if (original == null) {
         if (mounted) {
           context.showMessage(
@@ -3189,6 +3288,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           height: original.height,
           rect: block.rect,
           polygon: poly,
+          ellipse: block.isEllipse,
         );
       }
       // 🔴 P48 五轮：马赛克同样只能落在选区内。物体掩膜会长到上下文里，
@@ -3200,6 +3300,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
           height: original.height,
           rect: block.rect,
           polygon: poly,
+          ellipse: block.isEllipse,
         ),
       );
       // 向底色融合（0.75）：黑底读作近黑、裙子读作裙子色，只留一点纹理，
@@ -4728,9 +4829,11 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
-                              _blockShape == 'polygon'
-                                  ? Icons.brush
-                                  : Icons.crop,
+                              switch (_blockShape) {
+                                'polygon' => Icons.brush,
+                                TextBlockShape.ellipse => Icons.circle_outlined,
+                                _ => Icons.crop,
+                              },
                               size: 20,
                             ),
                             const Icon(Icons.arrow_drop_down, size: 16),
@@ -4745,6 +4848,13 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                             'polygon',
                             Icons.brush,
                             'Polygon (freehand)'.tl,
+                          ),
+                          // P48 七轮：用户明确要求的第三种形状 —— 圆形/椭圆，
+                          // 用外接框调节宽高即可在圆与椭圆之间连续变化。
+                          item(
+                            TextBlockShape.ellipse,
+                            Icons.circle_outlined,
+                            'Ellipse (circle / oval)'.tl,
                           ),
                         ],
                       ),
@@ -5992,6 +6102,10 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
         index: _selectedBlock,
         revision: _revision,
         isCrossPage: readSpan(block)?.isCrossPage ?? false,
+        // 面板要说出"跟随工程设置"具体是哪个语言，否则用户看不出这一块会
+        // 翻成什么。取的是与单块【识别】/【翻译】**同一份**来源。
+        projectSourceLang: _currentSourceLang(),
+        projectTargetLang: _currentTargetLang(),
         onEdit: (label, mutate, {bool syncRichText = false}) {
           final pageKey = _selectedPageKey;
           if (pageKey == null) return;

@@ -52,6 +52,8 @@ class StudioBlockPanel extends StatefulWidget {
     this.onEnhance,
     this.aiModelReady = false,
     this.busy = false,
+    this.projectSourceLang = '',
+    this.projectTargetLang = '',
   });
 
   final TextBlock block;
@@ -133,6 +135,14 @@ class StudioBlockPanel extends StatefulWidget {
   /// double-click cannot launch two OCR passes on the same block.
   final bool busy;
 
+  /// 本工程当前生效的源/目标语言（`project.pages` 的设置或本轮弹窗的选择）。
+  ///
+  /// 🔴 面板必须能说出"跟随工程设置"**具体是哪个语言** —— 只显示一个
+  /// "Project language" 选项，用户无法判断这一块到底会翻成什么。空值表示
+  /// 调用方没有上下文（只读预览），面板会退化成不显示方向说明。
+  final String projectSourceLang;
+  final String projectTargetLang;
+
   @override
   State<StudioBlockPanel> createState() => _StudioBlockPanelState();
 }
@@ -206,7 +216,10 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
           ],
         ),
         const SizedBox(height: 8),
-        _section('Source'),
+        // P48 七轮：语言导向压在**原文框上方**（标题行右侧），并在下面用一行
+        // 说明"这次实际按什么语言认出来的"。原来它藏在类型下拉下面，用户
+        // 找不到（人工验收原话："我没有找到……调整识别语言的按钮"）。
+        ..._sourceLanguageHeader(scheme, block),
         const SizedBox(height: 6),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -248,7 +261,12 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
         const SizedBox(height: 6),
         ..._kindDropdown(scheme, block),
         const SizedBox(height: 8),
-        ..._langDropdown(scheme, block),
+        // P48 七轮 · 第三种形状：矩形 / 椭圆。
+        //
+        // 🔴 这里做的是**改已有块**的形状（新建时用工具栏的形状下拉）。椭圆
+        // 用外接框定形状，所以改回矩形不会丢尺寸；多边形块要先用【Use box】
+        // 清掉轮廓，否则轮廓优先、形状改动看不见效果。
+        ..._shapeDropdown(scheme, block),
         const SizedBox(height: 8),
         _kv('Box', block.xyxy.map((v) => v.round().toString()).join(', ')),
         if (block.polygon != null) ...[
@@ -278,7 +296,7 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
           ),
         ],
         const SizedBox(height: 8),
-        _section('Translation'),
+        ..._translationHeader(scheme, block),
         const SizedBox(height: 6),
         TextField(
           controller: _controller,
@@ -673,56 +691,236 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
   /// 明明是韩文但是检测成日文的情况。" 自动投票是**整页**统计，一页里只要
   /// 混入几行日文汉字或英文拟声词就会投偏；而投偏之后，用户在界面上没有任何
   /// 地方能说"这块是韩文"。这个下拉补齐了那条实时修改的路径。
-  List<Widget> _langDropdown(ColorScheme scheme, TextBlock block) {
-    const options = <String, String>{
-      '': 'Auto-detect',
-      'ja': 'Japanese',
-      'ko': 'Korean',
-      'zh': 'Chinese',
-      'en': 'English',
+  ///
+  /// 🔴 P48 七轮重做：人工验收"我没有找到在文字块切面的识别和翻译的地方有
+  /// 调整识别语言的按钮" —— 原来它藏在【类型】下面、只有一行小字，位置和
+  /// **它作用的对象**（上面那个原文框）离得很远。现在它直接压在"来源"标题行
+  /// 右侧，并在下面用一行说明"这次实际按什么语言认出来的"。
+  List<Widget> _sourceLanguageHeader(ColorScheme scheme, TextBlock block) {
+    final labels = _sourceLanguageLabels();
+    final override = block.sourceLangOverride;
+    final value = labels.containsKey(override) ? override : 'auto';
+    final recognised = block.recognisedLang;
+    final note = recognised.isEmpty
+        ? 'Not recognised yet — pick a language here to pin this block, then press Recognise.'.tl
+        : override.isEmpty
+        ? 'Recognised as @a (page-wide vote)'.tlParams({
+            'a': _languageLabel(recognised, labels),
+          })
+        : 'Recognised as @a (pinned to this block)'.tlParams({
+            'a': _languageLabel(recognised, labels),
+          });
+    return [
+      _languageHeader(
+        title: 'Source',
+        labels: labels,
+        value: value,
+        note: note,
+        onChanged: (v) => widget.onEdit(
+          'Source language',
+          // 'auto' 落盘为空 = 删键，零字节 diff 不受影响。
+          (b) => b.sourceLangOverride = v == 'auto' ? '' : v,
+          // 语言变了，rich_text 里的排版是按旧原文算的，必须重排。
+          syncRichText: true,
+        ),
+      ),
+    ];
+  }
+
+  /// 【译文】标题行 + **翻译方向**下拉（块级目标语言）。
+  ///
+  /// 与源语言完全对称：空 = 跟随工程设置。说明行直接写成 `韩语 → 简体中文`，
+  /// 因为用户问的就是"翻译方向"这件事本身。
+  List<Widget> _translationHeader(ColorScheme scheme, TextBlock block) {
+    final labels = <String, String>{
+      'project': 'Project language'.tl,
+      'zh': 'Simplified Chinese'.tl,
+      'zh-TW': 'Traditional Chinese'.tl,
+      'en': 'English'.tl,
+      'ja': 'Japanese'.tl,
+      'ko': 'Korean'.tl,
+      'fr': 'French'.tl,
+      'de': 'German'.tl,
+      'es': 'Spanish'.tl,
+      'ru': 'Russian'.tl,
+      'la': 'Latin'.tl,
     };
-    final current = options.containsKey(block.sourceLangOverride)
-        ? block.sourceLangOverride
-        : '';
+    final override = block.targetLangOverride;
+    final value = labels.containsKey(override) ? override : 'project';
+    final effective = override.isEmpty ? widget.projectTargetLang : override;
+    final from = _languageLabel(
+      _effectiveSourceLanguage(block),
+      _sourceLanguageLabels(),
+    );
+    final to = _languageLabel(effective, labels);
+    final note = override.isEmpty
+        ? 'Follows the project setting: @a → @b'.tlParams({'a': from, 'b': to})
+        : '@a → @b (pinned to this block)'.tlParams({'a': from, 'b': to});
+    return [
+      _languageHeader(
+        title: 'Translation',
+        labels: labels,
+        value: value,
+        note: note,
+        onChanged: (v) => widget.onEdit(
+          'Target language',
+          (b) => b.targetLangOverride = v == 'project' ? '' : v,
+          syncRichText: true,
+        ),
+      ),
+    ];
+  }
+
+  /// 源语言选项表（与 `run_dialog` 同一套码；标签就地 `.tl` 以便 i18n 扫描）。
+  Map<String, String> _sourceLanguageLabels() => <String, String>{
+    'auto': 'Auto detect'.tl,
+    'ja': 'Japanese'.tl,
+    'en': 'English'.tl,
+    'ko': 'Korean'.tl,
+    'zh': 'Chinese'.tl,
+    'es': 'Spanish'.tl,
+    'la': 'Latin'.tl,
+  };
+
+  /// 本块**生效**的源语言：块级覆盖 > 上次识别结果 > 工程设置。
+  String _effectiveSourceLanguage(TextBlock block) {
+    if (block.sourceLangOverride.isNotEmpty) return block.sourceLangOverride;
+    if (block.recognisedLang.isNotEmpty) return block.recognisedLang;
+    return widget.projectSourceLang;
+  }
+
+  /// 语言码 → 显示名。识别引擎可能返回 `zh-Hans` / `und` 这类细码，先按主
+  /// 语言码兜一次，仍找不到就原样显示（宁可露出码，也不假装认识它）。
+  static String _languageLabel(String code, Map<String, String> labels) {
+    if (code.isEmpty) return '';
+    final exact = labels[code];
+    if (exact != null) return exact;
+    final base = code.split('-').first;
+    return labels[base] ?? code;
+  }
+
+  /// 一行"标题 + 语言下拉 + 说明"。
+  Widget _languageHeader({
+    required String title,
+    required Map<String, String> labels,
+    required String value,
+    required String note,
+    required ValueChanged<String> onChanged,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(child: _section(title)),
+            DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: labels.containsKey(value) ? value : labels.keys.first,
+                isDense: true,
+                borderRadius: BorderRadius.circular(8),
+                icon: const Icon(Icons.arrow_drop_down, size: 18),
+                style: ts.s12.copyWith(color: scheme.primary),
+                items: [
+                  for (final entry in labels.entries)
+                    DropdownMenuItem(
+                      value: entry.key,
+                      child: Text(entry.value, style: ts.s12),
+                    ),
+                ],
+                onChanged: (v) {
+                  if (v != null) onChanged(v);
+                },
+              ),
+            ),
+          ],
+        ),
+        if (note.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              note,
+              style: ts.s10.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// 几何形状下拉（矩形 / 椭圆）。
+  ///
+  /// 🔴 只作用于"靠外接框定形状"的块。多边形块（有 `polygon`）轮廓优先 ——
+  /// 这时下拉仍显示当前 `shape`，但下面挂一行说明"轮廓优先，先点 Use box"，
+  /// 否则用户改了下拉却看不到任何变化，会以为功能坏了。
+  List<Widget> _shapeDropdown(ColorScheme scheme, TextBlock block) {
+    final hasPolygon = block.polygon != null;
     return [
       Row(
         children: [
           Expanded(
             child: Text(
-              'Source language'.tl,
-              style: ts.s12.copyWith(color: scheme.onSurfaceVariant),
+              'Shape'.tl,
+              style: ts.s14.copyWith(fontWeight: FontWeight.w600),
             ),
           ),
           DropdownButtonHideUnderline(
             child: DropdownButton<String>(
-              value: current,
+              value: block.shape,
               isDense: true,
+              borderRadius: BorderRadius.circular(8),
+              icon: const Icon(Icons.arrow_drop_down, size: 18),
               style: ts.s12,
               items: [
-                for (final entry in options.entries)
-                  DropdownMenuItem(
-                    value: entry.key,
-                    child: Text(entry.value.tl, style: ts.s12),
+                DropdownMenuItem(
+                  value: TextBlockShape.rect,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.crop_square, size: 16),
+                      const SizedBox(width: 6),
+                      Text('Rectangle'.tl, style: ts.s12),
+                    ],
                   ),
+                ),
+                DropdownMenuItem(
+                  value: TextBlockShape.ellipse,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.circle_outlined, size: 16),
+                      const SizedBox(width: 6),
+                      Text('Ellipse'.tl, style: ts.s12),
+                    ],
+                  ),
+                ),
               ],
-              onChanged: (v) => widget.onEdit(
-                'Source language',
-                (b) => b.sourceLangOverride = v ?? '',
-                // 语言变了，rich_text 里的排版是按旧原文算的，必须重排。
-                syncRichText: true,
-              ),
+              onChanged: (v) {
+                if (v != null) {
+                  widget.onEdit('Shape', (b) => b.shape = v);
+                }
+              },
             ),
           ),
         ],
       ),
-      Padding(
-        padding: const EdgeInsets.only(top: 2, bottom: 2),
-        child: Text(
-          'Auto uses the page-wide vote. Pin a language here when this block is misdetected, then press Recognise again.'
-              .tl,
-          style: ts.s10.copyWith(color: scheme.onSurfaceVariant),
+      if (hasPolygon)
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(
+            'The freehand outline wins over the shape — press Use box to switch it off first.'
+                .tl,
+            style: ts.s10.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        )
+      else if (block.isEllipse)
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(
+            'Drag the dashed corner handles to turn the circle into an oval.'
+                .tl,
+            style: ts.s10.copyWith(color: scheme.onSurfaceVariant),
+          ),
         ),
-      ),
     ];
   }
 
@@ -777,6 +975,10 @@ class _StudioBlockPanelState extends State<StudioBlockPanel> {
         _section('Type (识别类型)'),
         const SizedBox(height: 6),
         ..._kindDropdown(scheme, block),
+        const SizedBox(height: 8),
+        // 水印同样可以是圆标（logo、圆形印章），掩膜跟着椭圆走才不会把
+        // 圆外的画格线一起抹掉。
+        ..._shapeDropdown(scheme, block),
         const SizedBox(height: 8),
         _kv('Box', block.xyxy.map((v) => v.round().toString()).join(', ')),
         if (polygon != null) ...[

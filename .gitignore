@@ -18,6 +18,11 @@ Ballonstranslator_store/
 Mangrove-portable/
 ComicLibrary/
 builds/
+# 测试素材（P48 七轮整理）：规则与断言证据入库，**像素产出不入库** ——
+# `inpaint/` 下是 44 MB 可再生的出图（跑一次 headless 就能重造），进仓库
+# 只会让 clone 变成一次大下载。`runs/*.json` 是断言证据（173 KB），保留。
+test-materials/inpaint/
+test-materials/legacy/
 # 第三方参考仓库的克隆（comix-downloader 等，232 MB，自带嵌套 .git）。
 # 它是**取证用的只读参考**，不是本项目源码；进了仓库只会让 clone 变成一次
 # 大规模下载，而且嵌套 .git 会让 git 把它当 gitlink/submodule 处理。

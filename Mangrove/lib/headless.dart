@@ -941,11 +941,15 @@ Future<void> runInpaintApply(List<String> args, int commandIndex) async {
   }
   final w = original.width;
   final h = original.height;
+  // P48 七轮：`--ellipse` 让选区按**椭圆**而不是外接矩形栅格化，与工作室
+  // 里圆形/椭圆文字块的写入边界同一条链路。
+  final ellipse = args.contains('--ellipse');
   final selection = selectionMaskOf(
     width: w,
     height: h,
     rect: rect,
     polygon: polygon,
+    ellipse: ellipse,
   );
   final flat = allowFlat ? detectFlatBackground(original, rect) : null;
   // 与工作室**同一个**路线判定（`chooseRepairFillRoute`）—— 否则 headless
@@ -963,6 +967,8 @@ Future<void> runInpaintApply(List<String> args, int commandIndex) async {
   Uint8List baseMask;
   var maskSource = 'selection';
   if (args.contains('--watermark')) {
+    // 物体级掩膜之后统一与 `selection` 取交（见下），所以椭圆块的水印也会
+    // 被椭圆边界裁住，不需要给 buildWatermarkMask 另开一个形状参数。
     final object = buildWatermarkMask(original, rect, polygon: polygon);
     baseMask = object.isEmpty
         ? selection
@@ -1023,7 +1029,8 @@ Future<void> runInpaintApply(List<String> args, int commandIndex) async {
     }
     if (usedModel) {
       engine = 'onnx-lama(${elapsed}ms passes=$passes '
-          'mask=$maskSource crop=${cropW}x$cropH)';
+          'mask=$maskSource crop=${cropW}x$cropH'
+          '${ellipse ? ' shape=ellipse' : ''})';
     }
   }
 
@@ -2378,7 +2385,7 @@ Future<void> runBootstrapCheck(List<String> args, int commandIndex) async {
   final jsonIndex = args.indexOf('--json');
   final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
       ? args[jsonIndex + 1]
-      : '${Directory.current.path}/bootstrap_check.json';
+      : '${Directory.current.path}/test-materials/runs/bootstrap_check.json';
 
   final checks = <Map<String, Object?>>[];
   void check(String name, bool passed, String detail) =>
@@ -2443,7 +2450,7 @@ Future<void> runPortablePathsCheck(List<String> args, int commandIndex) async {
   final jsonIndex = args.indexOf('--json');
   final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
       ? args[jsonIndex + 1]
-      : '${Directory.current.path}/portable_paths_check.json';
+      : '${Directory.current.path}/test-materials/runs/portable_paths_check.json';
 
   final checks = <Map<String, Object?>>[];
   void check(String name, bool passed, String detail) =>
@@ -2825,7 +2832,7 @@ Future<void> runGlossaryCheck(List<String> args, int commandIndex) async {
   final jsonIndex = args.indexOf('--json');
   final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
       ? args[jsonIndex + 1]
-      : '${Directory.current.path}/glossary_check.json';
+      : '${Directory.current.path}/test-materials/runs/glossary_check.json';
 
   final checks = <Map<String, Object?>>[];
   void check(String name, bool passed, String detail) =>
@@ -2894,7 +2901,7 @@ Future<void> runRunPlanCheck(List<String> args, int commandIndex) async {
   final jsonIndex = args.indexOf('--json');
   final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
       ? args[jsonIndex + 1]
-      : '${Directory.current.path}/run_plan_check.json';
+      : '${Directory.current.path}/test-materials/runs/run_plan_check.json';
 
   final checks = <Map<String, Object?>>[];
   void check(String name, bool passed, String detail) =>
@@ -3033,7 +3040,21 @@ Future<void> runBlockOpsCheck(List<String> args, int commandIndex) async {
   final jsonIndex = args.indexOf('--json');
   final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
       ? args[jsonIndex + 1]
-      : '${Directory.current.path}/block_ops_check.json';
+      : '${Directory.current.path}/test-materials/runs/block_ops_check.json';
+
+  // 🔴 P48 七轮 · 假绿修复：`App.dataPath` 的默认值是常量 `/mangrove/data`，
+  // 而这个命令在 `init()` **之前**就 return 了 —— 于是 `InpaintModel.isInstalled`
+  // 恒为 false，所有与模型有关的断言都走"没装模型 ⇒ 跳过"分支：报告里是绿的，
+  // 实际上一次推理都没跑（七轮实测踩到：`isInstalled=false 冷轮 0ms`）。
+  // 只调 `App.init()`（解析 dataPath + 版本号），不初始化 store，避免把断言
+  // 拖进 LocalManager/ComicSource 的启动链。
+  if (!App.isInitialized) {
+    try {
+      await App.init();
+    } catch (_) {
+      // 解析失败不阻断检查：断言会退回"没模型"分支并在 detail 里写明。
+    }
+  }
 
   final checks = <Map<String, Object?>>[];
   void check(String name, bool passed, String detail) =>
