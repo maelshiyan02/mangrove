@@ -95,8 +95,12 @@ def run(command: list[str]) -> tuple[int, str]:
     args = " ".join(quote(a) for a in command)
     # 生成的批处理也用「自身位置推导根目录」（%~dp0 = tools\），
     # 这样仓库里不会留下写死的绝对路径 —— 项目根改名后依然可用。
-    with open(BAT, "w", encoding="ascii", newline="\r\n") as f:
+    # 🔴 批处理用 **UTF-8** 写，并在最前面 `chcp 65001`：命令里带中文参数
+    # （漫画目录名、标题）时，ASCII 编码会直接 UnicodeEncodeError；即便写得下，
+    # cmd 也会按控制台 ANSI 代码页读批处理 ⇒ 中文变乱码。
+    with open(BAT, "w", encoding="utf-8", newline="\r\n") as f:
         f.write("@echo off\n")
+        f.write("chcp 65001 >nul\n")
         f.write('for %%I in ("%~dp0..") do set "ROOT=%%~fI"\n')
         f.write('cd /d "%ROOT%"\n')
         f.write(f'"%ROOT%\\builds\\mangrove\\mangrove.exe" --headless {args} > "%ROOT%\\builds\\headless.out" 2>&1\n')

@@ -685,10 +685,17 @@ class LocalManager with ChangeNotifier {
   /// import with a `FormatException` (observed on `Error the Echo`, whose
   /// project card shared its title with the artwork).
   String findValidId(ComicType type) {
+    // 🔴 只认**纯数字** id：`GLOB '[0-9]*'` 会把 `503jz//i-will-save-my-father`
+    // 这种"以数字开头但不是数字"的 id 也算进去 ⇒ `int.tryParse` 失败 ⇒ 返回
+    // '1' ⇒ 而 '1' 往往**已经被别的漫画占着** ⇒ `add()` 的 INSERT OR REPLACE
+    // 直接把那条记录覆盖掉（2026-10-27 实测：新建一本漫画把 `cos写真` 的
+    // 本地记录顶掉了，42 章的本地漫画在库里消失）。
+    //
+    // 所以这里只取**纯数字**的 id 求最大值；一个都没有时才从 '1' 开始。
     final res = _db.select(
       '''
       SELECT id FROM comics
-      WHERE comic_type = ? AND id GLOB '[0-9]*'
+      WHERE comic_type = ? AND id GLOB '[0-9]*' AND id NOT GLOB '*[^0-9]*'
       ORDER BY CAST(id AS INTEGER) DESC
       LIMIT 1;
       ''',
@@ -701,7 +708,21 @@ class LocalManager with ChangeNotifier {
     if (highest == null) {
       return '1';
     }
-    return (highest + 1).toString();
+    var candidate = highest + 1;
+    // 防御：万一 '1' 已被占着（历史脏数据），就往后找一个空位。
+    while (_idTaken(type, candidate.toString())) {
+      candidate++;
+    }
+    return candidate.toString();
+  }
+
+  /// 这个 id 是不是已经被占了（同类型）。
+  bool _idTaken(ComicType type, String id) {
+    final res = _db.select(
+      'SELECT id FROM comics WHERE comic_type = ? AND id = ? LIMIT 1;',
+      [type.value, id],
+    );
+    return res.isNotEmpty;
   }
 
   Future<void> add(LocalComic comic, [String? id]) async {

@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 import 'package:mangrove/utils/data_sync.dart';
 import 'package:mangrove/components/block_resize_geometry.dart';
+import 'package:mangrove/foundation/chapter_title_parser.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
@@ -66,6 +67,7 @@ import 'package:mangrove/headless_p14_checks.dart';
 import 'package:mangrove/headless_p15_checks.dart';
 import 'package:mangrove/headless_p53_create_check.dart';
 import 'package:mangrove/headless_p53_layout_check.dart';
+import 'package:mangrove/headless_local_comic_make.dart';
 import 'package:mangrove/headless_p53_migrate.dart';
 import 'package:mangrove/headless_p53_relink.dart';
 import 'package:mangrove/headless_pipeline_check.dart';
@@ -463,6 +465,14 @@ Future<void> runDownloadCheck(List<String> args, int commandIndex) async {
   final chapterFilter = args.contains('--chapter')
       ? argOr('--chapter', '')
       : null;
+  // 🔴 P53：批量下载的**话号区间**（闭区间）。没有它就只能一章一章地跑，
+  // 而"下载整本 69 话"这种活儿正是它该干的。
+  final fromNumber = args.contains('--from')
+      ? int.tryParse(argOr('--from', ''))
+      : null;
+  final toNumber = args.contains('--to')
+      ? int.tryParse(argOr('--to', ''))
+      : null;
   final wallClock = int.tryParse(argOr('--timeout', '900')) ?? 900;
   final jsonIndex = args.indexOf('--json');
   final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
@@ -558,6 +568,35 @@ Future<void> runDownloadCheck(List<String> args, int commandIndex) async {
     } else {
       selected = [keysOfNumber.first];
     }
+  } else if (fromNumber != null || toNumber != null) {
+    // 话号区间：取该区间内的**全部版本 key**（多组源会一话多组，全都要）。
+    final low = fromNumber ?? 0;
+    final high = toNumber ?? 1000000;
+    selected = allKeys.where((k) {
+      final number = _chapterNumberOf(chapters, k);
+      if (number == null) return false;
+      if (number < low || number > high) return false;
+      if (groupArg.isNotEmpty) {
+        return _chapterGroupOf(chapters, k).toLowerCase() ==
+            groupArg.toLowerCase();
+      }
+      return true;
+    }).toList();
+    if (selected.isEmpty) {
+      cliPrint({
+        'status': 'error',
+        'message': 'No chapter in range $low-$high '
+            '(available numbers: ${allKeys.map((k) => chapters.versionEntryOf(k)?.chapterNumber).where((n) => n != null).toSet().take(12).join(",")}...)',
+      });
+      exit(1);
+    }
+    // 话号升序（下载顺序即阅读顺序）。
+    selected.sort((a, b) {
+      final na = _chapterNumberOf(chapters, a) ?? 0;
+      final nb = _chapterNumberOf(chapters, b) ?? 0;
+      if (na != nb) return na.compareTo(nb);
+      return a.compareTo(b);
+    });
   } else {
     selected = [allKeys.first];
   }
@@ -666,6 +705,32 @@ Future<void> runDownloadCheck(List<String> args, int commandIndex) async {
   });
   Log.info('DownloadCheck', 'elapsedMs=$elapsedMs summary=$finalSnap');
   exit(passed ? 0 : 1);
+}
+
+/// 一章的**话号**。
+///
+/// 🔴 拷贝漫画的章节 key 是 UUID（`230c97f8-…`），版本矩阵里的
+/// `chapterNumber` 在**分组模式**下也是这个 UUID —— 所以话号只能从**标题**
+/// （`第69话`）里读。两处都读不出才返回 null。
+double? _chapterNumberOf(ComicChapters chapters, String chapterKey) {
+  final entry = chapters.versionEntryOf(chapterKey);
+  final raw = entry?.chapterNumber.trim() ?? '';
+  final direct = double.tryParse(raw);
+  if (direct != null) return direct;
+  final title = chapters.allChapters[chapterKey] ?? '';
+  final parsed = parseChapterTitle(title).chapterNumber;
+  return parsed == null ? null : parsed.toDouble();
+}
+
+/// 一章所属的**翻译组**（分组模式下是组名；版本化模式下是扫描组）。
+String _chapterGroupOf(ComicChapters chapters, String chapterKey) {
+  final entry = chapters.versionEntryOf(chapterKey);
+  final versioned = entry?.version.scanlationGroup;
+  if (versioned != null && versioned.isNotEmpty) return versioned;
+  for (final group in chapters.groups) {
+    if (chapters.getGroup(group).containsKey(chapterKey)) return group;
+  }
+  return '';
 }
 
 /// `mangrove.exe --headless comix-spike --comic <comicId> [options]`
@@ -3995,6 +4060,8 @@ Future<void> runHeadlessMode(List<String> args) async {
       await runProjectRelink(args, commandIndex);
     case 'project-create-check':
       await runProjectCreateCheck(args, commandIndex);
+    case 'local-comic-make':
+      await runLocalComicMake(args, commandIndex);
     case 'cache-check':
       await runCacheCheck(args, commandIndex);
     case 'chapter-order':
