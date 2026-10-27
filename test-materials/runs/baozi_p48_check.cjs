@@ -44,7 +44,9 @@ const Network = {
   get: async (url, headers) => {
     if (url.includes("appcn.baozimh.com")) {
       appcnHeaders = headers || null;
-      if (appcnForbidden) return { status: 403, body: "<title>Just a moment...</title>" };
+      // 真实链路: Dio 识别 403 + cf-mitigated:challenge 后**抛**
+      // CloudflareException(不是返回 403), UI 靠这条消息自动跑离屏验证。
+      if (appcnForbidden) throw new Error("CloudflareException: " + url);
       return { status: 200, body: APP };
     }
     if (url.includes("0_151")) return { status: 200, body: BROKEN }; // 残缺 152
@@ -177,19 +179,14 @@ console.log("\n=== 测试3a: 残缺 152 章 → 回落官方域拿到完整 91 �
       "所有图含正确 slug");
   })();
 }).then(() => {
-  console.log("\n=== 测试4a: 回落请求必须显式带浏览器 UA ===");
+  console.log("\n=== 测试4a: 回落请求不得覆盖 UA（交由引擎注入 webUA）===");
   // appcnHeaders 由测试3a 的回落请求记录而来
-  assert(!!appcnHeaders, "回落请求带了 headers");
-  assert(
-    appcnHeaders && /Mozilla\/5\.0/.test(appcnHeaders["User-Agent"] || ""),
-    "User-Agent 是浏览器 UA (实际: " + (appcnHeaders && appcnHeaders["User-Agent"]) + ")"
-  );
-  assert(
-    appcnHeaders && String(appcnHeaders.Referer || "").includes("appcn.baozimh.com"),
-    "Referer 指向官方域"
-  );
+  const ua = appcnHeaders && (appcnHeaders["User-Agent"] || appcnHeaders["user-agent"]);
+  assert(!ua, "源层没有塞 User-Agent（实际: " + ua + "）；引擎 _http 会补 consts.webUA，写死版本号会随浏览器更新过期");
 
-  console.log("\n=== 测试4b: 故障注入 — 官方域 403 必须报可读的挑战错误 ===");
+  console.log("\n=== 测试4b: 故障注入 — CloudflareException 必须原样透传 ===");
+  // 真实链路: Dio 抛 CloudflareException → UI(loading.dart) 靠该消息自动跑离屏
+  // WebView 验证再 retry。源若把它包装成别的字符串，自动验证入口即失效。
   appcnForbidden = true;
   return (async () => {
     let err = null;
@@ -199,10 +196,9 @@ console.log("\n=== 测试3a: 残缺 152 章 → 回落官方域拿到完整 91 �
       err = e;
     }
     const msg = String((err && err.message) || err || "");
-    assert(!!err, "403 时确实抛错(没静默返回空章)");
-    assert(/DomainChallenge/.test(msg), "错误标记为 DomainChallenge (实际: " + msg + ")");
-    assert(/人机验证/.test(msg), "错误文案说明是人机验证, 不是网络故障");
-    assert(!/^Invalid status code/.test(msg), "不再是裸的 Invalid status code: 403");
+    assert(!!err, "挑战时确实抛错(没静默返回空章)");
+    assert(/CloudflareException/.test(msg), "消息保留 CloudflareException 前缀(自动验证入口仍可识别) (实际: " + msg + ")");
+    assert(!/DomainChallenge/.test(msg), "没有被源改写成 DomainChallenge 之类的自造错误");
     appcnForbidden = false;
   })();
 }).then(() => {
