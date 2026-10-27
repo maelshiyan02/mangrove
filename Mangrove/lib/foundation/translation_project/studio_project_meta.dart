@@ -39,7 +39,34 @@ class StudioProjectMeta {
     required this.comicTitle,
     required this.sourceKey,
     required this.eid,
+    this.level = levelChapter,
+    this.originalPath = '',
+    this.cover = '',
   });
+
+  /// 边车层级：**漫画级**工程根（`<projectsRoot>/<工程名>/`）。
+  ///
+  /// 🔴 P53：翻译工程是「漫画 → 章节」两级 —— 漫画级根持有一张卡片（可入合集、
+  /// 详情页借用素材漫画的封面/信息），章节级子目录才是真正的翻译工程
+  /// （`imgtrans_*.json` + `source/` 链接 + 产物）。两者都需要身份，所以边车
+  /// 分两级写，读的时候靠这个字段区分。
+  static const String levelComic = 'comic';
+
+  /// 边车层级：**章节级**工程（`<漫画级根>/<章节键>/`）。
+  static const String levelChapter = 'chapter';
+
+  /// 见 [levelComic] / [levelChapter]。缺省 `chapter`（P53 之前的边车全是
+  /// 章节/单工程级，那样才读得回来）。
+  final String level;
+
+  /// 封面文件名（相对漫画级工程根，如 `cover.webp`）。
+  ///
+  /// 🔴 用户的原话是「创建工程不单单是命名工程，还有配套的封面和详细信息，
+  /// 这些借用已有漫画的」。单页链接省不下一个封面文件的几百 KB，却会让卡片
+  /// 在素材漫画被删/移动后变成空白 —— 所以封面是**复制**，页面才是链接。
+  final String cover;
+
+  bool get isComicLevel => level == levelComic;
 
   /// 来源漫画在 `local.db` 里的 id（`cid`，可能是 `comix:496108553:42` 这种
   /// 网络源 id，也可能是本地导入的纯数字 id）。
@@ -51,8 +78,20 @@ class StudioProjectMeta {
   /// 来源漫画的 sourceKey（`''` 表示本地导入 / 归一化为空）。
   final String sourceKey;
 
-  /// 绑定的章节 eid（无章节漫画恒为 `'0'`）。
+  /// 绑定的章节 eid（无章节漫画恒为 `'0'`）。漫画级根用 `'0'`（它不对应任何
+  /// 一章；章节级子工程各自带自己的 eid）。
+  ///
+  /// 原件真实目录（`<ComicLibrary>/downloads/<漫画>`）。P53 起工程 `source/`
+  /// 是指向它的 junction，原件只读不写；把它写进边车，junction 坏掉也能找回
+  /// 来源。（字段声明在下方，这里一并说明。）
   final String eid;
+
+  /// 原件真实目录（`<ComicLibrary>/downloads/<漫画>`）。
+  ///
+  /// 🔴 P53 起翻译工程**不再复制原件**：工程 `source/` 是指向这里的 junction
+  /// （目录重解析点），原图只被读取、不被写入。真实路径进边车，junction 损坏
+  /// 时仍能找回来源漫画，而不必猜 `directory` 指向哪。
+  final String originalPath;
 
   /// 边车文件名。刻意不叫 `imgtrans_*`，以免被工程扫描当成又一个工程登记。
   static const fileName = 'mangrove_project.json';
@@ -62,6 +101,9 @@ class StudioProjectMeta {
         'comicTitle': comicTitle,
         'sourceKey': sourceKey,
         'eid': eid,
+        'level': level,
+        if (originalPath.isNotEmpty) 'originalPath': originalPath,
+        if (cover.isNotEmpty) 'cover': cover,
       };
 
   /// 从工程目录读取边车。目录不存在 / 文件损坏 / 缺 `comicId` ⇒ 返回 null。
@@ -78,11 +120,15 @@ class StudioProjectMeta {
       if (decoded is! Map) return null;
       final id = decoded['comicId']?.toString().trim() ?? '';
       if (id.isEmpty) return null;
+      final level = decoded['level']?.toString() ?? '';
       return StudioProjectMeta(
         comicId: id,
         comicTitle: decoded['comicTitle']?.toString() ?? '',
         sourceKey: decoded['sourceKey']?.toString() ?? '',
         eid: decoded['eid']?.toString() ?? '0',
+        level: level == levelComic ? levelComic : levelChapter,
+        originalPath: decoded['originalPath']?.toString() ?? '',
+        cover: decoded['cover']?.toString() ?? '',
       );
     } catch (_) {
       return null;

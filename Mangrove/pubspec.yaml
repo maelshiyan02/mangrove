@@ -2,7 +2,7 @@ name: mangrove
 description: "A comic app."
 publish_to: 'none'
 
-version: 2.8.28+272
+version: 2.8.29+273
 
 environment:
   sdk: '>=3.12.0 <4.0.0'
@@ -112,10 +112,10 @@ dev_dependencies:
   flutter_launcher_icons: ^0.14.4
 
 flutter_launcher_icons:
-  image_path: "assets/new_logo.png"
+  image_path: "assets/app_icon.png"
   android: "ic_launcher"
   adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/new_logo.png"
+  adaptive_icon_foreground: "assets/app_icon.png"
   ios: true
   remove_alpha_ios: true
   windows:

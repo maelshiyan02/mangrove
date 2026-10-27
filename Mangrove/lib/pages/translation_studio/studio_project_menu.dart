@@ -511,9 +511,11 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
       if (chapter == null) return;
       // 名字在**进入第三步时**填。若框里还是上一次的自动建议值（用户没动过），
       // 跟着新章节走；用户手敲过就绝不覆盖。
+      // 🔴 建议值 = **漫画名**，不含章节：P53 起这个名字是漫画级工程根，
+      // 同一本漫画的所有章节都落在里面。带上章节号会让每章各建一个根。
       final suggested = studioProjectNameFor(
         comicTitle: _comic?.comic.title ?? '',
-        chapterName: chapter.ref.chapterName,
+        chapterName: '',
       );
       final current = _name.text.trim();
       if (current.isEmpty || current == _lastSuggestedName) {
@@ -601,7 +603,11 @@ class _StudioProjectDialogState extends State<_StudioProjectDialog> {
     final target = StudioReaderTarget(
       comicDirectory: located.comicDirectory,
       chapterName: located.chapterName,
+      // 用户在第三步敲的名字是**漫画级工程**的名字（P53 起工程按"本"组织，
+      // 章节工程按源章节键落进它里面）。所以 comicName 与 projectName 同值：
+      // 首次创建时用这个名字建根，已有根时 `ensureBinding` 会沿用旧名字。
       projectName: name,
+      comicName: name,
       group: located.group,
     );
     final (binding, reason) = await StudioReaderLink.ensureBinding(

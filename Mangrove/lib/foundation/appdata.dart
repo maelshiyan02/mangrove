@@ -306,6 +306,27 @@ class Appdata with Init {
     }
   }
 
+  /// 等隐式数据**真的落盘**。
+  ///
+  /// 🔴 [writeImplicitData] 是 `void async`（fire-and-forget）。GUI 里无所谓
+  /// （进程还活着，写总会完成），但 headless 命令 `exit()` 得很快 —— 写还没
+  /// 落盘进程就没了，结果是「命令报告成功、磁盘上还是旧数据」。
+  ///
+  /// 这种"看起来成功了、其实没写进去"的失败最难查：迁移命令报告 2 个工程都
+  /// 搬好了，绑定表却还指着旧路径 —— 工作室于是说"工程不在工程根目录下"，
+  /// 而磁盘上明明有。
+  Future<void> flushImplicitData() async {
+    // `_isSavingData` 在 [writeImplicitData] 里是**同步**置位的（async 函数体
+    // 在第一个 await 之前同步执行），所以这里不会漏掉刚排上队的那次写。
+    for (var i = 0; i < 100; i++) {
+      if (!_isSavingData) {
+        await Future.delayed(const Duration(milliseconds: 30));
+        if (!_isSavingData) return;
+      }
+      await Future.delayed(const Duration(milliseconds: 20));
+    }
+  }
+
   @override
   Future<void> doInit() async {
     var dataPath = App.dataPath;

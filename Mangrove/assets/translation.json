@@ -269,7 +269,7 @@
     "Translate pages while reading": "阅读时翻译页面",
     "Applies to this comic only. The original shows until a page finishes translating.": "仅对本漫画生效。页面翻译完成前先显示原图。",
     "Enable this per comic from its detail page or the in-reader settings.": "请在漫画详情页或阅读器设置中对具体漫画开启。",
-    "Source language": "源语言",
+    "Source language": "识别语言",
     "Target language": "目标语言",
     "Pages per pre-translation request": "预翻译每次请求合并页数",
     "OCR parallelism (0 = auto)": "OCR 并行数（0 = 自动）",
@@ -1978,10 +1978,16 @@
     "Re-runs inpainting on the repaired area — repeat until the transition reads clean": "在当前修复区域上再次修复 —— 反复执行直到过渡自然",
     "Enhance this block (one more AI pass)": "增强此块（再跑一轮 AI）",
     "Text on object": "物体上的文字",
-    "Source language": "识别语言",
     "Auto uses the page-wide vote. Pin a language here when this block is misdetected, then press Recognise again.": "自动 = 整页投票结果。这块被识别错时在此指定语言，再按【识别】。",
     "Erase this block first — there is nothing to enhance.": "请先擦除这一块 —— 目前没有可增强的内容。",
-    "Use box": "改用矩形框"
+    "Use box": "改用矩形框",
+    "整本翻译工程": "整本翻译工程",
+    "整本漫画 · @a 章": "整本漫画 · @a 章",
+    "整本漫画 · @a 章 · @b 页": "整本漫画 · @a 章 · @b 页",
+    "Only downloaded comics are listed. A project covers the whole comic and links to the original images instead of copying them.": "Only downloaded comics are listed. A project covers the whole comic and links to the original images instead of copying them.",
+    "A project covers every chapter of this comic, so the reader opens the same project from any chapter.": "A project covers every chapter of this comic, so the reader opens the same project from any chapter.",
+    "This comic already has a project. Creating will open the existing one instead.": "This comic already has a project. Creating will open the existing one instead.",
+    "This comic has no page image yet. The new project will start empty.": "This comic has no page image yet. The new project will start empty."
   },
   "zh_TW": {
     "Project language": "工程語言",
@@ -2253,7 +2259,7 @@
     "Translate pages while reading": "閱讀時翻譯頁面",
     "Applies to this comic only. The original shows until a page finishes translating.": "僅對本漫畫生效。頁面翻譯完成前先顯示原圖。",
     "Enable this per comic from its detail page or the in-reader settings.": "請在漫畫詳情頁或閱讀器設定中對具體漫畫開啟。",
-    "Source language": "來源語言",
+    "Source language": "識別語言",
     "Target language": "目標語言",
     "Pages per pre-translation request": "預翻譯每次請求合併頁數",
     "OCR parallelism (0 = auto)": "OCR 並行數（0 = 自動）",
@@ -3962,9 +3968,15 @@
     "Re-runs inpainting on the repaired area — repeat until the transition reads clean": "在目前修復區域上再次修復 —— 反覆執行直到過渡自然",
     "Enhance this block (one more AI pass)": "增強此區塊（再跑一輪 AI）",
     "Text on object": "物件上的文字",
-    "Source language": "識別語言",
     "Auto uses the page-wide vote. Pin a language here when this block is misdetected, then press Recognise again.": "自動 = 整頁投票結果。此區塊被識別錯時在此指定語言，再按【識別】。",
     "Erase this block first — there is nothing to enhance.": "請先擦除此區塊 —— 目前沒有可增強的內容。",
-    "Use box": "改用矩形框"
+    "Use box": "改用矩形框",
+    "整本翻译工程": "整本翻譯工程",
+    "整本漫画 · @a 章": "整本漫畫 · @a 章",
+    "整本漫画 · @a 章 · @b 页": "整本漫畫 · @a 章 · @b 頁",
+    "Only downloaded comics are listed. A project covers the whole comic and links to the original images instead of copying them.": "只列出已下載的漫畫。工程涵蓋整本漫畫，並以連結指向原圖，不再複製。",
+    "A project covers every chapter of this comic, so the reader opens the same project from any chapter.": "工程涵蓋這本漫畫的所有章節，閱讀器從任何一章都會開啟同一個工程。",
+    "This comic already has a project. Creating will open the existing one instead.": "這本漫畫已經有工程，建立時會直接開啟既有的那一個。",
+    "This comic has no page image yet. The new project will start empty.": "這本漫畫還沒有頁圖，新工程會是空的。"
   }
 }

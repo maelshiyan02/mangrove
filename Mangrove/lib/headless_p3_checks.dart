@@ -26,6 +26,7 @@ import 'package:mangrove/foundation/translation_project/artifact_reconciliation.
 import 'package:mangrove/foundation/translation_project/project.dart';
 import 'package:mangrove/foundation/translation_project/project_bootstrap.dart';
 import 'package:mangrove/foundation/translation_project/project_io.dart';
+import 'package:mangrove/foundation/translation_project/studio_project_meta.dart';
 import 'package:mangrove/foundation/translation_project/text_block.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 
@@ -395,44 +396,75 @@ Future<void> _run(CheckSink check, String baseInput) async {
     () => '${inventoryBefore.length} file(s) under downloads',
   );
 
-  // ── 3b · 原图副本与双 root（P10.15 §4.1 · P1 选项② · 序5） ──────────────
+  // ── 3b · 原图**链接**与两级布局（P53） ────────────────────────────────────
   //
-  // 🔴 这一组**替换掉了**上一版的 `sources_not_copied`。那个设计（"原图不复制，
-  // `directory` 直接指下载目录"）是**错的**：抹字是破坏性的
-  // （`TextInpainter.erase` 就地改像素），底图取 `downloads/` 里唯一那份原图，
-  // 一次逻辑错就是**擦掉用户的原图**。现在建工程把用到的页图逐个复制进
-  // `<工程根>/source/`，`directory` 指向副本 —— 于是 `directory`（原图根）与
-  // `workspace`（产物根）是两个**真实存在**的不同目录，`ProjectWriter` 那套
-  // "Two roots, one implementation" 才真正成立。
+  // 🔴 P53 推翻了 P10.15 §4.1 的"复制"决定：翻译工程不再复制原件，`source/`
+  // 是指向 `<downloads>/<漫画>` 的 **junction**（Windows `mklink /J`，无需
+  // 管理员）。磁盘占用从"整本 × N 倍"降回 0 —— 用户要的就是这个。
+  //
+  // 但"不复制"必须**同时**守住两件事：
+  // 1. 抹字产物仍写在工程自己的 workspace（`inpainted/mask/result`）——
+  //    `TextInpainter.erase` 读 `directory`（原件）但只写 workspace，原件只读；
+  // 2. 目录布局是「漫画级根 → 章节级」，缺了章节那一层，详情页就没有"章节"
+  //    可列，翻译工程也没法和素材漫画同处一个合集。
   probe(
-    'copy.sources_land_under_own_source_dir',
-    () async => _sourcesCopiedUnder(created.sourceRoot, plan, comicDir),
-    // 故障：副本没落在 `source/` 子目录下（页键结构被拍平 / 位置放错）——
-    // `directory` 会指到一个没有图的地方，工作室里每一页都变成"读不到图"。
-    () async => _sourcesCopiedUnder(created.root, plan, comicDir),
-    () => 'sourceRoot=${created.sourceRoot} '
-        'copied=${created.copiedSources.length}/${plan.pageKeys.length} '
-        'missing=${created.missingSources.join(',')}',
+    'link.source_is_a_link_not_a_copy',
+    () async =>
+        FileSystemEntity.typeSync(created.sourceRoot, followLinks: false) ==
+            FileSystemEntityType.link,
+    // 故障：拿一个**普通目录**当判据对象 —— 它的 type 不是 link ⇒ 判据变红，
+    // 说明这条断言真的在测"是不是链接"，而不是"链接能不能读到图"。
+    () async {
+      final plain = Directory('$projects/FxPlainSource');
+      plain.createSync(recursive: true);
+      return FileSystemEntity.typeSync(plain.path, followLinks: false) ==
+          FileSystemEntityType.link;
+    },
+    () => 'type=${FileSystemEntity.typeSync(created.sourceRoot, followLinks: false)} '
+        'sourceRoot=${created.sourceRoot}',
   );
 
   probe(
-    'copy.skips_non_page_files',
-    () async => !File('${created.sourceRoot}/$chapter/notes.txt').existsSync(),
-    // 故障：把判据指向源章节目录 —— `notes.txt` 就在那儿。这正是"整目录复制"
-    // 会把 `.txt` / `.DS_Store` / 子目录一起搬进工程根的那一类污染。
-    () async => !File('$comicDir/$chapter/notes.txt').existsSync(),
-    () => 'sourceRoot=${created.sourceRoot}',
+    'link.no_page_bytes_copied',
+    () async =>
+        !plan.pageKeys.any((key) => File('${created.root}/$key').existsSync()),
+    // 故障：真的复制一份页图（`copySources` 的旧语义）⇒ 同一判据在有副本的
+    // 目录上必须是 false，否则这条断言就是装饰品。
+    () async {
+      final copied = await ProjectBootstrap.copySources(
+        root: '$projects/FxCopiedSource',
+        plan: plan,
+        fromDirectory: comicDir,
+      );
+      return !copied.copied.any(
+        (key) => File('$projects/FxCopiedSource/$key').existsSync(),
+      );
+    },
+    () => 'root=${created.root} copied=${created.copiedSources.length}',
   );
 
   probe(
-    'copy.directory_points_at_the_copy_not_downloads',
+    'link.pages_readable_through_link',
+    () async => plan.pageKeys
+        .every((key) => File('${created.sourceRoot}/$key').existsSync()),
+    // 故障：判据指向一个不存在的源目录 —— 什么都读不到。
+    () async => plan.pageKeys
+        .every((key) => File('$projects/FxNoSuchSource/$key').existsSync()),
+    () => 'readable=${plan.pageKeys.where((key) => File('${created.sourceRoot}/$key').existsSync()).length}'
+        '/${plan.pageKeys.length}',
+  );
+
+  probe(
+    'link.directory_is_source_not_downloads',
     () async {
       final loaded = reloaded;
       return loaded != null &&
-          _directoryIsOwnCopy(loaded, created.sourceRoot, downloads);
+          loaded.directory == created.sourceRoot &&
+          loaded.directory != downloads &&
+          loaded.workspace != loaded.directory;
     },
-    // 故障：不复制的那种布局 —— `directory` 直接指下载目录（旧行为），
-    // 抹字会就地改用户的原图。这一侧必须变红。
+    // 故障：不复制的那种旧布局 —— `directory` 直接指下载目录，抹字会就地改
+    // 用户的原图。这一侧必须变红。
     () async {
       final old = await ProjectBootstrap.create(
         projectsRoot: projects,
@@ -441,10 +473,141 @@ Future<void> _run(CheckSink check, String baseInput) async {
         copySources: false,
       );
       final loaded = await TranslationProjectIo.load(old.jsonFile);
-      return _directoryIsOwnCopy(loaded, old.sourceRoot, downloads);
+      return loaded.directory == created.sourceRoot &&
+          loaded.directory != downloads &&
+          loaded.workspace != loaded.directory;
     },
-    () => 'directory=${reloaded?.directory} sourceRoot=${created.sourceRoot} '
-        'workspace=${reloaded?.workspace} root=${created.root}',
+    () => 'directory=${reloaded?.directory} workspace=${reloaded?.workspace} '
+        'sourceRoot=${created.sourceRoot}',
+  );
+
+  // ── 3b-2 · 两级布局（漫画级根 → 章节级） ─────────────────────────────────
+  final nested = await ProjectBootstrap.create(
+    projectsRoot: projects,
+    name: chapter,
+    parentName: 'P3FixtureComic',
+    plan: plan,
+  );
+  final comicRoot = await ProjectBootstrap.ensureComicRoot(
+    projectsRoot: projects,
+    name: 'P3FixtureComic',
+    meta: StudioProjectMeta(
+      comicId: 'fixture-cid',
+      comicTitle: 'Fixture Comic',
+      sourceKey: 'local',
+      eid: '0',
+      level: StudioProjectMeta.levelComic,
+      originalPath: comicDir,
+    ),
+    coverFrom: '$comicDir/cover.webp',
+  );
+  // 章节级边车由 `StudioReaderLink.ensureBinding` 写（`ProjectBootstrap.create`
+  // 只管落盘 json），所以夹具里手写一份 —— 否则"章节级边车"这条断言永远红。
+  await StudioProjectMeta.writeToProjectDir(
+    '$projects/P3FixtureComic/$chapter',
+    StudioProjectMeta(
+      comicId: 'fixture-cid',
+      comicTitle: 'Fixture Comic',
+      sourceKey: 'local',
+      eid: 'eid-1',
+      level: StudioProjectMeta.levelChapter,
+      originalPath: comicDir,
+    ),
+  );
+
+  probe(
+    'layout.chapter_project_nested_under_comic_root',
+    () async {
+      final path = nested.jsonFile.path.replaceAll('\\', '/');
+      return nested.created && path.contains('/P3FixtureComic/$chapter/');
+    },
+    // 故障：拿一个**平铺**的工程（没有漫画级父目录）跑同一判据。
+    () async {
+      final flat = await ProjectBootstrap.create(
+        projectsRoot: projects,
+        name: 'FxFlat',
+        plan: plan,
+      );
+      final path = flat.jsonFile.path.replaceAll('\\', '/');
+      return flat.created && path.contains('/P3FixtureComic/$chapter/');
+    },
+    () => 'json=${nested.jsonFile.path}',
+  );
+
+  probe(
+    'layout.comic_root_sidecar_and_cover',
+    () async {
+      final meta = StudioProjectMeta.readFromProjectDir(comicRoot.root);
+      return meta != null &&
+          meta.isComicLevel &&
+          meta.comicId == 'fixture-cid' &&
+          meta.cover.isNotEmpty &&
+          File('${comicRoot.root}/${meta.cover}').existsSync();
+    },
+    // 故障：拿**章节级**边车当漫画级边车 —— `isComicLevel` 为 false。
+    () async {
+      final meta =
+          StudioProjectMeta.readFromProjectDir('$projects/P3FixtureComic/$chapter');
+      return meta != null &&
+          meta.isComicLevel &&
+          meta.comicId == 'fixture-cid' &&
+          meta.cover.isNotEmpty &&
+          File('${comicRoot.root}/${meta.cover}').existsSync();
+    },
+    () => 'root=${comicRoot.root} cover=${comicRoot.meta.cover} '
+        'created=${comicRoot.created}',
+  );
+
+  probe(
+    'layout.reuses_existing_json_with_other_name',
+    () async {
+      // 模拟"迁移过来的老工程"：目录名是**章节键**，json 却叫老名字
+      // （迁移前工程按漫画名/章节名命名）。再按新约定建一次 ⇒ 必须**复用**那个
+      // 老 json，而不是在同一目录里再造一份（两份 ⇒ 两次翻译、两条术语表）。
+      final legacy =
+          File('$projects/P3FixtureComic/$chapter/imgtrans_ch1.json');
+      if (!legacy.existsSync()) return false;
+      legacy.renameSync(
+        '$projects/P3FixtureComic/$chapter/imgtrans_legacy.json',
+      );
+      final again = await ProjectBootstrap.create(
+        projectsRoot: projects,
+        name: chapter,
+        parentName: 'P3FixtureComic',
+        plan: plan,
+      );
+      final jsons = _projectJsonsIn('$projects/P3FixtureComic/$chapter');
+      return !again.created &&
+          again.jsonFile.existsSync() &&
+          again.jsonFile.path.endsWith('imgtrans_legacy.json') &&
+          jsons == 1;
+    },
+    // 故障夹具：目录里放**两个**工程 json（模拟"又建了一份"）⇒ 同一判据在它
+    // 上面必须是 false，否则这条断言是装饰品。
+    () async {
+      final broken = Directory('$projects/FxTwoJsons');
+      broken.createSync(recursive: true);
+      for (final name in ['imgtrans_a.json', 'imgtrans_b.json']) {
+        File('${broken.path}/$name').writeAsStringSync('{}');
+      }
+      return _projectJsonsIn(broken.path) == 1;
+    },
+    () => 'jsons=${_projectJsonsIn('$projects/P3FixtureComic/$chapter')}',
+  );
+
+  probe(
+    'layout.chapter_sidecar_is_chapter_level',
+    () async {
+      final meta =
+          StudioProjectMeta.readFromProjectDir('$projects/P3FixtureComic/$chapter');
+      return meta != null && !meta.isComicLevel;
+    },
+    // 故障：读**漫画级**根的边车 —— 它是 comic 级。
+    () async {
+      final meta = StudioProjectMeta.readFromProjectDir(comicRoot.root);
+      return meta != null && !meta.isComicLevel;
+    },
+    () => 'chapterDir=$projects/P3FixtureComic/$chapter',
   );
 
   // ── 3c · 既有工程的原图副本化（§4.1 · P1「全部迁移」的既有工程那一半）────
@@ -928,6 +1091,24 @@ bool _underRoot(String path, String root) {
 /// 🔴 比对内容而不是只看"文件在不在"：`copySources` 用 `File.copy` 复制，若
 /// 哪天改成"建空文件占位"，只看存在性的断言会照绿 —— 而空白的原图在工作室里
 /// 就是一片白，比"没有原图"更难发现。
+/// 目录里的工程 json 数量（排除产物对账表）。
+int _projectJsonsIn(String dir) {
+  final target = Directory(dir);
+  if (!target.existsSync()) return 0;
+  var count = 0;
+  for (final entity in target.listSync(followLinks: false)) {
+    if (entity is! File) continue;
+    // 🔴 Windows 的路径分隔符是 `\` —— 只按 `/` 切会拿到整条路径，文件名
+    // 判断永远不成立（计数恒 0），断言会以"看起来像 bug"的方式误导人。
+    final name = entity.path.split(RegExp(r'[/\\]')).last;
+    if (!name.startsWith('imgtrans_')) continue;
+    if (!name.endsWith('.json')) continue;
+    if (name.endsWith('.artifacts.json')) continue;
+    count++;
+  }
+  return count;
+}
+
 bool _sourcesCopiedUnder(String root, ProjectBootstrapPlan plan, String origin) {
   if (plan.pageKeys.isEmpty) return false;
   for (final key in plan.pageKeys) {

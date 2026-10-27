@@ -50,6 +50,14 @@ class BtProjectManager extends ChangeNotifier {
   /// comicId -> imgtrans json mtime (ms), also used as the reader cache buster.
   final Map<String, int> _mtimes = {};
 
+  /// 漫画级卡片 id -> （章节键 -> 章节工程 id）。P53 起翻译工程是两级：
+  /// 网格里一张卡 = 一本漫画（漫画级根），点进详情页看章节 = 章节级工程。
+  ///
+  /// 🔴 为什么章节键就是**子目录名**：它既是 `imgtrans_*.json` 的所在目录，
+  /// 也是源漫画里那一章的目录名（阅读键）。三者同一个字符串，才不会出现
+  /// "详情页第 109 话" 点开却是第 108 话的工程。
+  final Map<String, Map<String, String>> _comicChapters = {};
+
   /// Shared scan future. Concurrent callers (startup + local page + reader)
   /// all await the SAME scan instead of one of them getting an empty "done"
   /// while another walk is still in flight.
@@ -175,7 +183,61 @@ class BtProjectManager extends ChangeNotifier {
   /// Every comic this manager registered carries the prefix.
   static bool isBtComic(String? id) => id != null && id.startsWith(idPrefix);
 
-  BtProject? projectFor(String comicId) => _projects[comicId];
+  /// 工程 → 解析结果。
+  ///
+  /// 🔴 支持两种 id：**章节级**工程 id（json 路径哈希，工作室真正打开的东西）
+  /// 与**漫画级**卡片 id（详情页那张卡）。后者回落到它下面的第一个章节工程 ——
+  /// 否则"从网格点进翻译工程"会得到 null，界面上表现为空白页。
+  BtProject? projectFor(String comicId) {
+    final direct = _projects[comicId];
+    if (direct != null) return direct;
+    final chapters = _comicChapters[comicId];
+    if (chapters == null || chapters.isEmpty) return null;
+    return _projects[chapters.values.first];
+  }
+
+  /// 漫画级卡片下的章节键（源章节目录名），按目录序。
+  List<String> chapterKeysOf(String comicId) =>
+      _comicChapters[comicId]?.keys.toList() ?? const [];
+
+  /// 某个章节键对应的**章节级**工程 id；没有这个章节的工程则 null。
+  String? chapterProjectId(String comicId, String chapterKey) =>
+      _comicChapters[comicId]?[chapterKey];
+
+  /// 章节键对应的解析结果。
+  BtProject? chapterProjectFor(String comicId, String chapterKey) {
+    final id = chapterProjectId(comicId, chapterKey);
+    return id == null ? null : _projects[id];
+  }
+
+  /// 漫画级卡片 id：由**漫画级根目录**哈希而来。
+  ///
+  /// 与 [comicIdForJsonFile] 同一个哈希、同一份归一化，只是喂进去的是根目录
+  /// （末尾补 `/`）。两者不会撞：json 路径不可能以 `/` 结尾。
+  static String comicIdForComicRoot(String comicRoot) {
+    final root = comicRoot.replaceAll('\\', '/').replaceAll(RegExp(r'/+$'), '');
+    return comicIdForJsonFile('$root/');
+  }
+
+  /// 一个工程 json 属于哪个**漫画级根**。
+  ///
+  /// 判据：自己的目录里有一份**章节级**边车、**父目录**里有一份**漫画级**边车
+  /// ⇒ 父目录就是漫画级根。老工程（P53 之前，直接在 `projects/<名>/`）没有
+  /// 漫画级父边车，回落成"自己就是根"，行为与旧版完全一致。
+  static String comicRootForJson(String jsonPath) {
+    final normalized = jsonPath.replaceAll('\\', '/');
+    final slash = normalized.lastIndexOf('/');
+    if (slash <= 0) return normalized;
+    final dir = normalized.substring(0, slash);
+    final own = StudioProjectMeta.readFromProjectDir(dir);
+    if (own != null && own.isComicLevel) return dir;
+    final parentSlash = dir.lastIndexOf('/');
+    if (parentSlash <= 0) return dir;
+    final parent = dir.substring(0, parentSlash);
+    final upper = StudioProjectMeta.readFromProjectDir(parent);
+    if (upper != null && upper.isComicLevel) return parent;
+    return dir;
+  }
 
   /// All known project comic ids (the manager's registry keys). UI lists use
   /// this to enumerate projects without reaching into the private map.
@@ -409,6 +471,7 @@ class BtProjectManager extends ChangeNotifier {
     required String comicDirectory,
     required String chapterName,
     required String name,
+    String comicName = '',
     bool force = false,
     bool rescan = true,
   }) async {
@@ -432,9 +495,29 @@ class BtProjectManager extends ChangeNotifier {
             'project "$name" was not created.',
       );
     }
+    // 🔴 P53：两级布局 —— 章节级工程落在**漫画级根**下面（`parentName`）。
+    // 根的名字优先用 `comicName`（= 漫画名），没给就退回 `name`（保持老布局，
+    // 免得离线工具凭空多出一层）。
+    final parentName = comicName.trim().isEmpty ? '' : comicName.trim();
+    if (parentName.isNotEmpty) {
+      await ProjectBootstrap.ensureComicRoot(
+        projectsRoot: root,
+        name: parentName,
+        meta: StudioProjectMeta(
+          comicId: '',
+          comicTitle: parentName,
+          sourceKey: '',
+          eid: '0',
+          level: StudioProjectMeta.levelComic,
+          originalPath: comicDirectory,
+        ),
+        coverFrom: ProjectBootstrap.comicCoverPathIn(comicDirectory),
+      );
+    }
     final result = await ProjectBootstrap.create(
       projectsRoot: root,
       name: name,
+      parentName: parentName,
       plan: plan,
       force: force,
     );
@@ -531,6 +614,8 @@ class BtProjectManager extends ChangeNotifier {
 
   Future<void> _scan() async {
     final seen = <String>{};
+    // 漫画级根 -> 该根下的章节工程 id 列表。
+    final groups = <String, List<String>>{};
     for (final rootDir in roots.map(Directory.new)) {
       if (!await rootDir.exists()) continue;
       final files = <File>[];
@@ -578,13 +663,51 @@ class BtProjectManager extends ChangeNotifier {
           _projects[id] = project;
           _mtimes[id] = mtime;
           seen.add(id);
-          final manager = LocalManager();
-          if (manager.isInitialized) {
-            _registerLocal(manager, id, project, mtime);
-          }
+          // 🔴 登记推迟到整轮扫完之后：漫画级卡片要看到**它下面所有**章节工程
+          // 才能建出一张"有几章、哪几章有工程"的卡；边扫边登记就会建出
+          // "只有第一章"的卡，后面每多一章就重写一次，中间态还会被 UI 看见。
+          groups.putIfAbsent(comicRootForJson(file.path), () => []).add(id);
         } catch (e, s) {
           Log.error('BT Project', 'Failed to load ${file.path}: $e', s);
         }
+      }
+    }
+
+    // ── 登记：漫画级根 ⇒ 一张卡；老布局 ⇒ 一个工程一张卡 ───────────────────
+    final manager = LocalManager();
+    _comicChapters.clear();
+    for (final entry in groups.entries) {
+      final comicRoot = entry.key;
+      final ids = entry.value..sort();
+      final meta = StudioProjectMeta.readFromProjectDir(comicRoot);
+      final isComicRoot = meta != null && meta.isComicLevel;
+      if (!isComicRoot) {
+        // 老工程（P53 之前）：工程目录自己就是卡片，行为与旧版一致。
+        if (manager.isInitialized) {
+          for (final id in ids) {
+            final project = _projects[id];
+            if (project != null) _registerLocal(manager, id, project, _mtimes[id] ?? 0);
+          }
+        }
+        continue;
+      }
+      final comicId = comicIdForComicRoot(comicRoot);
+      final byChapter = <String, String>{};
+      for (final id in ids) {
+        final project = _projects[id];
+        if (project == null) continue;
+        byChapter[chapterKeyForProject(project)] = id;
+      }
+      // 🔴 顺序必须按**话号**，不能按工程 id（哈希）：详情页的章节列表与
+      // `comic.chapters` 同序，读者的"第 N 章"（ep）也是这个序 —— 两处一旦
+      // 不同序，点第 3 个章节会打开第 1 章的工程，而且界面上完全看不出来。
+      final ordered = byChapter.keys.toList()..sort(_chapterKeyOrder);
+      _comicChapters[comicId] = {
+        for (final key in ordered) key: byChapter[key]!,
+      };
+      seen.add(comicId);
+      if (manager.isInitialized) {
+        _registerComicLocal(manager, comicId, comicRoot, byChapter, meta);
       }
     }
 
@@ -596,7 +719,6 @@ class BtProjectManager extends ChangeNotifier {
       _projects.remove(id);
       _mtimes.remove(id);
     }
-    final manager = LocalManager();
     if (manager.isInitialized) {
       final staleComics = manager
           .getComics(LocalSortType.defaultSort)
@@ -626,6 +748,10 @@ class BtProjectManager extends ChangeNotifier {
           }
         } else if (entity is Directory) {
           if (name.startsWith('.')) continue;
+          // 🔴 `_` 开头的是**备份目录**（P53 迁移留的 `_p53_backup_<时间戳>/`），
+          // 里面有一份工程 json 的副本。扫到它就会凭空多出第二张工程卡 ——
+          // 而且那张卡和真卡长得一模一样，用户点进去会发现"怎么有两个"。
+          if (name.startsWith('_')) continue;
           if (_skippedDirs.contains(name.toLowerCase())) continue;
           await _collectJsonFiles(entity, out, depth + 1);
         }
@@ -700,6 +826,135 @@ class BtProjectManager extends ChangeNotifier {
     final slash = jsonPath.lastIndexOf('/');
     if (slash <= 0) return null;
     return StudioProjectMeta.readFromProjectDir(jsonPath.substring(0, slash));
+  }
+
+  /// 章节级工程的**章节键**：json 所在目录名（= 源漫画里那一章的目录名）。
+  static String chapterKeyForProject(BtProject project) {
+    final jsonPath = project.jsonFile.path.replaceAll('\\', '/');
+    final slash = jsonPath.lastIndexOf('/');
+    if (slash <= 0) return '';
+    final dir = jsonPath.substring(0, slash);
+    final parentSlash = dir.lastIndexOf('/');
+    return parentSlash < 0 ? dir : dir.substring(parentSlash + 1);
+  }
+
+  /// 章节键排序：话号（数值）优先，其余按字典序；无话号的排最后。
+  ///
+  /// 与 `chapters.dart` 的章节列表同序 —— 详情页顺序和源漫画不一致会让人以为
+  /// 工程建错了章。
+  static int _chapterKeyOrder(String a, String b) {
+    final na = chapterNumberValueOf(a);
+    final nb = chapterNumberValueOf(b);
+    if (na != null && nb != null && na != nb) return na.compareTo(nb);
+    if (na != null && nb == null) return -1;
+    if (na == null && nb != null) return 1;
+    return a.compareTo(b);
+  }
+
+  /// 素材漫画：工程借它的封面 / 标题 / 简介 / 标签（用户的原话：
+  /// "翻译工程详情页的封面和漫画信息等借用对应的漫画素材详情页即可"）。
+  LocalComic? _sourceComic(LocalManager manager, StudioProjectMeta meta) {
+    if (meta.comicId.isEmpty) return null;
+    final local = manager.find(meta.comicId, ComicType.local);
+    if (local != null) return local;
+    if (meta.sourceKey.isEmpty) return null;
+    try {
+      return manager.find(meta.comicId, ComicType.fromKey(meta.sourceKey));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 登记**漫画级**卡片：一张卡 = 一本漫画的翻译工程集合。
+  ///
+  /// 🔴 这一层不是"另造一种漫画"，而是**本来就是一本书**：它有自己的封面、
+  /// 标题、简介与章节列表，所以它可以和素材漫画放在同一个合集里，详情页也走
+  /// 同一套 UI（`ComicPage`）。差别只在点开章节时进的是翻译工作室（复合多
+  /// 重显示），而不是图片扫描阅读器。
+  ///
+  /// 章节列表只列**已有工程**的章节：用户要的是"这里显示的是翻译工程，不是
+  /// 普通漫画"。没建工程的章节不出现，避免点开一片空白。
+  void _registerComicLocal(
+    LocalManager manager,
+    String comicId,
+    String comicRoot,
+    Map<String, String> byChapter,
+    StudioProjectMeta meta,
+  ) {
+    final source = _sourceComic(manager, meta);
+    final keys = byChapter.keys.where((k) => k.isNotEmpty).toList()
+      ..sort(_chapterKeyOrder);
+
+    final displayTitles = <String, String>{};
+    for (final key in keys) {
+      final borrowed = _sourceChapterTitle(source, key);
+      displayTitles[key] =
+          borrowed.isNotEmpty ? borrowed : parseChapterTitle(key).displayTitle;
+    }
+
+    // 封面：优先用漫画级根下自己那份（创建时从素材漫画复制的），其次素材漫画。
+    var cover = meta.cover;
+    if (cover.isEmpty || !File('$comicRoot/$cover').existsSync()) {
+      cover = '';
+      for (final ext in const ['jpg', 'jpeg', 'png', 'webp']) {
+        if (File('$comicRoot/cover.$ext').existsSync()) {
+          cover = 'cover.$ext';
+          break;
+        }
+      }
+    }
+    if (cover.isEmpty) cover = source?.cover ?? '';
+
+    final title = meta.comicTitle.isNotEmpty
+        ? meta.comicTitle
+        : (source?.title ?? _basename(comicRoot));
+
+    final comic = LocalComic(
+      id: comicId,
+      title: title,
+      // 与素材漫画一致：副标题是"又名/副题"，不是"projects"。
+      subtitle: source?.subtitle ?? '',
+      tags: source?.tags.isNotEmpty == true ? source!.tags : const ['BT'],
+      directory: comicRoot,
+      chapters: keys.isEmpty ? null : ComicChapters(displayTitles),
+      cover: cover,
+      comicType: ComicType.local,
+      downloadedChapters: keys,
+      createdAt: source?.createdAt ??
+          DateTime.fromMillisecondsSinceEpoch(
+            _mtimes[byChapter.values.first] ?? 0,
+          ),
+      description: source?.description ?? '翻译工程',
+      source: source?.source ?? '',
+      updateTime: source?.updateTime ?? '',
+      altTitles: source?.altTitles ?? const [],
+    );
+
+    final old = manager.find(comicId, ComicType.local);
+    if (old != null &&
+        old.title == comic.title &&
+        old.subtitle == comic.subtitle &&
+        old.directory == comic.directory &&
+        old.cover == comic.cover &&
+        old.description == comic.description &&
+        old.chapters?.length == comic.chapters?.length &&
+        old.downloadedChapters.length == comic.downloadedChapters.length &&
+        old.downloadedChapters.toSet().containsAll(comic.downloadedChapters)) {
+      return; // unchanged
+    }
+    manager.add(comic);
+  }
+
+  /// 素材漫画里这一章的标题；没有则空串。
+  static String _sourceChapterTitle(LocalComic? source, String chapterKey) {
+    final chapters = source?.chapters;
+    if (chapters == null) return '';
+    try {
+      final title = chapters[chapterKey];
+      return title?.trim() ?? '';
+    } catch (_) {
+      return '';
+    }
   }
 
   /// Writes/refreshes the [LocalComic] row for [project]. The parsed project

@@ -141,6 +141,44 @@ bool comicRootIsSafeToDelete(String root, {String? libraryRoot}) {
   return p.isWithin(p.dirname(libNorm), norm);
 }
 
+/// 摘掉 `<工程根>/source` 的链接（P53 起它是指向原件的 junction）。
+///
+/// 🔴 为什么删工程前必须显式做这一步：实测 Dart 的 `deleteSync(recursive: true)`
+/// **不会**穿透 junction（原件幸存），但"不会穿透"是**实现细节**，不是契约 ——
+/// 不同平台、不同版本的 `rm` 语义并不一致，而穿透一次就等于删掉用户唯一一份
+/// 原图。摘链接的代价是一行 `Link.deleteSync()`，风险差了几个数量级。
+///
+/// 普通目录**不动**：那是 P53 之前 `source/` 的真副本，属于工程自己的数据，
+/// 跟着工程一起删是对的。
+void unlinkSourceLink(String projectRoot) {
+  if (projectRoot.trim().isEmpty) return;
+  // 🔴 P53 两级布局：junction 在**章节级**目录里（`<漫画级根>/<章节键>/source`），
+  // 不是漫画级根下。所以两级都要摘 —— 只摘根下那个会漏掉真正指向原件的链接。
+  _unlinkLinkAt(p.join(projectRoot, 'source'));
+  try {
+    for (final entity in Directory(projectRoot).listSync(followLinks: false)) {
+      if (entity is! Directory) continue;
+      _unlinkLinkAt(p.join(entity.path, 'source'));
+    }
+  } catch (_) {
+    // 列不出来就只摘根下那个（下面的递归删除已实测不会穿透）。
+  }
+}
+
+/// 摘掉一个路径上的链接（是链接才摘；普通目录**不动** —— 那是 P53 之前的
+/// 真副本，属于工程自己的数据，跟着工程一起删是对的）。
+void _unlinkLinkAt(String path) {
+  if (FileSystemEntity.typeSync(path, followLinks: false) !=
+      FileSystemEntityType.link) {
+    return;
+  }
+  try {
+    Link(path).deleteSync();
+  } catch (_) {
+    // 摘不掉就交给后面的递归删除（已实测不会穿透），但不要因此中断删除。
+  }
+}
+
 /// 一次删除的结果 —— 界面据此**如实**报一句，而不是笼统的"已删除"。
 class ComicDeletionReport {
   const ComicDeletionReport({
@@ -203,6 +241,10 @@ ComicDeletionReport deleteLocalComics(
       if (!Directory(root).existsSync()) {
         missing.add(root);
         continue;
+      }
+      // 🔴 P53：工程根的 `source/` 是指向原件的 junction —— 先摘链接再删目录。
+      if (comicCardKindOf(comic.id) == ComicCardKind.project) {
+        unlinkSourceLink(root);
       }
       dirs.add(Directory(root));
     }

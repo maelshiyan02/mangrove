@@ -402,6 +402,13 @@ abstract mixin class _ComicPageActions {
   /// (so it only shows chapters from that scanlation group) while the full
   /// chapters object remains on the comic model.
   void read([int? ep, int? page, int? group, ComicChapters? filteredChapters]) {
+    // 🔴 P53：翻译工程（`bt_` 卡）**不是**图片扫描阅读器 —— 它的每一章都是
+    // 一个"原图 + 译文 + 抹除产物"的复合工程，要进工作室（复合多重显示）。
+    // 所以这里分流，而不是让 Reader 去读工程的 `source/`。
+    if (BtProjectManager.isBtComic(comic.id)) {
+      _openTranslationStudio(ep);
+      return;
+    }
     // Heal a stale history row (e.g. a reused local id whose old record kept
     // the previous comic's title/cover, issue #135) before the reader
     // persists it again.
@@ -428,6 +435,27 @@ abstract mixin class _ComicPageActions {
         .then((_) {
           onReadEnd();
         });
+  }
+
+  /// 打开翻译工作室：把"第几章"换算成**章节键**，再定位到那一章的工程。
+  ///
+  /// 🔴 `ep` 是章节在**列表**里的序号（从 1 起），而工程的 id 是 json 路径
+  /// 哈希 —— 两者之间只能靠"章节键"这座桥（章节键 = 源章节目录名 = 工程子目录
+  /// 名 = 详情页章节列表的键）。少这一步就会点错章。
+  void _openTranslationStudio(int? ep) {
+    final manager = BtProjectManager();
+    final keys = manager.chapterKeysOf(comic.id);
+    String? chapterKey;
+    if (ep != null && ep >= 1 && ep <= keys.length) {
+      chapterKey = keys[ep - 1];
+    } else if (keys.isNotEmpty) {
+      chapterKey = keys.first;
+    }
+    final projectId =
+        chapterKey == null ? null : manager.chapterProjectId(comic.id, chapterKey);
+    App.rootContext.to(
+      () => TranslationStudioPage(comicId: projectId ?? comic.id),
+    );
   }
 
   void continueRead() {

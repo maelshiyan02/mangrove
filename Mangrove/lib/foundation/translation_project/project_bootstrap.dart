@@ -5,6 +5,7 @@ import 'package:mangrove/foundation/log.dart';
 import 'project.dart';
 import 'project_io.dart';
 import 'project_writer.dart';
+import 'studio_project_meta.dart';
 
 /// 一张页图的像素尺寸。
 class PageImageSize {
@@ -194,15 +195,19 @@ class ProjectBootstrapPlan {
     required this.chapterName,
     required this.pageKeys,
     required this.sizes,
+    this.chapters = const {},
   });
 
   /// 源漫画根目录（`ComicLibrary/downloads/<漫画>`）。工程只**引用**它，不复制。
   final String comicDirectory;
 
-  /// 章节目录名（相对 [comicDirectory]）。
+  /// 章节目录名（相对 [comicDirectory]）。整本漫画计划（[chapters] 非空）时为
+  /// 空串，此时以 [chapters] 为准。
   final String chapterName;
 
   /// 页键，形如 `<章节>/<文件名>`，正斜杠，按阅读顺序（数字页按数值排）。
+  ///
+  /// 单章节计划 = 那一章的页；整本漫画计划 = 所有章节的页（[chapters] 展平）。
   final List<String> pageKeys;
 
   /// 实测到的尺寸。
@@ -211,6 +216,13 @@ class ProjectBootstrapPlan {
   /// 宽高」和「这一页不存在」是两件事，前者不能让页静默消失（A02 §7.1 空结果
   /// 判 FAIL 的同源错误：把"没量到"当成"没有"）。
   final Map<String, PageImageSize> sizes;
+
+  /// 整本漫画计划的多章节结构：章节名 → 该章页键（格式同 [pageKeys]）。
+  ///
+  /// 🔴 P53：空 = 单章节计划（用 [chapterName] + [pageKeys]）；非空 = 整本
+  /// 漫画计划。`buildRaw` 据此决定 json 里写几个 `chapters` 条目。两个字段
+  /// 互斥承载，[pageKeys] 始终是 [chapters] 展平后的全集，供复用逻辑只读一份。
+  final Map<String, List<String>> chapters;
 
   /// 头部解析失败的页键。
   List<String> get unknownSizeKeys => [
@@ -293,6 +305,45 @@ class ProjectBootstrapCopy {
   bool get complete => missing.isEmpty && copied.isNotEmpty;
 }
 
+/// 一次「把 `source/` 链接到原件目录」的结果。
+class ProjectBootstrapLink {
+  const ProjectBootstrapLink({
+    required this.linked,
+    this.copied = const [],
+    this.missing = const [],
+  });
+
+  /// 是否成功建立了 junction/符号链接（true 表示**未复制**原件）。
+  final bool linked;
+
+  /// 链接失败回退复制时成功复制的页键。
+  final List<String> copied;
+
+  /// 链接失败回退复制时源文件不在的页键。
+  final List<String> missing;
+
+  int get copiedCount => copied.length;
+  int get missingCount => missing.length;
+}
+
+/// 一次「建/复用漫画级工程根」的结果。
+class ProjectComicRoot {
+  const ProjectComicRoot({
+    required this.root,
+    required this.meta,
+    required this.created,
+  });
+
+  /// 漫画级工程根（`<projectsRoot>/<工程名>`）。
+  final String root;
+
+  /// 落盘后的漫画级边车。
+  final StudioProjectMeta meta;
+
+  /// 本次是否新建（false = 复用了已有的漫画级根）。
+  final bool created;
+}
+
 /// 从一本**已下载的漫画**开一个工作室工程（`A08 §5` · `P6 §4.10.2` 表 #3）。
 ///
 /// 三条硬约束，与离线工具 `tools/_make_chapter_carrier.py` 同源：
@@ -323,6 +374,9 @@ abstract final class ProjectBootstrap {
   /// （= `<root>/source`）是两个**真实存在**的不同目录，双 root 分离
   /// （`ProjectWriter` 的「Two roots, one implementation」）才真正成立。
   static const String sourceDirectoryName = 'source';
+
+  /// 漫画根下存"季封 / 特典封面"的目录名（应用自己写的，**不是**一章）。
+  static const String coverDirectoryName = 'cover';
 
   /// 与本地库扫描器一致的白名单（`A03 §1`），不是 `TranslationProject` 那份
   /// 更宽的名单 —— 这里扫的是下载目录，读者把什么当页，我们就认什么。
@@ -419,6 +473,140 @@ abstract final class ProjectBootstrap {
     );
   }
 
+  /// 扫描**整本漫画**的所有章节，产出涵盖全部页键的整本计划。
+  ///
+  /// 🔴 P53：翻译工程从「每章一个」改为「每本一个」。本方法把漫画根下每个章节
+  /// 子目录的页都收进来，`chapters` 字段承载「章节名 → 页键」结构；扁平漫画
+  /// （页直接躺在根下、无章节子目录）则回落到单章节计划（[chapterName] 为空）。
+  ///
+  /// [chapterNames] 是**权威章节表**（来自本地库 `LocalComic.chapters`，由
+  /// `chapterDirectoryName` 算出）。给了它就用它，不再猜目录 —— 目录里可能有
+  /// 非章节目录（`cover/`），而记录表才是"这一本有哪些话"的真相。为 null /
+  /// 空时回落到扫目录（`headless create-project` 这类手里没有库的场景）。
+  ///
+  /// 不写任何文件、不读任何文件头以外的数据；章节目录**不递归**（与
+  /// [scanPageNames] 一致：子目录意味着"这本不该被收录"）。
+  static ProjectBootstrapPlan planComic({
+    required String comicDirectory,
+    List<String>? chapterNames,
+  }) {
+    final root = normalizeDirectoryPath(comicDirectory);
+    final comicDir = Directory(root);
+    if (!comicDir.existsSync()) {
+      return ProjectBootstrapPlan(
+        comicDirectory: root,
+        chapterName: '',
+        pageKeys: const [],
+        sizes: const {},
+      );
+    }
+    final authoritative = [
+      for (final name in chapterNames ?? const <String>[])
+        if (name.trim().isNotEmpty) name,
+    ];
+    final chapterDirs = authoritative.isEmpty
+        ? comicChapterDirs(root)
+        : [
+            for (final name in authoritative)
+              if (Directory('$root/$name').existsSync()) name,
+          ];
+
+    // 扁平漫画：没有章节子目录，页直接躺在根下。
+    if (chapterDirs.isEmpty) {
+      final names = scanPageNames(comicDirectory: root, chapterName: '');
+      final keys = [...names];
+      final sizes = <String, PageImageSize>{};
+      for (var i = 0; i < names.length; i++) {
+        final s = PageImageHeader.ofFile(File('$root/${names[i]}'));
+        if (s != null) sizes[names[i]] = s;
+      }
+      return ProjectBootstrapPlan(
+        comicDirectory: root,
+        chapterName: '',
+        pageKeys: keys,
+        sizes: sizes,
+      );
+    }
+
+    final chapters = <String, List<String>>{};
+    final allKeys = <String>[];
+    final sizes = <String, PageImageSize>{};
+    for (final ch in chapterDirs) {
+      final names = scanPageNames(comicDirectory: root, chapterName: ch);
+      final keys = [for (final n in names) '$ch/$n'];
+      chapters[ch] = keys;
+      allKeys.addAll(keys);
+      for (var i = 0; i < names.length; i++) {
+        final s = PageImageHeader.ofFile(File('$root/$ch/${names[i]}'));
+        if (s != null) sizes[keys[i]] = s;
+      }
+    }
+    return ProjectBootstrapPlan(
+      comicDirectory: root,
+      chapterName: '',
+      pageKeys: allKeys,
+      sizes: sizes,
+      chapters: chapters,
+    );
+  }
+
+  /// 整本漫画的章节子目录名（跳过隐藏目录与 `cover/`、不递归），按**话号**序。
+  ///
+  /// 🔴 与 [planComic] 共用这一份"哪些子目录算章节"的判据：两处各写一遍，
+  /// 就会出现"建工程扫到 20 章、数缺页只算 19 章"这种静默偏差。
+  ///
+  /// 🔴 `cover/` **必须排除**：应用自己会往漫画根写一个 `cover/` 目录存季封/
+  /// 特典图（实测 `第一次告白/cover/[KR][cover]season(1).jpg`）。按"任何子目录
+  /// 都是章节"扫，那张封面就会变成工程里的一页 —— 用户会在 63 话正常页中间
+  /// 看到一张封面，而且它还会被送去翻译。
+  static List<String> comicChapterDirs(String comicDirectory) {
+    final root = normalizeDirectoryPath(comicDirectory);
+    final dir = Directory(root);
+    if (!dir.existsSync()) return const [];
+    final names = <String>[];
+    for (final entity in dir.listSync(followLinks: false)) {
+      if (entity is! Directory) continue;
+      final name = _basename(entity.path);
+      if (name.isEmpty || name.startsWith('.')) continue;
+      if (name.toLowerCase() == coverDirectoryName) continue;
+      names.add(name);
+    }
+    names.sort(_chapterNameCompare);
+    return names;
+  }
+
+  /// 章节名排序：纯数字按数值、其余按字典序，数字段排在字母段之前。
+  ///
+  /// 与 [_pageNameCompare] 的区别：章节名不是文件名，**没有扩展名**，不能
+  /// 复用"去掉最后一个点之后的部分"那套（`ch.01` 会被读成 `ch`）。
+  static int _chapterNameCompare(String a, String b) {
+    final na = int.tryParse(a);
+    final nb = int.tryParse(b);
+    if (na != null && nb != null) return na.compareTo(nb);
+    if (na != null) return -1;
+    if (nb != null) return 1;
+    return a.compareTo(b);
+  }
+
+  /// 整本漫画的页键全集，**只列目录项、不读文件头**。
+  ///
+  /// [planComic] 会为每一页读 64KB 文件头拿尺寸（建工程必须），而"数缺页 /
+  /// 数总页数"只要键。用它避免为了一个数字把整本的文件头读一遍。
+  static List<String> planComicPageKeys(String comicDirectory) {
+    final root = normalizeDirectoryPath(comicDirectory);
+    if (!Directory(root).existsSync()) return const [];
+    final chapters = comicChapterDirs(root);
+    if (chapters.isEmpty) {
+      return [...scanPageNames(comicDirectory: root, chapterName: '')];
+    }
+    return [
+      for (final chapter in chapters)
+        for (final name
+            in scanPageNames(comicDirectory: root, chapterName: chapter))
+          '$chapter/$name',
+    ];
+  }
+
   /// 🔴 数字页按**数值**排，不是字典序 —— 否则 `10.webp` 会排在 `2.webp` 前面。
   static int _pageNameCompare(String a, String b) {
     final keyA = _pageOrderKey(a);
@@ -461,7 +649,13 @@ abstract final class ProjectBootstrap {
       },
       'page_order': <Object?>[...keys],
       'chapters': <Object?>[
-        if (plan.chapterName.isNotEmpty)
+        if (plan.chapters.isNotEmpty)
+          for (final entry in plan.chapters.entries)
+            <String, Object?>{
+              'name': entry.key,
+              'pages': <Object?>[...entry.value],
+            },
+        if (plan.chapters.isEmpty && plan.chapterName.isNotEmpty)
           <String, Object?>{
             'name': plan.chapterName,
             'pages': <Object?>[...keys],
@@ -515,6 +709,115 @@ abstract final class ProjectBootstrap {
     );
   }
 
+  /// 把工程的 `source/` 链接到原件目录（**不复制**），从而工程透明读取原件。
+  ///
+  /// 🔴 P53：翻译工程不再复制原件以省磁盘。`source/` 是一个指向
+  /// [fromDirectory]（`<ComicLibrary>/downloads/<漫画>`）的 **junction**（Windows
+  /// `mklink /J`，无需管理员）或符号链接（其它平台 `ln -s`）。抹字产物
+  /// （`inpainted/mask/result`）写进工程自己的 `workspace`，**绝不经过**这个
+  /// 链接，所以原件只被读取、不被写入 —— 破坏性擦除风险在"不复制"模型下依旧
+  /// 安全（见 [BtProjectManager] 头部说明）。
+  ///
+  /// 链接失败（权限/跨盘符不支持）时**回落到复制**（[copySources]），保证工程
+  /// 仍可用，只是退回到占用磁盘的旧行为并打警告。
+  static Future<ProjectBootstrapLink> linkSource({
+    required String root,
+    required ProjectBootstrapPlan plan,
+    required String fromDirectory,
+  }) async {
+    final target = normalizeDirectoryPath('$root/$sourceDirectoryName');
+    final from = normalizeDirectoryPath(fromDirectory);
+    // 🔴 **父目录必须先存在**：`mklink /J` 不会替我们建父目录，缺了就直接
+    // 报"系统找不到指定的路径"（实测，退出码 1）—— 而我们的回退是"复制"，
+    // 于是"不复制原件"这条需求会**静默失效**，磁盘照旧被占满，界面上看不出
+    // 任何异常。`copySources` 以前顺手建了这个目录，所以旧路径没暴露这个坑。
+    await Directory(normalizeDirectoryPath(root)).create(recursive: true);
+    if (!Directory(from).existsSync()) {
+      Log.warning(
+        'ProjectBootstrap',
+        'Original dir missing, falling back to copy: $from',
+      );
+      final copy = await copySources(
+        root: target,
+        plan: plan,
+        fromDirectory: from,
+      );
+      return ProjectBootstrapLink(
+        linked: false,
+        copied: copy.copied,
+        missing: copy.missing,
+      );
+    }
+    // 已存在（junction / 符号链接 / 普通目录）⇒ 复用，不重复建。
+    //
+    // 🔴 三种情况必须分开处理，混为一谈会各出一次事故：
+    // * 链接且能解析 → 复用（正常）；
+    // * 链接但**断了**（原件被挪走/盘符变了）→ 删掉这条坏链接再重建。
+    //   不删的话 `mklink` 会报"文件已存在"，而我们又会落到复制分支 —— 复制
+    //   一个不存在的源目录，工程就成空的，用户只看到"所有页都读不到图"；
+    // * 普通目录（旧版本复制的副本，或某个真实目录）→ 复用，**绝不删**，
+    //   删了就是删用户的产物。
+    final existingType = FileSystemEntity.typeSync(target, followLinks: false);
+    if (existingType == FileSystemEntityType.link) {
+      if (Directory(target).existsSync()) {
+        return const ProjectBootstrapLink(linked: true);
+      }
+      try {
+        Link(target).deleteSync();
+      } catch (e) {
+        Log.warning('ProjectBootstrap', 'stale link unlink failed: $e');
+      }
+    } else if (existingType != FileSystemEntityType.notFound) {
+      return const ProjectBootstrapLink(linked: true);
+    }
+
+    try {
+      if (Platform.isWindows) {
+        final result = await Process.run(
+          'cmd',
+          [
+            '/c',
+            'mklink',
+            '/J',
+            target.replaceAll('/', '\\'),
+            from.replaceAll('/', '\\'),
+          ],
+          runInShell: false,
+        );
+        if (result.exitCode == 0) {
+          return const ProjectBootstrapLink(linked: true);
+        }
+        Log.warning(
+          'ProjectBootstrap',
+          'mklink /J failed (${result.exitCode}): ${result.stderr}',
+        );
+      } else {
+        final result = await Process.run('ln', ['-s', from, target]);
+        if (result.exitCode == 0) {
+          return const ProjectBootstrapLink(linked: true);
+        }
+        Log.warning(
+          'ProjectBootstrap',
+          'ln -s failed (${result.exitCode}): ${result.stderr}',
+        );
+      }
+    } catch (e, s) {
+      Log.error('ProjectBootstrap', 'link source failed: $e', s);
+    }
+
+    // 回退复制。
+    final copy = await copySources(
+      root: target,
+      plan: plan,
+      fromDirectory: from,
+    );
+    return ProjectBootstrapLink(
+      linked: false,
+      copied: copy.copied,
+      missing: copy.missing,
+    );
+  }
+
   /// 落盘前校验。返回 `null` 表示可以建，否则是人能读的拒绝理由。
   ///
   /// 🔴 这里挡的是**唯一一条会造成不可逆后果的红线**：产物写进 `downloads/`
@@ -547,6 +850,118 @@ abstract final class ProjectBootstrap {
     return true;
   }
 
+  /// 拼 `<a>/<b>/<c>`，忽略空段（`/` 归一化）。
+  static String _join(String a, String b, String c) {
+    final parts = <String>[
+      normalizeDirectoryPath(a),
+      if (b.trim().isNotEmpty) b.trim(),
+      if (c.trim().isNotEmpty) c.trim(),
+    ];
+    return parts.join('/');
+  }
+
+  /// 建/复用「漫画级翻译工程根」：`<projectsRoot>/<name>/`。
+  ///
+  /// 这一层只有两样东西：**边车**（`level: comic`，记 `comicId`/`sourceKey`/
+  /// 原件目录）与**封面**。章节级工程是它的子目录（[create] 的 `parentName`）。
+  ///
+  /// 🔴 为什么封面是**复制**而页面是**链接**：用户要的是"创建工程不单单是命名
+  /// 工程，还有配套的封面和详细信息，这些借用已有漫画的"。一页图几十上百 KB ×
+  /// 上百页才是磁盘大头；封面只有一个文件，链接它省不了多少，却会在素材漫画被
+  /// 移动/删除后让卡片变成空白 —— 一张没有封面的工程卡在网格里等于找不到。
+  ///
+  /// 🔴 幂等且**不覆盖**已有边车：漫画级根一旦建成就代表"这本已经有工程了"，
+  /// 第二次进来只补缺（缺封面补封面、缺原件路径补路径），绝不改漫画归属 ——
+  /// 改了就会把别人的章节工程认领走。
+  static Future<ProjectComicRoot> ensureComicRoot({
+    required String projectsRoot,
+    required String name,
+    required StudioProjectMeta meta,
+    String? coverFrom,
+  }) async {
+    final root = _join(projectsRoot, name, '');
+    await Directory(root).create(recursive: true);
+
+    final existing = StudioProjectMeta.readFromProjectDir(root);
+    final resolved = (existing != null && existing.isComicLevel) ? existing : null;
+
+    // 封面：优先复用根下已有的 `cover.*`，否则从素材漫画复制一份。
+    var cover = resolved?.cover ?? '';
+    if (cover.isEmpty || !File('$root/$cover').existsSync()) {
+      cover = _existingCoverName(root) ?? '';
+      if (cover.isEmpty && coverFrom != null && File(coverFrom).existsSync()) {
+        final dot = coverFrom.lastIndexOf('.');
+        final ext = dot >= 0 ? coverFrom.substring(dot).toLowerCase() : '.jpg';
+        final target = 'cover$ext';
+        try {
+          await File(coverFrom).copy('$root/$target');
+          cover = target;
+        } catch (e, s) {
+          Log.error('ProjectBootstrap', 'comic cover copy failed: $e', s);
+        }
+      }
+    }
+
+    final next = StudioProjectMeta(
+      comicId: meta.comicId,
+      comicTitle: (resolved?.comicTitle.isNotEmpty ?? false)
+          ? resolved!.comicTitle
+          : meta.comicTitle,
+      sourceKey: (resolved?.sourceKey.isNotEmpty ?? false)
+          ? resolved!.sourceKey
+          : meta.sourceKey,
+      eid: meta.eid,
+      level: StudioProjectMeta.levelComic,
+      originalPath: (resolved?.originalPath.isNotEmpty ?? false)
+          ? resolved!.originalPath
+          : meta.originalPath,
+      cover: cover,
+    );
+    if (resolved == null ||
+        resolved.cover != next.cover ||
+        resolved.originalPath != next.originalPath) {
+      await StudioProjectMeta.writeToProjectDir(root, next);
+    }
+    return ProjectComicRoot(
+      root: root,
+      meta: next,
+      created: resolved == null,
+    );
+  }
+
+  /// 目录里已有的**工程 json**（`imgtrans_*.json`，排除产物对账表），没有则 null。
+  static File? _existingProjectJson(String root) {
+    final dir = Directory(normalizeDirectoryPath(root));
+    if (!dir.existsSync()) return null;
+    try {
+      for (final entity in dir.listSync(followLinks: false)) {
+        if (entity is! File) continue;
+        final name = _basename(entity.path);
+        if (!name.startsWith('imgtrans_')) continue;
+        if (!name.endsWith('.json')) continue;
+        if (name.endsWith('.artifacts.json')) continue;
+        return entity;
+      }
+    } catch (_) {
+      // 列不出来就当没有（下面的"按新名字判断"仍会兜住）。
+    }
+    return null;
+  }
+
+  /// 工程根下已有的封面文件名（`cover.<ext>`），没有则 null。
+  static String? _existingCoverName(String root) {
+    for (final ext in const ['jpg', 'jpeg', 'png', 'webp']) {
+      for (final name in [
+        'cover.$ext',
+        'COVER.$ext',
+        'cover.${ext.toUpperCase()}',
+      ]) {
+        if (File('$root/$name').existsSync()) return name;
+      }
+    }
+    return null;
+  }
+
   /// 把 [plan] 落成 `<projectsRoot>/<name>/imgtrans_<name>.json`，并把页图
   /// 复制进 `<projectsRoot>/<name>/source/`（§4.1）。
   ///
@@ -559,11 +974,17 @@ abstract final class ProjectBootstrap {
     required String projectsRoot,
     required String name,
     required ProjectBootstrapPlan plan,
+    String parentName = '',
     bool force = false,
     bool ensureArtifactDirectories = true,
     bool copySources = true,
   }) async {
-    final root = '${normalizeDirectoryPath(projectsRoot)}/$name';
+    // 🔴 P53：翻译工程是「漫画级根 → 章节级工程」两级。`parentName` 是漫画级
+    // 根目录名（= 详情页那张卡片的身份），`name` 是章节键（源章节目录名）。
+    // 布局：`<projectsRoot>/<parentName>/<name>/imgtrans_<name>.json`。
+    // 不传 `parentName` 时保持老布局（`<projectsRoot>/<name>/`），供夹具与离线
+    // 工具使用 —— 它们手里没有"漫画"这一层。
+    final root = _join(projectsRoot, parentName, name);
     final jsonFileName = TranslationProject.jsonFileNameFor(name);
     final jsonFile = File(ProjectWriter.jsonPath(root, jsonFileName));
 
@@ -580,6 +1001,22 @@ abstract final class ProjectBootstrap {
         error: refusal,
       );
     }
+    // 🔴 目标目录里已经有工程 json ⇒ **复用它**，不要新建第二份。
+    //
+    // 为什么要多这一层：工程 json 的**文件名**跟着"工程名"走，而工程名在不同
+    // 时期不一样（老工程用漫画名/章节名，新约定用章节键）。所以同一章的工程
+    // 在目录里的 json 可能叫 `imgtrans_做个恶女好安逸.json`，而这次要建的是
+    // `imgtrans_109 [Violet Scans] [comix.to].json` —— 只按新名字判断，就会
+    // 在同一个目录里**再建一份**，用户于是看到两个工程、两次翻译、两条术语表。
+    final existingJson = _existingProjectJson(root);
+    if (existingJson != null && !force) {
+      return ProjectBootstrapResult(
+        root: root,
+        jsonFile: existingJson,
+        created: false,
+        error: '工程已存在：${_basename(existingJson.path)}（需要覆盖请显式给 force）',
+      );
+    }
     if (jsonFile.existsSync() && !force) {
       return ProjectBootstrapResult(
         root: root,
@@ -589,51 +1026,57 @@ abstract final class ProjectBootstrap {
       );
     }
 
-    // 🔴 先复制、后写 json。顺序反过来会留下一个"json 指着 source/ 而
-    // source/ 还不存在"的中间态；`TranslationProject.directory` 在目录不存在
-    // 时会**静默回落**到 json 所在目录（`project.dart` 的 getter），于是那个
-    // 中间态在界面上看起来完全正常，读的却是错的目录。
-    final sourceRoot =
-        copySources ? '$root/$sourceDirectoryName' : plan.comicDirectory;
+    // 🔴 先建 source/（junction 或副本）、后写 json。顺序反过来会留下一个
+    // "json 指着 source/ 而 source/ 还不存在"的中间态；`TranslationProject.directory`
+    // 在目录不存在时会**静默回落**到 json 所在目录（`project.dart` 的 getter），
+    // 于是那个中间态在界面上看起来完全正常，读的却是错的目录。
+    //
+    // 🔴 P53：产品路径一律 junction（`useJunction`）—— `source/` 是**指向原件
+    // 目录的链接**，不复制一页。链接失败才回落复制（[linkSource] 内部）。
+    // `copySources` 为 false 时退回旧引用布局（`directory` 直接指向源漫画目录，
+    // 不建 source/），仅供夹具与离线工具。
+    final bool useJunction = copySources;
+    final String sourceRoot =
+        useJunction ? '$root/$sourceDirectoryName' : plan.comicDirectory;
     var copied = <String>[];
     var missing = <String>[];
-    if (copySources) {
-      final copy = await ProjectBootstrap.copySources(
-        root: sourceRoot,
+    if (useJunction) {
+      final link = await ProjectBootstrap.linkSource(
+        root: root,
         plan: plan,
         fromDirectory: plan.comicDirectory,
       );
-      copied = copy.copied;
-      missing = copy.missing;
-      // 🔴 封面优先用**原漫画自带的封面**（`comicDirectory/cover.<ext>`），而不是
-      // 复制好的第一页 —— 工程封面该是"这一本"的封面，而章节第一页可能是扉页/
-      // 广告/版权页（P9 实测：龙女友两话工程因此都用了第一页当封面）。
-      // 原漫画没有封面时才回落到第一页（老行为）。
-      //
-      // 落点仍是工程根 `root`：`BtProjectManager.coverPathFor` 现在**两处都查**
-      // （`source/` 与工程根），所以新老工程都能命中，无需迁移文件。
-      final comicCover = comicCoverPathIn(plan.comicDirectory);
-      if (comicCover != null) {
-        final dot = comicCover.lastIndexOf('.');
-        final ext = dot >= 0 ? comicCover.substring(dot) : '';
-        try {
-          await File(comicCover).copy('$root/cover$ext');
-        } catch (e, s) {
-          Log.error('ProjectBootstrap', 'comic cover copy failed: $e', s);
-        }
-      } else if (copied.isNotEmpty) {
-        final firstKey = copied.first;
-        final dot = firstKey.lastIndexOf('.');
-        final ext = dot >= 0 ? firstKey.substring(dot) : '';
-        final coverFrom = File('$sourceRoot/$firstKey');
-        final coverTo = File('$root/cover$ext');
-        try {
-          await coverFrom.copy(coverTo.path);
-        } catch (e, s) {
-          Log.error('ProjectBootstrap', 'cover image copy failed: $e', s);
+      copied = link.copied;
+      missing = link.missing;
+      if (!link.linked) {
+        // 链接失败、已回退复制：补封面（与旧行为一致），避免工程封面变成第一页。
+        final comicCover = comicCoverPathIn(plan.comicDirectory);
+        if (comicCover != null) {
+          final dot = comicCover.lastIndexOf('.');
+          final ext = dot >= 0 ? comicCover.substring(dot) : '';
+          try {
+            await File(comicCover).copy('$root/cover$ext');
+          } catch (e, s) {
+            Log.error('ProjectBootstrap', 'comic cover copy failed: $e', s);
+          }
+        } else if (copied.isNotEmpty) {
+          final firstKey = copied.first;
+          final dot = firstKey.lastIndexOf('.');
+          final ext = dot >= 0 ? firstKey.substring(dot) : '';
+          final coverFrom = File('$sourceRoot/$firstKey');
+          final coverTo = File('$root/cover$ext');
+          try {
+            await coverFrom.copy(coverTo.path);
+          } catch (e, s) {
+            Log.error('ProjectBootstrap', 'cover image copy failed: $e', s);
+          }
         }
       }
+      // link.linked == true ⇒ junction 透明，原件封面可在 `<sourceRoot>/cover.<ext>`
+      // 读到，**无需复制** —— 这正是"不复制原件"要省下的那部分。
     }
+    // 旧引用布局（copySources=false）什么都不做：directory 直接指向源漫画目录，
+    // 封面经 directory 即可读到，无需复制。
 
     final project = TranslationProject.buildFrom(
       buildRaw(plan, directory: sourceRoot),

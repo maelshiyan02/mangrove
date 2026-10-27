@@ -64,6 +64,10 @@ import 'package:mangrove/headless_p12_checks.dart';
 import 'package:mangrove/headless_p13_checks.dart';
 import 'package:mangrove/headless_p14_checks.dart';
 import 'package:mangrove/headless_p15_checks.dart';
+import 'package:mangrove/headless_p53_create_check.dart';
+import 'package:mangrove/headless_p53_layout_check.dart';
+import 'package:mangrove/headless_p53_migrate.dart';
+import 'package:mangrove/headless_p53_relink.dart';
 import 'package:mangrove/headless_pipeline_check.dart';
 import 'package:mangrove/headless_script_checks.dart';
 
@@ -3573,6 +3577,9 @@ Future<void> runCreateProject(List<String> args, int commandIndex) async {
   final comicDir = argOr('--comic-dir', '');
   final chapter = argOr('--chapter', '');
   final name = argOr('--name', '');
+  // 🔴 P53：章节级工程落在**漫画级根**下面。`--comic-name` 给的是那个根的
+  // 名字（= 漫画名）；不给就退回老的平铺布局（离线工具的老用法不变）。
+  final comicName = argOr('--comic-name', '');
   final force = args.contains('--force');
   final jsonIndex = args.indexOf('--json');
   final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
@@ -3604,6 +3611,7 @@ Future<void> runCreateProject(List<String> args, int commandIndex) async {
       'comicDir': comicDir,
       'chapter': chapter,
       'name': name,
+      'comicName': comicName,
       'root': root,
     },
   });
@@ -3612,6 +3620,7 @@ Future<void> runCreateProject(List<String> args, int commandIndex) async {
     comicDirectory: comicDir,
     chapterName: chapter,
     name: name,
+    comicName: comicName,
     force: force,
     rescan: true,
   );
@@ -3978,6 +3987,14 @@ Future<void> runHeadlessMode(List<String> args) async {
       await runComixSpike(args, commandIndex);
     case 'create-project':
       await runCreateProject(args, commandIndex);
+    case 'migrate-nested':
+      await runMigrateNested(args, commandIndex);
+    case 'project-layout-check':
+      await runProjectLayoutCheck(args, commandIndex);
+    case 'project-relink':
+      await runProjectRelink(args, commandIndex);
+    case 'project-create-check':
+      await runProjectCreateCheck(args, commandIndex);
     case 'cache-check':
       await runCacheCheck(args, commandIndex);
     case 'chapter-order':

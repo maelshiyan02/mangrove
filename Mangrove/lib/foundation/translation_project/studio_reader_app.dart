@@ -353,8 +353,18 @@ class StudioReaderTarget {
     required this.comicDirectory,
     required this.chapterName,
     required this.projectName,
+    this.comicName = '',
     this.group = glossarySharedGroup,
   });
+
+  /// **漫画级**工程名（`<projectsRoot>/<comicName>/`）。
+  ///
+  /// 🔴 P53：翻译工程是两级 —— 漫画级根（一张卡、可入合集、详情页借用素材漫画
+  /// 的封面与信息）与章节级工程（真正吃图的 `imgtrans_*.json`）。用户的原话是
+  /// "创建的时候应该会自动归来到漫画整体对应的翻译工程详情页中"，所以这一层
+  /// 必须由**漫画**决定，而不是由某一章的名字决定；否则同一本漫画会在 projects
+  /// 下长出 20 个互不相干的根。
+  final String comicName;
 
   /// 素材原图根（`downloads/<漫画>`）—— 页键相对**这个**根。
   final String comicDirectory;
@@ -444,6 +454,11 @@ abstract final class StudioReaderLink {
         comicTitle: comic.title,
         chapterName: chapterName,
       ),
+      // 漫画级根名：只要漫画标题（不带章节），与创建向导的默认建议一致。
+      comicName: studioProjectNameFor(
+        comicTitle: comic.title,
+        chapterName: '',
+      ),
       group: group,
     );
   }
@@ -477,13 +492,15 @@ abstract final class StudioReaderLink {
 
     // 🔴 边车（显式归属）在**这一刻**写，不等扫描：P4 的归类要靠它，而扫描是
     // 异步的 —— 刚建完工程就点进归类页时，边车必须已经在盘上。
+    final sourceComic =
+        StudioReaderLink.findLocalComic(cid: cid, sourceKey: sourceKey);
     final meta = StudioProjectMeta(
       comicId: cid,
-      comicTitle:
-          StudioReaderLink.findLocalComic(cid: cid, sourceKey: sourceKey)?.title ??
-              '',
+      comicTitle: sourceComic?.title ?? '',
       sourceKey: sourceKey ?? '',
       eid: eid,
+      level: StudioProjectMeta.levelChapter,
+      originalPath: target.comicDirectory,
     );
 
     final existing = StudioReaderStore.bindingFor(
@@ -534,9 +551,37 @@ abstract final class StudioReaderLink {
       return (null, 'chapter-has-no-page');
     }
 
+    // 🔴 漫画级根：先按 `(cid, sourceKey)` 找已有的，找到就沿用它的目录名 ——
+    // 用户可能当初起了别名（"P53Demo"）。找不到才用 target 给的名字建一个新的，
+    // 并顺手把**封面**从素材漫画复制过来（用户要的"配套封面和信息"）。
+    final rootName = _existingComicRootName(projectsRoot, cid, sourceKey) ??
+        (target.comicName.isNotEmpty ? target.comicName : target.projectName);
+    final coverFrom = _coverPathOf(sourceComic) ??
+        ProjectBootstrap.comicCoverPathIn(target.comicDirectory);
+    await ProjectBootstrap.ensureComicRoot(
+      projectsRoot: projectsRoot,
+      name: rootName,
+      meta: StudioProjectMeta(
+        comicId: cid,
+        comicTitle: sourceComic?.title ?? '',
+        sourceKey: sourceKey ?? '',
+        eid: '0',
+        level: StudioProjectMeta.levelComic,
+        originalPath: target.comicDirectory,
+      ),
+      coverFrom: coverFrom,
+    );
+    // 章节级工程目录名 = **章节键**（源章节目录名）。它同时是阅读键、`imgtrans`
+    // 所在目录名、详情页章节列表的键 —— 三者同一个字符串，才不会点错章。
+    final chapterKey = target.chapterName.isNotEmpty
+        ? sanitizePathSegment(target.chapterName)
+        : sanitizePathSegment(
+            target.comicName.isNotEmpty ? target.comicName : target.projectName,
+          );
     final result = await ProjectBootstrap.create(
       projectsRoot: projectsRoot,
-      name: target.projectName,
+      name: chapterKey,
+      parentName: rootName,
       plan: plan,
       force: forceRescan,
     );
@@ -603,4 +648,42 @@ abstract final class StudioReaderLink {
   /// 直接返回 null ⇒ 一个已经配好工程根的环境会被报成 `no-project-root`。
   /// 两处各写一遍的规律就是"几乎一样" —— 差的那一点正好是最难查的。
   static String? _projectsRoot() => BtProjectManager.defaultProjectsRoot();
+
+  /// 这本漫画**已有的**漫画级根目录名（按 `(cid, sourceKey)` 认），没有则 null。
+  ///
+  /// 🔴 不能只认 target 给的名字：用户可能给同一本漫画的不同章节分别命名，
+  /// 那样每次都会新建一个根，磁盘上于是出现"同一本漫画两个工程根"，而界面上
+  /// 两张卡长得一模一样。
+  static String? _existingComicRootName(
+    String projectsRoot,
+    String cid,
+    String? sourceKey,
+  ) {
+    final dir = Directory(projectsRoot);
+    if (!dir.existsSync()) return null;
+    final wantedKey = sourceKey ?? '';
+    try {
+      for (final entity in dir.listSync(followLinks: false)) {
+        if (entity is! Directory) continue;
+        final normalized = entity.path.replaceAll('\\', '/');
+        final meta = StudioProjectMeta.readFromProjectDir(normalized);
+        if (meta == null || !meta.isComicLevel) continue;
+        if (meta.comicId != cid) continue;
+        if (meta.sourceKey != wantedKey) continue;
+        final slash = normalized.lastIndexOf('/');
+        return slash < 0 ? normalized : normalized.substring(slash + 1);
+      }
+    } catch (e, s) {
+      Log.warning('Studio Reader', 'scan comic roots failed: $e / $s');
+    }
+    return null;
+  }
+
+  /// 素材漫画**当前**封面文件路径（用户在详情页换过封面也跟得上）。
+  static String? _coverPathOf(LocalComic? comic) {
+    if (comic == null) return null;
+    if (comic.cover.trim().isEmpty) return null;
+    final file = comic.coverFile;
+    return file.existsSync() ? file.path : null;
+  }
 }
