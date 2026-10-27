@@ -23,7 +23,21 @@ class Baozi extends ComicSource {
   // URL 依次 0_<ep>.html / 0_<ep>_2.html …，每页约 50 张且相邻页有重叠）。
   // 旧实现只取第一页 ⇒ 每章恒定 50 张（用户复测："被限制成 50 页"）。
   // loadEp 已改为逐页抓取 + 按图片 URL 去重保序。
-  version = "1.2.4";
+  //
+  // 🔴 2026-10-27 (Mangrove P48) 包子源"最新章只有 App 能看"修复:
+  //   实证(灭门家族重生者 第152章): 镜像站对刚更新的最新章内容同步残缺——
+  //   章页 200 但只塞 1 张图、且引用了错误 slug(meishaonianbangjiashijian
+  //   -aojianyixi2)的资源, 该资源在镜像 CDN(s2.bzcdn.net)上根本不存在(404
+  //   NoSuchKey); 完整正确的图只在官方 app 域(appcn.baozimh.com, 用 s2/s
+  //   .baozicdn.com)有 91 张。源站未升级防护(无新 CF 挑战), 纯属镜像同步
+  //   滞后 + 资源主机不匹配。修复三处:
+  //   ① 图床候选补 s2.baozicdn.com / s.baozicdn.com(官方域真实图床);
+  //   ② onImageLoad 改为**链式穷举**所有图床(引擎每轮重读 configs
+  //      .onLoadFailed, 故每个候选自带下一个 onLoadFailed, distinct 闭包避免
+  //      free 后复用同一 JSInvokable);
+  //   ③ collectPages 首图识别"残缺/串错书": 首图数极少(<5) 且 所有首图都不含
+  //      本书 slug(comicId) ⇒ 抛 DomainBlock 触发回落官方 app 域。
+  version = "1.2.5";
 
   minAppVersion = "1.0.0";
 
@@ -59,6 +73,8 @@ class Baozi extends ComicSource {
         { value: "as-rsa1-usla.baozicdn.com" },
         { value: "as.baozimh.com" },
         { value: "s1.baozicdn.com" },
+        { value: "s2.baozicdn.com" },
+        { value: "s.baozicdn.com" },
         { value: "", text: "默认" },
       ],
       default: "",
@@ -252,15 +268,18 @@ class Baozi extends ComicSource {
     return `${match[1]}${domain}${this.imageQuality}${match[4]}`;
   }
 
-  // 图床加载失败时的备用地址: 换另一个 CDN, 路径保持不变
-  _altCdnUrlFor(url) {
-    if (!this.autoFailover || !url || !/^https?:\/\//i.test(url)) return null;
+  // 图床候选(排除当前域)的全部替换, 按优先级排列, 路径保持不变。
+  // 用于 onImageLoad 链式穷举: 引擎每轮都会重读 configs.onLoadFailed
+  // (images.dart:294), 故每个 onLoadFailed 返回"下一个候选 + 自带下一个
+  // onLoadFailed"; 且每个链接都是独立闭包(引擎会 free 上一个, 不可复用引用)。
+  _cdnAlternativesFor(url) {
+    if (!this.autoFailover || !url || !/^https?:\/\//i.test(url)) return [];
     const match = url.match(/^(https?:\/\/)([^\/:]+)(:\d+)?(\/.*)$/i);
-    if (!match) return null;
+    if (!match) return [];
     const current = match[2];
-    const alt = this.cdnCandidates.find((h) => h !== current);
-    if (!alt) return null;
-    return `${match[1]}${alt}${match[3] || ""}${match[4]}`;
+    return this.cdnCandidates
+      .filter((h) => h !== current)
+      .map((h) => `${match[1]}${h}${match[3] || ""}${match[4]}`);
   }
 
 
@@ -771,6 +790,21 @@ class Baozi extends ComicSource {
             if (images.length === 0) {
               throw new Error("DomainBlock: empty chapter images");
             }
+            // 🔴 2026-10-27 (Mangrove P48) 镜像"200 但残缺/串错书"识别:
+            //   最新章镜像未同步时, 章页只给极少量图且引用了**非本书 slug**
+            //   的资源(实证 152 章引用 meishaonianbangjiashijian-aojianyixi2
+            //   这个错 slug, 其在镜像 CDN 上根本不存在 ⇒ 404)。完整正确的图
+            //   只在官方 app 域(appcn.baozimh.com, 用 s2/s.baozicdn.com)。
+            //   主信号: 所有首图都不含本书 slug(comicId) ⇒ 串错书;
+            //   仅当同时满足"首图极少(<5)"才判残缺 —— 正常章图多(≥50)且 slug
+            //   正确, 两者互斥, 不会同时成立, 故不会误伤正常章。
+            const slugOk = images.some((u) => u.indexOf(comicId) >= 0);
+            if (!slugOk && images.length < 5) {
+              throw new Error(
+                "DomainBlock: mirror chapter images reference a different comic " +
+                  "(slug mismatch, likely an unsynced latest chapter)"
+              );
+            }
           } else if (added === 0) {
             // 没有分页标记的站点形态下, 靠"本页没有新图"判断到底
             break;
@@ -810,22 +844,33 @@ class Baozi extends ComicSource {
     },
 
     // 章节图片加载配置: 携带站点 Referer 防盗链;
-    // 当前图床失败时自动换备用 CDN 重试一次(路径不变)
+    // 当前图床失败时**链式穷举**所有候选 CDN 重试(路径不变)——
+    // 引擎每轮重读 configs.onLoadFailed, 所以每个 onLoadFailed 返回
+    // "下一个候选 URL + 自带下一个 onLoadFailed"。每个链接闭包互相独立,
+    // 避免引擎 free 上一个后复用同一 JSInvokable 导致 use-after-free。
     onImageLoad: (url, comicId, epId) => {
       const referer = `${this.baseUrl}/`;
       const buildHeaders = () => ({
         Referer: referer,
         "User-Agent": this.constructor.browserUA,
       });
-      const config = { headers: buildHeaders() };
-      const altUrl = this._altCdnUrlFor(url);
-      if (altUrl) {
-        config.onLoadFailed = () => ({
-          url: altUrl,
-          headers: buildHeaders(),
-        });
+      const alts = this._cdnAlternativesFor(url);
+      if (alts.length === 0) {
+        return { headers: buildHeaders() };
       }
-      return config;
+      // link(k): 第 k 个候选也失败时, 返回第 k+1 个候选并挂上 link(k+1)。
+      // 每个 link 都是新闭包, 互不相同。
+      const link = (k) => () => {
+        if (k >= alts.length) return null;
+        const next = { url: alts[k], headers: buildHeaders() };
+        if (k + 1 < alts.length) next.onLoadFailed = link(k + 1);
+        return next;
+      };
+      return {
+        headers: buildHeaders(),
+        retryLimit: alts.length + 1,
+        onLoadFailed: link(0),
+      };
     },
   };
 }
