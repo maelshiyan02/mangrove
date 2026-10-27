@@ -73,6 +73,14 @@ def main():
     parser.add_argument("--lang", default="en", help="这些章节的语言标签")
     parser.add_argument("--group", default="", help="翻译组名")
     parser.add_argument("--site", default="", help="来源站点标签")
+    parser.add_argument(
+        "--comic-id",
+        help="域库 comic_id（remote:站点:id）；给了才会顺带写章节展示标签",
+    )
+    parser.add_argument(
+        "--label",
+        help='章节格子小字，如 "英文 · Asura Scans · comix.to"；默认按 lang/group/site 拼',
+    )
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
 
@@ -156,7 +164,71 @@ def main():
     con.commit()
     con.close()
     print("[完成] 已并入 local.db")
+
+    if args.comic_id:
+        _write_chapter_labels(args, [key for key, _ in added_chapters] or [
+            str(n - 1) for n in range(args.start, args.end + 1)
+        ])
     return 0
+
+
+def _write_chapter_labels(args, keys):
+    """给补进来的章节写展示标签（`chapter_labels`）。
+
+    扁平章节的 key 只是个数字，组名/站点只活在目录名里，而扁平 map 没有
+    scanlationGroup —— `chapterDirectoryName` 反算不出组名。想让格子小字
+    显示"谁翻的、从哪来的"，只能由并库这一步直接写进去。
+    """
+    domain_db = os.path.join(DATA_DIR, "data", "mangrove.db")
+    if not os.path.exists(domain_db):
+        print("[警告] 找不到域库，跳过标签")
+        return
+    label = (args.label or "").strip()
+    if not label:
+        language = {
+            "en": "英文",
+            "zh-Hans": "简中",
+            "zh-Hant": "繁中",
+            "ja": "日文",
+            "ko": "韩文",
+        }.get(args.lang, args.lang)
+        parts = [language]
+        if args.group:
+            parts.append(args.group)
+        if args.site:
+            parts.append(args.site)
+        label = " · ".join(parts)
+
+    con = sqlite3.connect(domain_db)
+    row = con.execute(
+        "select value_json from comic_field_overrides "
+        "where comic_id = ? and field_key = 'chapter_labels'",
+        (args.comic_id,),
+    ).fetchone()
+    labels = {}
+    if row and row[0]:
+        try:
+            labels = json.loads(row[0])
+        except (TypeError, ValueError):
+            labels = {}
+    changed = 0
+    for key in keys:
+        if labels.get(key) != label:
+            labels[key] = label
+            changed += 1
+    con.execute(
+        """
+        insert into comic_field_overrides(comic_id, field_key, value_json, updated_at)
+        values(?, 'chapter_labels', ?, ?)
+        on conflict(comic_id, field_key) do update set
+          value_json = excluded.value_json,
+          updated_at = excluded.updated_at
+        """,
+        (args.comic_id, json.dumps(labels, ensure_ascii=False), int(time.time() * 1000)),
+    )
+    con.commit()
+    con.close()
+    print(f"[标签] {changed} 条 → {label}")
 
 
 if __name__ == "__main__":

@@ -104,6 +104,15 @@ class ComicOverrideStore {
   /// 这本漫画自己的记录。读取顺序 **记录表 > 目录名**。
   static const fieldChapterLanguages = 'chapter_languages';
 
+  /// 章节级**展示标签**：`{ 源章节 id: "英文 · Asura Scans · comix.to" }`。
+  ///
+  /// 为什么还要这个：扁平章节的 key 只是一个数字（`"152"`），组名和站点
+  /// 只存在于**目录名**里，而目录名要靠 `chapterDirectoryName` 反算 ——
+  /// 扁平 map 没有 scanlationGroup，算出来还是光秃秃的数字。跨源补进来的
+  /// 那几话就永远显示不出"谁翻的、从哪来的"。
+  /// 所以给一个人工/脚本可写的展示标签，优先级最高。
+  static const fieldChapterLabels = 'chapter_labels';
+
   final Map<String, Map<String, Object?>> _cache = {};
 
   /// 读一本漫画的全部覆盖值（无覆盖返回空 Map，绝不返回 null）。
@@ -249,6 +258,42 @@ class ComicOverrideStore {
   String? chapterLanguageOf(String comicId, String chapterKey) {
     final text = chapterLanguagesOf(comicId)[chapterKey]?.trim() ?? '';
     return text.isEmpty ? null : text;
+  }
+
+  /// 这本漫画声明的「章节 id → 展示标签」映射；没标过返回空 Map。
+  Map<String, String> chapterLabelsOf(String comicId) {
+    final raw = valueOf(comicId, fieldChapterLabels);
+    if (raw is Map) {
+      final result = <String, String>{};
+      raw.forEach((key, value) {
+        if (key == null || value == null) return;
+        final text = value.toString().trim();
+        if (text.isEmpty) return;
+        result[key.toString()] = text;
+      });
+      return result;
+    }
+    return const {};
+  }
+
+  /// 单个章节的展示标签（`英文 · Asura Scans · comix.to`）；没标过返回 null。
+  String? chapterLabelOf(String comicId, String chapterKey) {
+    final text = chapterLabelsOf(comicId)[chapterKey]?.trim() ?? '';
+    return text.isEmpty ? null : text;
+  }
+
+  /// 给单个章节写展示标签；[label] 传空串等价于清除。
+  void setChapterLabel(String comicId, String chapterKey, String? label) {
+    final map = Map<String, String>.from(chapterLabelsOf(comicId));
+    final text = label?.trim() ?? '';
+    if (text.isEmpty) {
+      if (!map.containsKey(chapterKey)) return;
+      map.remove(chapterKey);
+    } else {
+      if (map[chapterKey] == text) return;
+      map[chapterKey] = text;
+    }
+    setField(comicId, fieldChapterLabels, map.isEmpty ? null : map);
   }
 
   /// 给单个章节标语言；[language] 传空串等价于清除标注。

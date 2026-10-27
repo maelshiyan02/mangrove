@@ -421,6 +421,17 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
   /// [chapters] 而不是 [_displayChapters] 算判别集合——一旦按组筛选，
   /// _displayChapters 里只剩一个组，就再也看不出"这号有两个组"了。
   String? _chapterGroupLabel(int i, String key) {
+    // 人工/脚本写死的展示标签优先级最高（`英文 · Asura Scans · comix.to`）。
+    //
+    // 为什么需要它：扁平章节的 key 只是一个数字（`"152"`），组名和站点只
+    // 存在于目录名里，而扁平 map 没有 scanlationGroup，`chapterDirectoryName`
+    // 反算出来还是光秃秃的数字 —— 跨源补进来的话就永远显示不出"谁翻的、
+    // 从哪来的"。目录名靠不住时，就让记录表直接说。
+    final explicit = ComicOverrideStore.instance.chapterLabelOf(
+      _overrideComicId,
+      key,
+    );
+    if (explicit != null) return explicit;
     // P49：语种是分类第一维，先出「简中」再出组名。
     // `[zh-Hans] 120 [Rokari Comics] [comix.to]` → `简中 · Rokari Comics`
     //
