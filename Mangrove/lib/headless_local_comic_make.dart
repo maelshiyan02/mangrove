@@ -35,6 +35,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/comic_collection_store.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/local.dart';
@@ -166,6 +167,17 @@ Future<void> runLocalComicMake(
       }
     }
     target ??= ComicCollectionStore.create(name: collectionName);
+    // 先清掉**同名但 id 已变**的旧成员：重新登记一本漫画会拿到新的 local id，
+    // 而合集里的成员仍指着旧 id ⇒ 合集里会躺着两本一样的书。
+    for (final old in List<CollectionMember>.from(target.members)) {
+      if (old.cachedTitle == title && old.comicId != comic.id) {
+        ComicCollectionStore.removeMember(
+          target.id,
+          old.sourceKey,
+          old.comicId,
+        );
+      }
+    }
     final member = CollectionMember(
       sourceKey: comic.sourceKey,
       comicId: comic.id,
@@ -181,6 +193,12 @@ Future<void> runLocalComicMake(
     );
     collectionId = target.id;
   }
+
+  // 🔴 合集写盘走 `appdata.saveData()`（**没有 await** 的 fire-and-forget），
+  // 而 headless 进程马上就退 ⇒ 写还没落盘进程就没了 ⇒ "命令报告成功、磁盘上
+  // 什么都没有"。这里显式等它落完。
+  await appdata.saveData();
+  await appdata.flushImplicitData();
 
   final report = {
     'command': 'local-comic-make',

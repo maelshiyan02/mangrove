@@ -19,6 +19,7 @@ import 'package:mangrove/foundation/comic_collection_store.dart';
 import 'package:mangrove/foundation/comic_state_repository.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/comic_type.dart';
+import 'package:mangrove/foundation/source_platform.dart';
 import 'package:mangrove/foundation/consts.dart';
 import 'package:mangrove/foundation/domain_database.dart';
 import 'package:mangrove/foundation/favorites.dart';

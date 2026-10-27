@@ -36,6 +36,7 @@ import os
 import random
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -208,14 +209,42 @@ def ext_of(url):
     return "." + (m.group(1).lower() if m else "jpg")
 
 
+# 🔴 图片下载必须**复用连接**：`urllib.request.urlopen` 每次都新建 TCP + TLS
+# 握手，而 CDN 在境外 ⇒ 单张实测 5.6 秒（8 并发时每张仍要 1.5–3 秒）。
+# 握手占了绝大部分时间，吞吐被压到 0.15 张/秒 —— 一本 69 话要跑 5 小时。
+# 换成带连接池的 requests.Session（keep-alive）后，握手只发生在每个 worker 的
+# 第一张图上。
+_session = None
+_session_lock = threading.Lock()
+
+
+def _get_session():
+    global _session
+    with _session_lock:
+        if _session is None:
+            import requests
+
+            session = requests.Session()
+            session.headers.update(
+                {
+                    "User-Agent": UA,
+                    "Accept": "image/*,*/*",
+                }
+            )
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=16, pool_maxsize=16, max_retries=0
+            )
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            _session = session
+    return _session
+
+
 def download_image(url, target, referer):
-    req = urllib.request.Request(
-        url, headers={"User-Agent": UA, "Referer": referer, "Accept": "image/*,*/*"}
-    )
-    with urllib.request.urlopen(req, timeout=90) as resp:
-        data = resp.read()
-    if not data:
-        raise RuntimeError("空响应")
+    resp = _get_session().get(url, headers={"Referer": referer}, timeout=90)
+    data = resp.content
+    if resp.status_code != 200 or not data:
+        raise RuntimeError("HTTP %s / %d bytes" % (resp.status_code, len(data)))
     tmp = target + ".dl"
     with open(tmp, "wb") as fh:
         fh.write(data)

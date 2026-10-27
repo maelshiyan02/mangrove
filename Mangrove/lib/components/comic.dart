@@ -101,6 +101,18 @@ ImageProvider? findImageProvider(Comic comic) {
       }
       return null;
     }
+    // 🔴 本地成员的封面是**相对路径**（`cover\[KR][cover]season(3).jpg`），
+    // 不是 URL —— 走网络栈会被 Dio 当成 URI 解析，报
+    // "No host specified in URI cover/%5BKR%5D..."，合集卡片于是**空白**。
+    // 所以本地成员改走本地 provider（按 local id 找回本地漫画）。
+    final owner = collection?.coverOwner;
+    if (owner != null &&
+        owner.sourceKey == SourcePlatformResolver.localCanonicalKey) {
+      final local = LocalManager().find(owner.comicId, ComicType.local);
+      if (local != null) {
+        return LocalComicImageProvider(local);
+      }
+    }
     // The cover belongs to a member, so image loading has to go through the
     // collection's source to pick up that member's auth headers.
     return CachedImageProvider(
