@@ -468,6 +468,11 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
       if (group != null && group.isNotEmpty) {
         return langPrefix.isEmpty ? group : '$langPrefix · $group';
       }
+      // 🔴 P52：版本化章节的 key 是源站 chapterKey（拷贝漫画等常为 UUID），
+      // 不是磁盘目录名；拿它当目录名解析只会产出乱码
+      // （如 "39244565-0629-…" → "-0629-11f1-b4dc-fa163e02432f"）。
+      // 没有翻译组就直接不显示小字，绝不回退到 parseChapterDirectoryName(key)。
+      return langPrefix.isEmpty ? null : langPrefix;
     }
     final ref = parseChapterDirectoryName(key);
     if (ref == null) return langPrefix.isEmpty ? null : langPrefix;
