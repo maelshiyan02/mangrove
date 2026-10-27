@@ -1264,7 +1264,11 @@ Future<void> runPageReconcile(List<String> args, int commandIndex) async {
         'maxIndex': maxIndex,
         'gaps': pageIndexGaps(present),
         'registeredBefore': comic.downloadedChapters.any(
-          (k) => chapterDirectoryName(comic.chapters, k) == dirName,
+          (k) => chapterDirectoryMatchScore(
+                dirName,
+                chapterDirectoryName(comic.chapters, k),
+              ) >
+              0,
         ),
       });
     }
@@ -1287,7 +1291,11 @@ Future<void> runPageReconcile(List<String> args, int commandIndex) async {
   ];
   for (final row in rows) {
     row['registeredAfter'] = registeredAfter.any(
-      (k) => chapterDirectoryName(refreshed?.chapters, k) == row['chapter'],
+      (k) => chapterDirectoryMatchScore(
+            row['chapter'] as String,
+            chapterDirectoryName(refreshed?.chapters, k),
+          ) >
+          0,
     );
   }
   final table = MissingPages.peek(comic.baseDir);

@@ -421,16 +421,26 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
   /// [chapters] 而不是 [_displayChapters] 算判别集合——一旦按组筛选，
   /// _displayChapters 里只剩一个组，就再也看不出"这号有两个组"了。
   String? _chapterGroupLabel(int i, String key) {
+    // P49：语种是分类第一维，先出「简中」再出组名。
+    // `[zh-Hans] 120 [Rokari Comics] [comix.to]` → `简中 · Rokari Comics`
+    final lang = chapterLanguageLabel(
+      parseChapterDirectoryName(key)?.language,
+    );
+    final langPrefix = lang.isEmpty ? '' : lang;
     if (_displayChapters.isVersioned) {
       final group = _displayChapters.scanlationGroupAt(i);
-      if (group != null) return group;
+      if (group != null && group.isNotEmpty) {
+        return langPrefix.isEmpty ? group : '$langPrefix · $group';
+      }
     }
     final ref = parseChapterDirectoryName(key);
-    if (ref == null || ref.groups.isEmpty) return null;
+    if (ref == null) return langPrefix.isEmpty ? null : langPrefix;
     // P17：扁平本地漫画的组名**一律显示**。旧实现只在一话多组时才给，导致
     // 单组的那几本（Lua Comic / Violet Scans / HiveToons）整页看不到"谁翻的"。
     // 组名是分类标识，只占 10px 一行，比"读者猜是哪来的"划算。
-    return ref.groups.join(' ');
+    if (ref.groups.isEmpty) return langPrefix.isEmpty ? null : langPrefix;
+    final group = ref.groups.join(' ');
+    return langPrefix.isEmpty ? group : '$langPrefix · $group';
   }
 
   void _computeVisible() {
