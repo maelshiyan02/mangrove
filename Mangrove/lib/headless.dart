@@ -32,6 +32,12 @@ import 'package:mangrove/foundation/translation_project/result_renderer.dart';
 import 'package:mangrove/foundation/image_translation/page_renderer.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/chapter_directory.dart';
+import 'package:mangrove/foundation/chapter_duplicates.dart';
+import 'package:mangrove/foundation/chapter_title_parser.dart';
+import 'package:mangrove/foundation/comic_collection_store.dart';
+import 'package:mangrove/foundation/comic_source/collection_source.dart';
+import 'package:mangrove/foundation/comic_type.dart';
+import 'package:mangrove/foundation/comic_override_store.dart';
 import 'package:mangrove/foundation/leave_guard.dart';
 import 'package:mangrove/foundation/missing_pages.dart';
 import 'package:mangrove/foundation/path_roots.dart';
@@ -3132,6 +3138,306 @@ Future<void> runBlockOpsCheck(List<String> args, int commandIndex) async {
   exit(passed ? 0 : 1);
 }
 
+/// `mangrove.exe --headless chapter-order [--comic <id>] [--json out.json]`
+///
+/// 把**章节详情页真正会渲染的那一列**算出来并断言它是有序的（P51，2026-10-27）。
+///
+/// 为什么需要一个专门的命令：用户在详情页看到的顺序 = `ChapterOrderPrefs`
+/// 给出的下标列 + `chapterNumberLabel` 给的文案，两者中间还夹着本地记录表。
+/// 这条链每一环都可能单独出错（P49 就是把 key 加了语言前缀，排序退回字典序，
+/// 第 1 话后面直接跟第 100 话），而任何一步出错都不会抛异常 —— 屏幕上只是
+/// "看起来怪怪的"。所以必须把最终文案列出来，逐条比话号是否单调不减。
+///
+/// 判据（任一不满足即 FAIL）：
+/// 1. 章节 key 里不许有 `[zh-Hans]` 这类语言前缀（目录名只归源站所有）；
+/// 2. 渲染顺序的话号必须**单调不减**（`第1话, 第2话, …, 第10话, 第11话`，
+///    不是 `第0话, 第1话, 第10话, 第100话`）；
+/// 3. 章节 key 不许在记录表之外"自带"语言/组名却又不被解析 —— 允许留空，
+///    但不能出现解析失败的可疑形态（UUID 开头被当成话号）。
+Future<void> runChapterOrderCheck(List<String> args, int commandIndex) async {
+  final jsonIndex = args.indexOf('--json');
+  final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
+      ? args[jsonIndex + 1]
+      : '${Directory.current.path}/chapter_order.json';
+  final comicIndex = args.indexOf('--comic');
+  final onlyId = comicIndex != -1 && comicIndex + 1 < args.length
+      ? args[comicIndex + 1]
+      : null;
+
+  if (!LocalManager().isInitialized) {
+    cliPrint({'status': 'error', 'message': 'Local library is not initialized.'});
+    exit(1);
+  }
+
+  final langPrefix = RegExp(r'^\[[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?\]\s+');
+  final entries = <Map<String, Object?>>[];
+  var failures = 0;
+
+  for (final comic in LocalManager().getComics(LocalSortType.defaultSort)) {
+    if (onlyId != null && comic.id != onlyId) continue;
+    final chapters = comic.chapters;
+    if (chapters == null) continue;
+    final ids = chapters.ids.toList();
+    final ordered = ChapterOrderPrefs.orderedIndices(
+      chapters,
+      comic.id,
+      comic.sourceKey,
+    );
+    final labels = <String>[];
+    final numbers = <double?>[];
+    final prefixed = <String>[];
+    for (final i in ordered) {
+      final key = ids[i];
+      final value = chapters[key] ?? '';
+      final label = chapterNumberLabel(value);
+      labels.add(label);
+      numbers.add(chapterNumberValueOf(label) ?? chapterNumberValueOf(key));
+      if (langPrefix.hasMatch(key)) prefixed.add(key);
+    }
+    // 话号单调不减（只比较读得出来的那些；等价话号允许并列）
+    final violations = <String>[];
+    double? prev;
+    for (var i = 0; i < numbers.length; i++) {
+      final n = numbers[i];
+      if (n == null) continue;
+      if (prev != null && n < prev) {
+        violations.add(
+          'pos ${i + 1}: ${labels[i]} 出现在 ${prev.toStringAsFixed(0)} 之后',
+        );
+      }
+      prev = n;
+    }
+    final overrideId = ComicOverrideStore.comicIdOf(
+      comic.sourceKey,
+      comic.id,
+    );
+    final langs = ComicOverrideStore.instance.chapterLanguagesOf(overrideId);
+    final ok = violations.isEmpty && prefixed.isEmpty;
+    if (!ok) failures++;
+    entries.add({
+      'comicId': comic.id,
+      'title': comic.title,
+      'source': comic.sourceKey,
+      'chapters': ids.length,
+      'isGrouped': chapters.isGrouped,
+      'isVersioned': chapters.isVersioned,
+      'idsHead': ids.take(4).toList(),
+      'orderedHead': ordered.take(8).toList(),
+      'overrideComicId': overrideId,
+      'taggedLanguages': langs.length,
+      'languageValues': langs.values.toSet().toList(),
+      'prefixedKeys': prefixed.length,
+      'first': labels.take(4).toList(),
+      'last': labels.skip(labels.length > 4 ? labels.length - 4 : 0).toList(),
+      'allLabels': labels,
+      'orderViolations': violations.take(6).toList(),
+      'passed': ok,
+    });
+  }
+
+  final collections = [
+    for (final c in ComicCollectionStore.all())
+      {
+        'id': c.id,
+        'name': c.displayName,
+        'displayMode': c.displayMode.name,
+        'members': [
+          for (final m in c.members)
+            {'sourceKey': m.sourceKey, 'comicId': m.comicId, 'label': m.label},
+        ],
+      },
+  ];
+
+  final report = {
+    'version': 1,
+    'command': 'chapter-order',
+    'comics': entries,
+    'collections': collections,
+    'failures': failures,
+  };
+  final output = File(outPath);
+  if (!output.parent.existsSync()) {
+    await output.parent.create(recursive: true);
+  }
+  await output.writeAsString(
+    const JsonEncoder.withIndent('  ').convert(report),
+    encoding: utf8,
+  );
+
+  for (final e in entries) {
+    cliPrint({'status': 'running', 'message': 'Comic', 'data': e});
+  }
+  for (final c in collections) {
+    cliPrint({'status': 'running', 'message': 'Collection', 'data': c});
+  }
+  if (failures > 0) {
+    cliPrint({
+      'status': 'error',
+      'message': 'Chapter order check FAILED: $failures comic(s) out of order '
+          'or carrying a language prefix in the chapter key.',
+      'data': {'report': output.path},
+    });
+    exit(1);
+  }
+  cliPrint({
+    'status': 'success',
+    'message': 'Chapter order check passed: ${entries.length} comic(s), '
+        '${collections.length} collection(s).',
+    'data': {'report': output.path},
+  });
+  exit(0);
+}
+
+/// `mangrove.exe --headless collection-info [--id <collectionId>] [--json out.json]`
+///
+/// 复现「合集详情页」的加载链路 —— 这是 GUI 看封面标题正常、章节区却一片空白
+/// 时唯一能在无窗口环境下取证的入口。它检查的是**用户真正看到的东西**：
+///
+/// 1. 每个成员的本地记录是否存在（本地优先，见 `_loadMember`）；
+/// 2. `loadCollectionInfo` 返回的 `chapters` 是不是**分组**（tabs 模式的前提）；
+/// 3. 每个 tab 的章节数、首章标签 —— 空 tab 等于用户切过去看到一片白；
+/// 4. `[Unavailable]` 兜底条目的数量（成员加载失败会留这个痕迹）。
+Future<void> runCollectionInfoCheck(List<String> args, int commandIndex) async {
+  final jsonIndex = args.indexOf('--json');
+  final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
+      ? args[jsonIndex + 1]
+      : '${Directory.current.path}/collection_info.json';
+  final idIndex = args.indexOf('--id');
+  final onlyId = idIndex != -1 && idIndex + 1 < args.length
+      ? args[idIndex + 1]
+      : null;
+
+  final targets = [
+    for (final c in ComicCollectionStore.all())
+      if (onlyId == null || c.id == onlyId) c,
+  ];
+  if (targets.isEmpty) {
+    cliPrint({
+      'status': 'error',
+      'message': onlyId == null
+          ? 'No collection exists.'
+          : 'No collection with id "$onlyId".',
+    });
+    exit(1);
+  }
+
+  final entries = <Map<String, Object?>>[];
+  var failures = 0;
+
+  for (final c in targets) {
+    final problems = <String>[];
+
+    // ① 成员的本地记录：合集该看"我们手上有的那份"，不是源站此刻连不连得上。
+    final memberProbe = <Map<String, Object?>>[];
+    for (final m in c.members) {
+      final type = ComicType.fromKey(m.sourceKey);
+      final local = LocalManager().find(m.comicId, type);
+      memberProbe.add({
+        'sourceKey': m.sourceKey,
+        'comicId': m.comicId,
+        'label': m.label,
+        'localRecord': local != null,
+        'localChapters': local?.chapters?.ids.length,
+        'localIsGrouped': local?.chapters?.isGrouped,
+      });
+      if (local == null) {
+        problems.add('成员 ${m.label}（${m.sourceKey}）在本地库里没有记录，'
+            '只能联网加载 —— 源挂了它整个 tab 就会变 Unavailable');
+      }
+    }
+
+    // ② 真正走一遍详情加载。
+    final res = await loadCollectionInfo(c.id);
+    final details = res.dataOrNull;
+    final chapters = details?.chapters;
+    final groups = <Map<String, Object?>>[];
+    var unavailable = 0;
+    if (chapters == null) {
+      problems.add('loadCollectionInfo 没有返回任何章节（chapters == null）');
+    } else if (c.displayMode == CollectionDisplayMode.tabs) {
+      if (!chapters.isGrouped) {
+        problems.add('合集是 tabs 模式，但 chapters.isGrouped == false '
+            '⇒ 详情页走普通列表分支，tab 全部消失');
+      }
+      for (var i = 0; i < chapters.groupCount; i++) {
+        final group = chapters.getGroupByIndex(i);
+        final title = chapters.groupTitleAt(i + 1) ?? '';
+        final values = group.values.toList();
+        unavailable += values.where((v) => v.contains('[Unavailable]')).length;
+        groups.add({
+          'index': i,
+          'name': title,
+          'count': group.length,
+          'firstLabels': [
+            for (final v in values.take(3)) chapterNumberLabel(v),
+          ],
+        });
+        if (group.isEmpty) problems.add('第 ${i + 1} 个 tab「$title」是空的');
+      }
+      if (chapters.groupCount != c.members.length) {
+        problems.add(
+          'tab 数（${chapters.groupCount}）与成员数（${c.members.length}）对不上',
+        );
+      }
+    } else {
+      groups.add({'name': '(flat)', 'count': chapters.length});
+    }
+
+    final failed = res.error || problems.isNotEmpty;
+    if (failed) failures++;
+    entries.add({
+      'id': c.id,
+      'name': c.displayName,
+      'displayMode': c.displayMode.name,
+      'loadError': res.errorMessage,
+      'title': details?.title,
+      'cover': details?.cover,
+      'chaptersIsGrouped': chapters?.isGrouped,
+      'groupCount': chapters?.groupCount,
+      'totalChapters': chapters?.length,
+      'groups': groups,
+      'unavailableEntries': unavailable,
+      'members': memberProbe,
+      'problems': problems,
+      'passed': !failed,
+    });
+  }
+
+  final report = {
+    'version': 1,
+    'command': 'collection-info',
+    'collections': entries,
+    'failures': failures,
+  };
+  final output = File(outPath);
+  if (!output.parent.existsSync()) {
+    await output.parent.create(recursive: true);
+  }
+  await output.writeAsString(
+    const JsonEncoder.withIndent('  ').convert(report),
+    encoding: utf8,
+  );
+
+  for (final e in entries) {
+    cliPrint({'status': 'running', 'message': 'Collection', 'data': e});
+  }
+  if (failures > 0) {
+    cliPrint({
+      'status': 'error',
+      'message': 'Collection info check FAILED: $failures collection(s) '
+          'would render without usable chapters.',
+      'data': {'report': output.path},
+    });
+    exit(1);
+  }
+  cliPrint({
+    'status': 'success',
+    'message': 'Collection info check passed: ${entries.length} collection(s).',
+    'data': {'report': output.path},
+  });
+  exit(0);
+}
+
 /// `mangrove.exe --headless cache-check [--json out.json]`
 ///
 /// Reverse-verifies P10.10 ③ (cache "frozen path + startup scan before
@@ -3674,6 +3980,10 @@ Future<void> runHeadlessMode(List<String> args) async {
       await runCreateProject(args, commandIndex);
     case 'cache-check':
       await runCacheCheck(args, commandIndex);
+    case 'chapter-order':
+      await runChapterOrderCheck(args, commandIndex);
+    case 'collection-info':
+      await runCollectionInfoCheck(args, commandIndex);
     case 'pipeline-check':
       await runPipelineCheck(args, commandIndex);
     case 'script-check':

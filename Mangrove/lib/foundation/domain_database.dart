@@ -124,26 +124,33 @@ class DomainDatabase {
   }
 
   CommonDatabase _openDatabase(String dbPath) {
+    CommonDatabase? database;
     try {
-      final database = DatabaseGateway.instance.openManaged(dbPath);
-      try {
-        configure(database);
-        createSchema(database);
-        return database;
-      } catch (_) {
-        // The handle is registered by now — release it before the recovery
-        // path moves the files aside and reopens.
-        DatabaseGateway.instance.closeManaged(dbPath);
-        rethrow;
-      }
+      database = DatabaseGateway.instance.openManaged(dbPath);
+    } on StateError {
+      // 已被别的实例打开（本文件的 `_db != null` 守卫之外还有别的调用方）。
+      // 这是**逻辑错误**，不是文件损坏 —— 绝不能把正在被使用的库文件
+      // 改名搬走（`_backupDatabaseFiles` 会把活的 WAL 一起挪走，等于
+      // 让整个进程在无提示的情况下丢掉全部数据）。
+      rethrow;
     } catch (_) {
       _backupDatabaseFiles(dbPath);
     }
-
-    final recoveredDatabase = DatabaseGateway.instance.openManaged(dbPath);
-    configure(recoveredDatabase);
-    createSchema(recoveredDatabase);
-    return recoveredDatabase;
+    if (database == null) {
+      // 恢复路径：坏文件已被移到一边，新建一个空库。
+      database = DatabaseGateway.instance.openManaged(dbPath);
+    }
+    try {
+      configure(database);
+      createSchema(database);
+      return database;
+    } catch (_) {
+      // The handle is registered by now — release it before the failure
+      // propagates (otherwise the path stays occupied and every later
+      // reopen hits "already open through the gateway").
+      DatabaseGateway.instance.closeManaged(dbPath);
+      rethrow;
+    }
   }
 
   void close() {

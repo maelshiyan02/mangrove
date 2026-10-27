@@ -564,9 +564,14 @@ class ComicChapters {
   /// Compare two chapter-number strings ascending. Numeric keys sort as
   /// actual numbers (so "10" < "49"), non-numeric keys sort after numeric
   /// ones among themselves alphabetically.
+  ///
+  /// 🔴 走 [chapterNumberValueOf] 而不是裸 `double.tryParse`（P51，2026-10-27）。
+  /// 本地漫画的 key 是**目录名**（`49 [Rokari Comics] [comix.to]`），
+  /// `double.tryParse` 对它返回 null，于是整本退化成字典序：
+  /// `0, 1, 10, 100, 101, …, 11, 110`。用户 P14、P51 两次报的都是这个。
   static int _compareChapterNumbersAsc(String a, String b) {
-    final na = double.tryParse(a);
-    final nb = double.tryParse(b);
+    final na = chapterNumberValueOf(a);
+    final nb = chapterNumberValueOf(b);
     if (na != null && nb != null) {
       return na.compareTo(nb); // ascending
     }

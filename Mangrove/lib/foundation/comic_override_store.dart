@@ -1,5 +1,8 @@
 import 'dart:convert';
 
+import 'package:sqlite3/common.dart';
+
+import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/domain_database.dart';
 import 'package:mangrove/foundation/log.dart';
@@ -113,7 +116,36 @@ class ComicOverrideStore {
   /// 所以给一个人工/脚本可写的展示标签，优先级最高。
   static const fieldChapterLabels = 'chapter_labels';
 
+  /// 章节级**展示话号**：`{ 源章节 id: 153 }`。
+  ///
+  /// 为什么需要第三个章节级字段：key 是**源站的**，源站的话号未必是读者
+  /// 认知的话号。两个真实场景：
+  ///
+  /// 1. 跨源补章时两边的 key 坐标系不同（comix.to 的 key 是 `话号-1`，
+  ///    包子是 `话号-1` 但起点不同），硬并进一本就会错位；
+  /// 2. 源的 id 根本不是话号（`第一次告白` 的章节 id 是 UUID），
+  ///    只能从标题里读话号，而标题可能被源侧改写成"第12话 番外篇"。
+  ///
+  /// 有了它，**key 可以永远保持源站原样**（不改名、不改 key、不改排序依据的
+  /// 真相），显示与排序各自去记录表取自己的话号 —— 这就是"密码本"。
+  /// 读取顺序：记录表 > 目录名 > key 本身。
+  static const fieldChapterNumbers = 'chapter_numbers';
+
   final Map<String, Map<String, Object?>> _cache = {};
+
+  /// 域库句柄。
+  ///
+  /// 🔴 必须走 `App.domain`（进程内唯一被 `init` 过的实例）。
+  /// `DomainDatabase` **不是单例**：`DomainDatabase()` 会 new 一个从未
+  /// [DomainDatabase.init] 的实例，访问 `.db` 恒抛
+  /// `StateError: DomainDatabase is not initialized`。
+  /// P11 起本文件五处都写成 `DomainDatabase()`，于是覆盖表**从上线起就没
+  /// 生效过**——读永远回落成"没有覆盖"，写永远静默失败，只在 `logs.txt`
+  /// 里留一行 `Bad state`。修 P51 时才发现。
+  ///
+  /// 未初始化（极早期启动 / 后台 isolate）返回 null，调用方按"没有覆盖"处理。
+  CommonDatabase? get _dbOrNull =>
+      App.domain.isInitialized ? App.domain.db : null;
 
   /// 读一本漫画的全部覆盖值（无覆盖返回空 Map，绝不返回 null）。
   Map<String, Object?> valuesOf(String comicId) {
@@ -121,7 +153,9 @@ class ComicOverrideStore {
     final cached = _cache[comicId];
     if (cached != null) return cached;
     final loaded = _loadFromDb(comicId);
-    _cache[comicId] = loaded;
+    // 库没开时读到的是"假空"，不能进缓存——否则库就绪后这本漫画
+    // 会一直显示成"没有任何覆盖"，直到进程重启。
+    if (_dbOrNull != null) _cache[comicId] = loaded;
     return loaded;
   }
 
@@ -136,6 +170,10 @@ class ComicOverrideStore {
   /// 写一个覆盖值；[value] 传 null 等价于清除该覆盖。
   void setField(String comicId, String fieldKey, Object? value) {
     if (comicId.isEmpty || fieldKey.isEmpty) return;
+    if (_dbOrNull == null) {
+      Log.error('ComicOverride', 'setField $comicId/$fieldKey skipped: db not ready');
+      return;
+    }
     final values = Map<String, Object?>.from(valuesOf(comicId));
     if (value == null) {
       values.remove(fieldKey);
@@ -150,13 +188,18 @@ class ComicOverrideStore {
   /// 批量写入，一次事务（用于「保存」按钮一次提交多个字段）。
   void setFields(String comicId, Map<String, Object?> fields) {
     if (comicId.isEmpty || fields.isEmpty) return;
+    final db = _dbOrNull;
+    if (db == null) {
+      // 库还没开：绝不能更新缓存假装写成功（那会让下一次读到的正是没落库的值）。
+      Log.error('ComicOverride', 'save $comicId skipped: domain db not ready');
+      return;
+    }
     final values = Map<String, Object?>.from(valuesOf(comicId));
     values.removeWhere((key, _) => fields.containsKey(key));
     fields.forEach((key, value) {
       if (value != null) values[key] = value;
     });
     try {
-      final db = DomainDatabase().db;
       db.execute('BEGIN;');
       try {
         fields.forEach((key, value) {
@@ -195,7 +238,7 @@ class ComicOverrideStore {
   void dropComic(String comicId) {
     if (comicId.isEmpty) return;
     try {
-      DomainDatabase().db.execute(
+      _dbOrNull?.execute(
         'DELETE FROM $tableName WHERE comic_id = ?;',
         [comicId],
       );
@@ -296,6 +339,41 @@ class ComicOverrideStore {
     setField(comicId, fieldChapterLabels, map.isEmpty ? null : map);
   }
 
+  /// 这本漫画声明的「章节 id → 展示话号」映射；没标过返回空 Map。
+  Map<String, double> chapterNumbersOf(String comicId) {
+    final raw = valueOf(comicId, fieldChapterNumbers);
+    if (raw is Map) {
+      final result = <String, double>{};
+      raw.forEach((key, value) {
+        if (key == null || value == null) return;
+        final number = value is num
+            ? value.toDouble()
+            : double.tryParse(value.toString().trim());
+        if (number == null) return;
+        result[key.toString()] = number;
+      });
+      return result;
+    }
+    return const {};
+  }
+
+  /// 单个章节的展示话号；没标过返回 null（调用方回落到目录名/标题）。
+  double? chapterNumberOf(String comicId, String chapterKey) =>
+      chapterNumbersOf(comicId)[chapterKey];
+
+  /// 给单个章节写展示话号；[number] 传 null 等价于清除。
+  void setChapterNumber(String comicId, String chapterKey, double? number) {
+    final map = Map<String, double>.from(chapterNumbersOf(comicId));
+    if (number == null) {
+      if (!map.containsKey(chapterKey)) return;
+      map.remove(chapterKey);
+    } else {
+      if (map[chapterKey] == number) return;
+      map[chapterKey] = number;
+    }
+    setField(comicId, fieldChapterNumbers, map.isEmpty ? null : map);
+  }
+
   /// 给单个章节标语言；[language] 传空串等价于清除标注。
   void setChapterLanguage(
     String comicId,
@@ -365,8 +443,14 @@ class ComicOverrideStore {
   // ---------------------------------------------------------------------
 
   Map<String, Object?> _loadFromDb(String comicId) {
+    final db = _dbOrNull;
+    if (db == null) {
+      // 极早期启动（库还没开）。这不是"没有覆盖"的真相，但也只能先这么返回；
+      // 缓存不写，等库就绪后会重新查。
+      return const {};
+    }
     try {
-      final rows = DomainDatabase().db.select(
+      final rows = db.select(
         'SELECT field_key, value_json FROM $tableName WHERE comic_id = ?;',
         [comicId],
       );
@@ -390,8 +474,21 @@ class ComicOverrideStore {
     Object value, {
     bool inTransaction = false,
   }) {
+    final db = _dbOrNull;
+    if (db == null) {
+      Log.error(
+        'ComicOverride',
+        'write $comicId/$fieldKey skipped: db not ready',
+      );
+      // 事务里必须把失败抛出去，否则 setFields 会 COMMIT 一个什么都没写的空事务
+      // 并更新缓存 —— 那就是"显示保存成功、重启后全丢"。
+      if (inTransaction) {
+        throw StateError('DomainDatabase is not initialized');
+      }
+      return;
+    }
     try {
-      DomainDatabase().db.execute(
+      db.execute(
         'INSERT INTO $tableName (comic_id, field_key, value_json, updated_at) '
         'VALUES (?, ?, ?, ?) '
         'ON CONFLICT(comic_id, field_key) DO UPDATE SET '
@@ -406,7 +503,7 @@ class ComicOverrideStore {
 
   void _deleteRow(String comicId, String fieldKey) {
     try {
-      DomainDatabase().db.execute(
+      _dbOrNull?.execute(
         'DELETE FROM $tableName WHERE comic_id = ? AND field_key = ?;',
         [comicId, fieldKey],
       );

@@ -297,6 +297,29 @@ bool isSourceSiteTag(String text) {
   return false;
 }
 
+/// 话号 + 余下部分的**严格**切分：`120 [baozimh]` → (`120`, `[baozimh]`)。
+///
+/// 🔴 数字后面必须**不是字母/数字**（P51，2026-10-27）。
+///
+/// 松一点的 `^(\d+)` 会把 UUID 的开头几位当成话号：`003b54f5-31b5-11f1-…
+/// fa163e02432f` 会被读成「第003话」，于是整本章节列表变成
+/// 第0话 / 第01话 / 第003话 / 第065话 / 第2820话 / 第39244559话 ——
+/// 一本 63 话的书被拆成 63 个互不相干的胡话号（用户 2026-10-27 报的现象）。
+///
+/// 认的形态：
+/// - `12` / `12.5`（纯数字，可带小数）
+/// - `120 [baozimh]` / `49 [Rokari Comics] [comix.to]`（数字 + 空格 + 方括号）
+/// - `12_x` / `12 x`（数字 + 空格/下划线 + 文字）
+/// 不认：`003b54f5-…`（UUID）、`v2`、`番外`。
+({String number, String rest})? splitLeadingChapterNumber(String name) {
+  final match = RegExp(r'^(\d+(?:\.\d+)?)(?![0-9A-Za-z])[\s_]*').firstMatch(name);
+  if (match == null) return null;
+  return (
+    number: match.group(1)!,
+    rest: name.substring(match.end).trim(),
+  );
+}
+
 /// 把**目录名**翻译成章节列表里的显示文案（P13，2026-10-24）。
 ///
 /// 目录名是磁盘标识（`49 [Rokari Comics] [comix.to]`），直接当显示名太长，
@@ -307,16 +330,16 @@ bool isSourceSiteTag(String text) {
 /// - `49 [Rokari Comics] [comix.to]` → `第49话 · Rokari Comics`
 /// - `116 [comix.to]` → `第116话`（方括号里只有源站，不算翻译组）
 /// - `1` / `12.5` → `第1话` / `第12.5话`
-/// - 不以数字开头的（`默認`、`番外`）→ 原样返回，别硬套"第X话"
+/// - 不以数字开头的（`默認`、`番外`、UUID）→ 原样返回，别硬套"第X话"
 String chapterDisplayName(String directoryName) {
-  // P49：先剥掉最前面的语言段（`[zh-Hans] 120 [baozimh]` → `120 [baozimh]`），
-  // 否则"目录名不以数字开头"会被当成番外，整本显示成原名。
+  // P49：先剥掉最前面的语言段（`[zh-Hans] 120 [baozimh]` → `120 [baozimh]`）。
+  // P51 起写入侧不再生成语言段，但别的设备/历史数据里还可能有，读取侧必须兼容。
   final name = splitChapterLanguageTag(directoryName).$2;
   if (name.isEmpty) return name;
-  final match = RegExp(r'^(\d+(?:\.\d+)?)[\s_]*(.*)$').firstMatch(name);
-  if (match == null) return name;
-  final number = match.group(1)!;
-  final rest = match.group(2)!.trim();
+  final lead = splitLeadingChapterNumber(name);
+  if (lead == null) return name;
+  final number = lead.number;
+  final rest = lead.rest;
   final labels = <String>[];
   for (final bracket in RegExp(r'\[([^\]]*)\]').allMatches(rest)) {
     final text = (bracket.group(1) ?? '').trim();
@@ -342,7 +365,7 @@ String chapterDisplayName(String directoryName) {
 /// - `第49话 · Rokari Comics`（已经是显示名）→ `第49话`
 /// - `116 [comix.to]` → `第116话`
 /// - `12.5` → `第12.5话`
-/// - 非数字开头（`番外`）→ 原样返回
+/// - 非数字开头（`番外`、UUID）→ 原样返回
 String chapterNumberLabel(String keyOrTitle) {
   // P49：语言段在最前面，先剥掉再认话号。
   final name = splitChapterLanguageTag(keyOrTitle).$2;
@@ -350,9 +373,9 @@ String chapterNumberLabel(String keyOrTitle) {
   // 已经是显示名（域库里存的历史数据），剥掉后缀即可，别再包一层。
   final already = RegExp(r'^第\s*(\d+(?:\.\d+)?)\s*话').firstMatch(name);
   if (already != null) return '第${already.group(1)}话';
-  final match = RegExp(r'^(\d+(?:\.\d+)?)[\s_]*(.*)$').firstMatch(name);
-  if (match == null) return name;
-  return '第${match.group(1)}话';
+  final lead = splitLeadingChapterNumber(name);
+  if (lead == null) return name;
+  return '第${lead.number}话';
 }
 
 /// 从封面文件名里读语言标识：`[KR][cover]season(1).jpg` → `KR`。
@@ -488,7 +511,11 @@ class ChapterDirectoryRef {
   String get groupKey => groups.map((e) => e.toLowerCase()).join('|');
 }
 
-final _leadingNumberPattern = RegExp(r'^\s*(\d+(?:\.\d+)?)\s*(.*)$');
+// 🔴 数字后面必须不是字母/数字（P51）。否则 UUID 开头的 `003b54f5-31b5-…`
+// 会被解析成「第003话」，一本 63 话的书会炸成 63 个胡话号。
+final _leadingNumberPattern = RegExp(
+  r'^\s*(\d+(?:\.\d+)?)(?![0-9A-Za-z])\s*(.*)$',
+);
 final _bracketPattern = RegExp(r'\[([^\]]*)\]');
 final _variantSuffixPattern = RegExp(r'\((\d+)\)\s*$');
 
@@ -615,21 +642,31 @@ String? resolveChapterDirectoryName(
 /// 四份，下载侧改名而读取侧没跟上就会"下完读不到"。
 ///
 /// 规则：
-/// - 传了 [languageTag]（P49 新规范）→ 最前面先加语言段 `[zh-Hans] `。
-///   语言是**分类的第一维**：同一话的简/繁/英/日版是不同内容，必须分开。
-///   未登记语种（null）时不写语言段，输出与旧版逐字节相同。
 /// - 版本化章节且该版本带组名 → `<话号> [组名]`，例如 `6 [Asura Scans]`。
 ///   这样同一话的多个翻译组各自成目录，不再互相覆盖。
 /// - 传了 [siteTag]（D1 新规范）→ 末尾再补一个 `[站点]`，例如
 ///   `6 [Asura Scans] [asuracomic.net]`。**基础命名三件套 = 话号 + 翻译组 +
 ///   来源站点**，三者齐了目录名本身就能自证身份，跨设备拷来也能认出来。
-///   加上 [languageTag] 后成四件套：`[zh-Hans] 6 [Asura Scans] [comix.to]`。
 /// - 其余情况（扁平、分组、版本化但取不到组名）→ 沿用旧规则
 ///   `parseChapterTitle(key).chapterNumber ?? key`，保证既有下载不会被改名。
-///   解析不出话号时**不加**站标/语言段：那时目录名就是原始 key，加了反而更难认。
+///   解析不出话号时**不加**站标：那时目录名就是原始 key，加了反而更难认。
 ///
-/// 兼容性：[siteTag]/[languageTag] 均为 null 时输出与旧版**逐字节相同**，
+/// 🔴 **语言段永远不进目录名**（P51，2026-10-27 定案）。
+///
+/// P49 曾经在最前面加过 `[zh-Hans] `，理由（语言是第一分类维度）本身没错，
+/// 但落点错了 —— 目录名同时是**本地漫画的章节 key**和**排序依据**：
+/// 加了前缀，key 就从 `"120"` 变成 `"[zh-Hans] 120 [baozimh]"`，
+/// `_leadingChapterNumber` 抠不出数字、排序退化成字典序
+/// （第 0 话、第 1 话、第 10 话、第 100 话…），整套章节列表直接烂掉；
+/// 而且源侧下一轮同步会按它自己的规则重新命名，我们改的这层迟早被覆盖。
+///
+/// 所以语言只存**记录表**：`comic_field_overrides.chapter_languages`
+/// （读取见 [ComicOverrideStore.chapterLanguageOf]）。目录名只归源站所有。
+///
+/// 兼容性：[siteTag] 为 null 时输出与旧版**逐字节相同**，
 /// 因此读取侧不传也能命中老目录；新老并存由 [resolveChapterDirectoryName] 负责抹平。
+/// 读取侧仍会剥掉历史遗留的语言段（[splitChapterLanguageTag]），
+/// 但写入侧永远不再生成。
 ///
 /// 同名兜底：同一话号 + 同一组名出现多个版本时（例如同组两种语言），
 /// 从第二个起追加 ` (2)`、` (3)`… 序号由 (chapters, chapterKey) 唯一决定，
@@ -638,11 +675,9 @@ String chapterDirectoryName(
   ComicChapters? chapters,
   String chapterKey, {
   String? siteTag,
-  String? languageTag,
 }) {
   final site = (siteTag ?? '').trim();
-  final language = normalizeChapterLanguage(languageTag);
-  final base = _baseChapterDirectoryName(chapters, chapterKey, site, language);
+  final base = _baseChapterDirectoryName(chapters, chapterKey, site);
   if (chapters == null || !chapters.isVersioned) return base;
   var seen = 0;
   var index = -1;
@@ -651,7 +686,6 @@ String chapterDirectoryName(
           chapters,
           entry.version.chapterKey,
           site,
-          language,
         ) !=
         base) {
       continue;
@@ -668,33 +702,24 @@ String _baseChapterDirectoryName(
   ComicChapters? chapters,
   String chapterKey,
   String siteTag,
-  String? languageTag,
 ) {
   final site = siteTag.isEmpty ? '' : ' [$siteTag]';
   if (chapters != null && chapters.isVersioned) {
     final entry = chapters.versionEntryOf(chapterKey);
     final group = entry?.version.scanlationGroup?.trim() ?? '';
-    // 章节自带的语种（mangadex/comick 的 `lang`）优先于调用方给的源默认值：
-    // 同一本书的同一话可能有英/西/葡多版，只有章节自己知道是哪种。
-    final language =
-        normalizeChapterLanguage(entry?.version.language) ?? languageTag;
-    final prefix = language == null ? '' : '[$language] ';
     if (entry != null && group.isNotEmpty) {
       // 话号用版本矩阵的**外层 key**（源给的话号），不是从 chapterKey 里
       // 正则抠出来的：comix.to 这类源的 chapterKey 是整条 URL，抠不出话号。
-      return sanitizePathSegment(
-        '$prefix${entry.chapterNumber} [$group]$site',
-      );
+      return sanitizePathSegment('${entry.chapterNumber} [$group]$site');
     }
     final number = parseChapterTitle(chapterKey).chapterNumber?.toString();
     if (number == null) return sanitizePathSegment(chapterKey);
-    return sanitizePathSegment('$prefix$number$site');
+    return sanitizePathSegment('$number$site');
   }
   final number = parseChapterTitle(chapterKey).chapterNumber?.toString();
   if (number == null) {
     // 连话号都读不出来：保持旧行为，原样用 key 当目录名，不追加站标。
     return sanitizePathSegment(chapterKey);
   }
-  final prefix = languageTag == null ? '' : '[$languageTag] ';
-  return sanitizePathSegment('$prefix$number$site');
+  return sanitizePathSegment('$number$site');
 }

@@ -8,6 +8,7 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
+import 'package:mangrove/foundation/chapter_title_parser.dart';
 import 'package:mangrove/foundation/comic_collection_store.dart';
 import 'package:mangrove/foundation/comic_source/collection_source.dart';
 import 'package:mangrove/foundation/comic_source/source_library.dart';

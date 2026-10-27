@@ -139,9 +139,15 @@ Future<_MemberLoad> _loadMember(String collectionId, CollectionMember m) async {
 
   try {
     final type = ComicType.fromKey(m.sourceKey);
-    if (type == ComicType.local) {
-      final local = LocalManager().find(m.comicId, ComicType.local);
-      if (local == null) return _MemberLoad(m, failed: true);
+    // 本地记录优先于网络（P51，2026-10-27）。
+    //
+    // 原来这里只认 `type == ComicType.local`，于是「从网络源下载下来、在
+    // local.db 里有完整记录」的漫画一走合集就跑去问网络源要章节表：
+    // 源没装 / 被墙 / 要过 CF 验证时整个 tab 变成 Unavailable，而磁盘上
+    // 明明一章不缺。合集是"把已有的书拼起来"，它该看的是**我们手上的**那份
+    // 记录，不是源站此刻能不能连上。
+    final local = LocalManager().find(m.comicId, type);
+    if (local != null) {
       ComicCollectionStore.cacheMemberInfo(
         collectionId,
         m.sourceKey,

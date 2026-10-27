@@ -33,6 +33,25 @@ mixin _ChapterSelectionMixin<T extends StatefulWidget> on State<T> {
   /// 普通视图与分组视图共用，所以放在 mixin 里；实现只有 [pageState] 一处。
   String get _overrideComicId => pageState.overrideComicId;
 
+  /// 章节格子的**主标题**：记录表话号 > 标题/目录名里的话号。
+  ///
+  /// 为什么记录表能顶掉标题（P51，2026-10-27）：key 是**源站的**，改了它
+  /// 断下载、断阅读进度、断翻译工程；但源站的话号又未必是读者认知的话号
+  /// （UUID 当 id 的源、跨源补章坐标系不同、源侧把简介写进标题）。
+  /// 所以让记录表单独说"这一章是第几话"，key 一个字节都不动 —— 这就是用户
+  /// 要的"密码本"：两边的术语靠一张表对齐，文件与目录保持原样。
+  String _chapterTitleOf(String key, String value) {
+    final number = ComicOverrideStore.instance.chapterNumberOf(
+      _overrideComicId,
+      key,
+    );
+    if (number == null) return chapterNumberLabel(value);
+    final text = number == number.roundToDouble()
+        ? number.toInt().toString()
+        : number.toString();
+    return '第$text话';
+  }
+
   History? get history;
 
   set history(History? value);
@@ -682,7 +701,7 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                chapterNumberLabel(value),
+                                _chapterTitleOf(key, value),
                                 maxLines: 1,
                                 textAlign: TextAlign.center,
                                 overflow: TextOverflow.ellipsis,
@@ -1308,7 +1327,7 @@ class _GroupedComicChaptersState extends State<_GroupedComicChapters>
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                chapterNumberLabel(value),
+                                _chapterTitleOf(key, value),
                                 maxLines: 1,
                                 textAlign: TextAlign.center,
                                 overflow: TextOverflow.ellipsis,

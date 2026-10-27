@@ -731,12 +731,27 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     // Return local data immediately, fetch network data in background.
     // 漫画信息自动更新（P-DL6 简化）：总开关开即自动刷新，不再区分
     // 打开来源；关则只等手动刷新按钮拉取。
-    if (_autoRefreshComicInfoOnOpen()) {
+    //
+    // 🔴 但「手上没有任何可显示的内容」时，这个开关不该拦住首次加载（P51）。
+    //
+    // 它的语义是"打开时顺手把**已有的**列表再刷一遍"，不是"要不要显示章节"。
+    // 合集就是被这点坑死的：合集的详情根本不进缓存
+    // （`ComicDetailsCache.isCacheable` 对它返回 false —— 每次都要从成员现算），
+    // 于是 `cached` 恒为 null；而开关默认关，`loadComicInfo` 一次都没被调用
+    // ⇒ `comic.chapters == null` ⇒ 详情页只剩标题和封面（那是列表页传进来的
+    // `widget.comic`），章节区一片空白，语言 tab 更不可能出现。
+    //
+    // 判据取 `cached == null` 而不是"是不是合集"：任何**首次打开且无缓存**的
+    // 网络漫画都踩同一个坑，只是合集必然会踩到。
+    final cached = ComicDetailsCache().find(widget.sourceKey, widget.id);
+    final needsFirstLoad =
+        cached == null ||
+        ComicCollectionStore.isCollectionSourceKey(widget.sourceKey);
+    if (_autoRefreshComicInfoOnOpen() || needsFirstLoad) {
       scheduleMicrotask(() => _refreshNetworkDetails(comicSource));
     }
     // Cached details from an earlier visit render the chapter list (and group
     // tabs) instantly; the background fetch above refreshes them.
-    final cached = ComicDetailsCache().find(widget.sourceKey, widget.id);
     if (cached != null) {
       return Res(cached);
     }

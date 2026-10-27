@@ -390,10 +390,13 @@ class ImagesDownloadTask extends DownloadTask with _TransferSpeedMixin {
   /// D1 起再补 `[站点]`），读取侧 `LocalManager.getImagesForComic` 调的是同一个
   /// 函数 —— 两侧绝不能各写一份，否则"下载完读不到"。
   ///
-  /// 新下载一律写**全套信息**：
-  /// `[zh-Hans] 49 [Rokari Comics] [comix.to]`（P49 起语言在最前面）。
-  /// 语言优先取章节自带的 `lang`（见 [chapterDirectoryName]），拿不到才退回
-  /// 源默认语种（[defaultChapterLanguageOf]）；多语种共站的源不猜。
+  /// 新下载一律写**三件套**：`49 [Rokari Comics] [comix.to]`（话号 + 翻译组 +
+  /// 站点）。
+  ///
+  /// 🔴 **语言永远不进目录名**（P51）：目录名同时是本地漫画的章节 key 和
+  /// 排序依据，加 `[zh-Hans] ` 前缀会让 key 失去数字语义、章节列表退化成
+  /// 字典序（第 0 话→第 1 话→第 10 话→第 100 话）。语言只写记录表
+  /// （`comic_field_overrides.chapter_languages`）。
   String _chapterDirectoryName(String chapterKey) {
     final chapters = comic?.chapters;
     if (chapters == null) return '';
@@ -401,7 +404,6 @@ class ImagesDownloadTask extends DownloadTask with _TransferSpeedMixin {
       chapters,
       chapterKey,
       siteTag: sourceSiteTag(source.key),
-      languageTag: defaultChapterLanguageOf(source.key),
     );
   }
 

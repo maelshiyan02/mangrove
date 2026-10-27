@@ -1,4 +1,5 @@
 import 'package:mangrove/foundation/appdata.dart';
+import 'package:mangrove/foundation/chapter_title_parser.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 
 /// Flat indices whose title repeats an earlier entry **within the same scope**.
@@ -154,11 +155,11 @@ abstract class ChapterOrderPrefs {
   /// 本地漫画的章节 key 就是磁盘目录名，直接按字符串排序会得到
   /// `1,2,3,4,48,49,5,6,7` 这种荒唐顺序（用户 P14 报的就是这个）。所以凡是
   /// 没有用户自定义顺序的章节，一律按**话号数值**自然排序。
-  static double? _leadingChapterNumber(String key) {
-    final match = RegExp(r'^\s*(\d+(?:\.\d+)?)').firstMatch(key);
-    if (match == null) return null;
-    return double.tryParse(match.group(1)!);
-  }
+  ///
+  /// P51：改走全库唯一的 [chapterNumberValueOf]，顺带获得两个能力 ——
+  /// 剥历史遗留的 `[zh-Hans] ` 语言段、拒绝把 UUID 开头当话号。
+  static double? _leadingChapterNumber(String key) =>
+      chapterNumberValueOf(key);
 
   /// 章节 key 的自然比较：有数字按数字比，没数字的排在有数字的后面。
   static int _compareChapterKeys(String a, String b) {
@@ -193,7 +194,23 @@ abstract class ChapterOrderPrefs {
     for (var i = 0; i < ids.length; i++) {
       if (!used.contains(i)) rest.add(i);
     }
-    rest.sort((x, y) => _compareChapterKeys(ids[x], ids[y]));
+    // 🔴 一个话号都读不出来时**必须保留源侧顺序**（P51，2026-10-27）。
+    //
+    // `第一次告白` 这类源的章节 id 是 UUID（`473af3e1-7d6d-11f0-…`），没有
+    // 任何数字可言。此时排序的输入信息为零，`a.compareTo(b)` 排出来的就是
+    // **随机顺序** —— 第 1 话、第 2 话会被打散成 UUID 的字典序，用户看到的
+    // 是"章节列表乱掉了"。源侧给的 map 顺序才是唯一真相，别"帮"它排。
+    //
+    // 判据用**多数**而不是"至少一个"：UUID 首段碰巧全是数字（8 位十六进制
+    // 全落 0-9 的概率约 2%，60 多话里几乎必有一个）时，"至少一个"会让整本
+    // 按字符串重排 —— 实测就是这么坏的。真有番外/序章混排时，带话号的仍占
+    // 多数，照样会排，那些没话号的被 `_compareChapterKeys` 推到末尾。
+    final numberedCount = rest.where(
+      (i) => _leadingChapterNumber(ids[i]) != null,
+    ).length;
+    if (numberedCount * 2 >= rest.length && numberedCount > 1) {
+      rest.sort((x, y) => _compareChapterKeys(ids[x], ids[y]));
+    }
     result.addAll(rest);
     return result;
   }
