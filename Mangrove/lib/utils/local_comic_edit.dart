@@ -354,6 +354,10 @@ Future<int> refreshLocalComicChapters(LocalComic comic) async {
   for (final versions in map.values) {
     for (var i = 0; i < versions.length; i++) {
       final version = versions[i];
+      // P52：UUID 形态的章节 key（拷贝漫画）title 是源站给的 第N话，绝不能
+      // 用 chapterDisplayName(key) 去覆盖——那会把 第1话 改成一串 UUID 或
+      // 第39244565话，整本章节变乱码（2026-10-27 用户报《第一次告白》）。
+      if (isUuidLike(version.chapterKey)) continue;
       final clean = chapterDisplayName(version.chapterKey);
       if (version.title == clean) continue;
       versions[i] = ComicChapterVersion(

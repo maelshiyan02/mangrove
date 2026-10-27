@@ -128,6 +128,14 @@ ParsedChapterTitle parseChapterTitle(String title) {
 double? chapterNumberValueOf(String raw) {
   var name = raw.trim();
   if (name.isEmpty) return null;
+  // P52：UUID 形态（拷贝漫画 key）不是话号。它的首段可能是全数字
+  // （`39244565-0629-…`），裸 `^(\d+)` 会读成 39244565，排序与去重全乱
+  // （2026-10-27 修《第一次告白》乱码）。本模块是叶子，不依赖 chapter_directory，
+  // 这里内联同一套 UUID 正则。
+  if (RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+      .hasMatch(name)) {
+    return null;
+  }
   // 剥 P49 遗留的语言段（`[zh-Hans] `）。与 chapter_directory 的
   // splitChapterLanguageTag 同规则；这里是叶子模块，不能反向依赖它。
   name = name

@@ -297,6 +297,18 @@ bool isSourceSiteTag(String text) {
   return false;
 }
 
+/// 章节 key / 目录名是否形如 UUID（拷贝漫画的章节 id：
+/// `39244565-0629-11f1-b4dc-fa163e02432f`）。
+///
+/// UUID 没有任何可读的话号，**绝不能**拿去当章节号解析——否则它首段若是全数字
+/// （`39244565-…`），松一档的 `^(\d+)` 会读成「第39244565话」，整本章节列表
+/// 炸成 63 个胡话号（P52，2026-10-27 修《第一次告白》乱码）。**认的是完整
+/// 8-4-4-4-12 十六进制形态**，普通目录名（`49 [Rokari Comics]`）与纯数字
+/// （`120`）都不会命中，不会误伤。
+bool isUuidLike(String s) =>
+    RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+        .hasMatch(s.trim());
+
 /// 话号 + 余下部分的**严格**切分：`120 [baozimh]` → (`120`, `[baozimh]`)。
 ///
 /// 🔴 数字后面必须**不是字母/数字**（P51，2026-10-27）。
@@ -312,6 +324,9 @@ bool isSourceSiteTag(String text) {
 /// - `12_x` / `12 x`（数字 + 空格/下划线 + 文字）
 /// 不认：`003b54f5-…`（UUID）、`v2`、`番外`。
 ({String number, String rest})? splitLeadingChapterNumber(String name) {
+  // P52：UUID 形态（拷贝漫画 key）没有任何可读话号，直接判无——否则首段全数字
+  // （`39244565-…`）会被当话号，章节列表炸成 第39244565话 这类乱码。
+  if (isUuidLike(name)) return null;
   final match = RegExp(r'^(\d+(?:\.\d+)?)(?![0-9A-Za-z])[\s_]*').firstMatch(name);
   if (match == null) return null;
   return (
