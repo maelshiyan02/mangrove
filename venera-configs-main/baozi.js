@@ -29,15 +29,18 @@ class Baozi extends ComicSource {
   //   章页 200 但只塞 1 张图、且引用了错误 slug(meishaonianbangjiashijian
   //   -aojianyixi2)的资源, 该资源在镜像 CDN(s2.bzcdn.net)上根本不存在(404
   //   NoSuchKey); 完整正确的图只在官方 app 域(appcn.baozimh.com, 用 s2/s
-  //   .baozicdn.com)有 91 张。源站未升级防护(无新 CF 挑战), 纯属镜像同步
-  //   滞后 + 资源主机不匹配。修复三处:
+  //   .baozicdn.com)有 91 张。镜像侧未升级防护(无新 CF 挑战), 纯属镜像同步
+  //   滞后 + 资源主机不匹配。修复四处:
   //   ① 图床候选补 s2.baozicdn.com / s.baozicdn.com(官方域真实图床);
   //   ② onImageLoad 改为**链式穷举**所有图床(引擎每轮重读 configs
   //      .onLoadFailed, 故每个候选自带下一个 onLoadFailed, distinct 闭包避免
   //      free 后复用同一 JSInvokable);
   //   ③ collectPages 首图识别"残缺/串错书": 首图数极少(<5) 且 所有首图都不含
-  //      本书 slug(comicId) ⇒ 抛 DomainBlock 触发回落官方 app 域。
-  version = "1.2.5";
+  //      本书 slug(comicId) ⇒ 抛 DomainBlock 触发回落官方 app 域;
+  //   ④ 回落请求**显式**带浏览器 UA(1.2.6 复查发现官方域按 UA 下发 CF
+  //      challenge: 默认 UA 403 Cf-Mitigated、浏览器 UA 200), 并把挑战报成
+  //      可读的 DomainChallenge, 不再是裸 "Invalid status code: 403"。
+  version = "1.2.6";
 
   minAppVersion = "1.0.0";
 
@@ -829,14 +832,35 @@ class Baozi extends ComicSource {
       } catch (webError) {
         // 2) 所有镜像网页都失败时, 兜底官方 App 接口(该域已启用 Cloudflare,
         //    需在应用内做一次 Cloudflare verification)
+        //
+        // 🔴 2026-10-27 (Mangrove P48 补强) 该域按 **User-Agent** 下发 challenge:
+        //   线上实测同一页 —— curl 默认 UA → 403 + `Cf-Mitigated: challenge`
+        //   ("Just a moment...")；换浏览器 UA → 立刻 200 且 91 个图片节点。
+        //   故此处**显式**带浏览器 UA, 不再依赖"引擎会替我补 webUA"这一隐式行为
+        //   (引擎确在 lib/foundation/js_engine.dart 缺省注入 webUA, 但那是实现细节,
+        //    换引擎/改默认即静默失效 ⇒ 回落无声变成 403)。
+        //   Referer 与 UA 同源给出, 对挑战域更自然。
         if (!this._isFallbackError(webError)) {
           throw webError;
         }
         const appBase = "https://appcn.baozimh.com/baozimhapp";
+        const appHeaders = {
+          "User-Agent": this.constructor.browserUA,
+          Referer: "https://appcn.baozimh.com/",
+        };
         const images = await collectPages(async (page) => {
           const res = await Network.get(
-            `${appBase}/comic/chapter/${comicId}/${pagePath(page)}`
+            `${appBase}/comic/chapter/${comicId}/${pagePath(page)}`,
+            appHeaders
           );
+          if (page === 1 && (res.status === 403 || res.status === 503)) {
+            // CF 人机验证: 裸 "Invalid status code: 403" 会让用户误以为是网络故障,
+            // 也不利于日后排障(区分"挑战"与"真 404/断网")。
+            throw new Error(
+              "DomainChallenge: 官方域 appcn.baozimh.com 要求 Cloudflare 人机验证" +
+                "(status " + res.status + ")，请在应用内完成一次验证后重试本章"
+            );
+          }
           return { status: res.status, body: res.body };
         });
         return { images: images };

@@ -1,24 +1,52 @@
 /* P48 包子源修复验证桩 —— 真实加载 comic_source/baozi.js 并驱动三处新逻辑。
  * 不依赖浏览器/Flutter，仅用 Node 模拟最小框架 (ComicSource/Network/HtmlDocument)。
- * 三个 HTML 桩来自真实抓取:
- *   /tmp/v_150.html  = 镜像 151 章(正常, 50 图, 正确 slug)
- *   /tmp/v_151.html  = 镜像 152 章(残缺, 1 图, 错 slug)
- *   /tmp/v_app152.html = 官方 app 域 152 章(完整, 91 图, 正确 slug)
+ *
+ * 用法: node baozi_p48_check.cjs [源文件] [--samples <样本目录>]
+ *   源文件默认 comic_source/baozi.js；样本目录默认 <本脚本目录>/baozi_p48_samples，
+ *   依次回退 /tmp、D:/tmp（旧路径兼容）。
+ *
+ * 三个 HTML 样本均为 2026-10-27 现场真实抓取（第三方版权页，不入 git，见 .gitignore）:
+ *   v_150.html    = 镜像 151 章(正常, 50 图, 正确 slug)
+ *   v_151.html    = 镜像 152 章(残缺, 1 图, 错 slug)
+ *   v_app152.html = 官方 app 域 152 章(完整, 91 图节点, 去重 86)
  */
 const fs = require("fs");
+const path = require("path");
 
-const SRC = process.argv[2] ||
-  "D:/AI Coding Project Management/Mangrove/comic_source/baozi.js";
-const BROKEN = fs.readFileSync("/tmp/v_151.html", "utf8"); // 镜像 152 残缺
-const GOOD = fs.readFileSync("/tmp/v_150.html", "utf8"); // 镜像 151 正常
-const APP = fs.readFileSync("/tmp/v_app152.html", "utf8"); // 官方 152 完整
+const argv = process.argv.slice(2);
+let SRC = null, samplesDir = null;
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === "--samples") samplesDir = argv[++i];
+  else if (!SRC) SRC = argv[i];
+}
+SRC = SRC || "D:/AI Coding Project Management/Mangrove/comic_source/baozi.js";
+
+const loadSample = (f) => {
+  const cands = [samplesDir, path.join(__dirname, "baozi_p48_samples"), "/tmp", "D:/tmp"]
+    .filter(Boolean);
+  for (const d of cands) {
+    const p = path.join(d, f);
+    if (fs.existsSync(p)) return fs.readFileSync(p, "utf8");
+  }
+  console.error("找不到样本 " + f + "，已尝试: " + cands.join(" , "));
+  process.exit(3);
+};
+const BROKEN = loadSample("v_151.html"); // 镜像 152 残缺
+const GOOD = loadSample("v_150.html"); // 镜像 151 正常
+const APP = loadSample("v_app152.html"); // 官方 152 完整
 
 // ---- 最小框架桩 ----
 class ComicSource {}
 class Cookie { constructor(o) { Object.assign(this, o || {}); } }
+let appcnHeaders = null; // 记录回落请求实际发出的头
+let appcnForbidden = false; // 故障注入开关: 模拟官方域 CF 挑战
 const Network = {
-  get: async (url) => {
-    if (url.includes("appcn.baozimh.com")) return { status: 200, body: APP };
+  get: async (url, headers) => {
+    if (url.includes("appcn.baozimh.com")) {
+      appcnHeaders = headers || null;
+      if (appcnForbidden) return { status: 403, body: "<title>Just a moment...</title>" };
+      return { status: 200, body: APP };
+    }
     if (url.includes("0_151")) return { status: 200, body: BROKEN }; // 残缺 152
     if (url.includes("0_150")) return { status: 200, body: GOOD }; // 正常 151
     return { status: 200, body: GOOD };
@@ -147,6 +175,35 @@ console.log("\n=== 测试3a: 残缺 152 章 → 回落官方域拿到完整 91 �
       "正常章拿到 50 张 (实际 " + result.images.length + ")");
     assert(result.images.every((u) => u.includes(COMIC_ID)),
       "所有图含正确 slug");
+  })();
+}).then(() => {
+  console.log("\n=== 测试4a: 回落请求必须显式带浏览器 UA ===");
+  // appcnHeaders 由测试3a 的回落请求记录而来
+  assert(!!appcnHeaders, "回落请求带了 headers");
+  assert(
+    appcnHeaders && /Mozilla\/5\.0/.test(appcnHeaders["User-Agent"] || ""),
+    "User-Agent 是浏览器 UA (实际: " + (appcnHeaders && appcnHeaders["User-Agent"]) + ")"
+  );
+  assert(
+    appcnHeaders && String(appcnHeaders.Referer || "").includes("appcn.baozimh.com"),
+    "Referer 指向官方域"
+  );
+
+  console.log("\n=== 测试4b: 故障注入 — 官方域 403 必须报可读的挑战错误 ===");
+  appcnForbidden = true;
+  return (async () => {
+    let err = null;
+    try {
+      await b.comic.loadEp(COMIC_ID, "151");
+    } catch (e) {
+      err = e;
+    }
+    const msg = String((err && err.message) || err || "");
+    assert(!!err, "403 时确实抛错(没静默返回空章)");
+    assert(/DomainChallenge/.test(msg), "错误标记为 DomainChallenge (实际: " + msg + ")");
+    assert(/人机验证/.test(msg), "错误文案说明是人机验证, 不是网络故障");
+    assert(!/^Invalid status code/.test(msg), "不再是裸的 Invalid status code: 403");
+    appcnForbidden = false;
   })();
 }).then(() => {
   console.log("\n========== 结果: " + pass + " 通过, " + fail + " 失败 ==========");

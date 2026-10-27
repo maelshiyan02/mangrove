@@ -94,3 +94,7 @@ tools/headless_once.bat
 *.bak-*
 appdata.json
 .vscode/settings.json
+
+# ---- 7. P48 包子源验证样本 ----
+# 第三方抓取样页（2026-10-27 现场取证），仅本机复现验证桩用，不入库
+test-materials/runs/baozi_p48_samples/
