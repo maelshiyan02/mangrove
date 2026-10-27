@@ -423,8 +423,14 @@ class _NormalComicChaptersState extends State<_NormalComicChapters>
   String? _chapterGroupLabel(int i, String key) {
     // P49：语种是分类第一维，先出「简中」再出组名。
     // `[zh-Hans] 120 [Rokari Comics] [comix.to]` → `简中 · Rokari Comics`
+    //
+    // P50：语种**两个落点**，记录表优先。目录名是约定不是所有权 —— 有些源
+    // （或其镜像）的目录不归我们改（改名断翻译工程、断别的设备的认知，
+    // 下次下载还会被源侧覆盖回来），那种情况下语言只能标在这本漫画自己的
+    // 记录里。顺序：`chapter_languages` 覆盖 > 目录名 `[lang]` 段。
     final lang = chapterLanguageLabel(
-      parseChapterDirectoryName(key)?.language,
+      ComicOverrideStore.instance.chapterLanguageOf(_overrideComicId, key) ??
+          parseChapterDirectoryName(key)?.language,
     );
     final langPrefix = lang.isEmpty ? '' : lang;
     if (_displayChapters.isVersioned) {

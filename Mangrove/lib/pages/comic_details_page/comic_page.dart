@@ -120,10 +120,29 @@ ImageProvider comicDetailCoverProvider({
       cid: id,
     );
   }
-  if (localComic != null && localComic.comicType == ComicType.local) {
+  // 判据是**封面字符串的形态**，不是 `comicType`。
+  //
+  // 只看 `comicType == local` 会漏掉一整类：从源站下载下来的漫画
+  // （`comicType` 是源 key）换成本地封面池里的图之后，`cover` 存的是
+  // `cover/[KR][cover]season(3).jpg` 这种**相对路径**，喂给
+  // `CachedImageProvider` 就变成"relative URL without a base" ——
+  // 详情页封面位置只剩一个报错感叹号（issue #38 的同一类，只是入口不同）。
+  if (localComic != null && !_isRemoteImageRef(cover)) {
     return LocalComicImageProvider(localComic);
   }
   return CachedImageProvider(cover, sourceKey: sourceKey, cid: id);
+}
+
+/// 这个封面串能否直接交给网络/文件栈。
+///
+/// `file://` 走 [CachedImageProvider]（它自带 `file://` 分支），相对路径
+/// （`cover/xxx.jpg`、`cover.jpg`）只能由 [LocalComicImageProvider] 拼
+/// `baseDir` 读盘。
+bool _isRemoteImageRef(String cover) {
+  final text = cover.trim().toLowerCase();
+  return text.startsWith('http://') ||
+      text.startsWith('https://') ||
+      text.startsWith('file://');
 }
 
 class ComicPage extends StatefulWidget {
@@ -178,6 +197,17 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
   /// cover load directly from disk for pure local imports (issue #38).
   LocalComic? _localComic;
 
+  /// 最近一次网络源返回的**原始**信息（没和本地记录合并过）。
+  ///
+  /// 两种显示模式看的是**两份信息**，不是同一份：
+  /// * 网络模式 = 站点原文（标题/封面/简介/标签全部来自源）——标签能点开
+  ///   跳站点搜索，靠的就是它们和源站同一个命名空间；
+  /// * 本地模式 = 我们自己补全的版本（`LocalComic` + 覆盖层）。
+  ///
+  /// 只留合并后的一份，切换模式就变成"切了个空气"——页面纹丝不动。所以
+  /// 网络响应必须原样留档，切换时才有东西可换。
+  ComicDetails? _onlineDetails;
+
   /// 这一本是不是**已导出的翻译成品**（`ft_<hash>`）。
   ///
   /// 🔴 成品与素材/工程在**语义**上不是一回事：素材是待翻译的原图、工程是
@@ -194,8 +224,13 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
   ///
   /// P11（2026-10-24）起「本地/网络显示模式」与各种字段覆盖都挂在它上面，
   /// 所以这里的换算只有一个入口，章节列表（mixin）也复用它。
+  ///
+  /// 🔴 必须用 `widget.sourceKey` / `widget.id`，**不能用 `comic`**：
+  /// `comic` 是 `data!`，而 `displayMode` 在 `loadData()` 里就要被调用
+  /// （判断要不要自动联网刷新），那时 `data` 还是 null —— 走 `comic` 会
+  /// 直接空断言崩溃。这两个值本来就是从 widget 来的，绕 `comic` 一圈没有收益。
   String get overrideComicId =>
-      ComicOverrideStore.comicIdOf(comic.sourceKey, comic.id);
+      ComicOverrideStore.comicIdOf(widget.sourceKey, widget.id);
 
   /// 当前这本漫画生效的章节显示模式（自己的设置优先，否则全局默认）。
   ComicDisplayMode get displayMode =>
@@ -345,17 +380,19 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
 
   @override
   void refreshLocalComic() {
-    final refreshed = LocalManager().find(comic.id, ComicType.local);
+    // 🔴 查本地记录必须用**本记录自己的 comicType**，不能写死 `ComicType.local`：
+    // 下载型漫画的 comicType 是源 key（例如 baozi 的 hashCode），写死 local
+    // 就永远 find 不到 → `data` 不重建 → 换完封面详情页还是旧图（或破图）。
+    final current = _localComic;
+    final refreshed = LocalManager().find(
+      comic.id,
+      current?.comicType ?? ComicType.fromKey(comic.sourceKey),
+    );
     if (refreshed != null) {
       _localComic = refreshed;
-      // 详情页的章节 chips / 阅读器 / 封面都读 `data`（ComicDetails），而 `data`
-      // 只在 loadData / _refreshLocalDetails 时用 `_localDetails(localComic)`
-      // 构建一次。只刷新 `_localComic` 不重建 `data`，会导致换封面/改信息后界面不刷新。
-      // 这里用最新的本地记录重建 `data`，确保封面与右侧信息同步显示。
-      data = _localDetails(
-        refreshed,
-        _comicStateRepository.load(widget.sourceKey, widget.id),
-      );
+      // 详情页的章节 chips / 阅读器 / 封面都读 `data`（ComicDetails），只改
+      // `_localComic` 不重建 `data` 的话界面不会刷新。这里按当前显示模式重建。
+      data = _composeDetails();
     }
     update();
   }
@@ -674,7 +711,9 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
           _autoRefreshComicInfoOnOpen()) {
         scheduleMicrotask(() => _refreshNetworkDetails(comicSource));
       }
-      return Res(_localDetails(localComic, state));
+      // 按**当前显示模式**给首屏：本地模式看我们补全的版本，网络模式等
+      // 后台刷新回来再换成站点原文（首帧先给本地版，避免白屏）。
+      return Res(_composeDetails());
     }
 
     if (widget.sourceKey == 'local') {
@@ -775,13 +814,16 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     unawaited(_refreshNetworkDetails(source));
   }
 
-  /// 漫画信息采集/章节更新的自动模式判定（2026-10-16，P-DL6 简化）。
+  /// 漫画信息采集/章节更新的自动模式判定。
   ///
-  /// 返回 true 表示本次打开应自动联网刷新章节信息。总开关
-  /// [comicInfoAutoUpdate] 关 → 永不自动刷新（手动刷新按钮仍可用）；
-  /// 开 → 一律刷新，**不再区分网络/本地打开来源**（用户定案：区分规则
-  /// 本是为省重复请求，试行期取消），刷新结果统一回写本地记录。
-  bool _autoRefreshComicInfoOnOpen() => comicInfoAutoUpdate;
+  /// 返回 true 表示本次打开应自动联网刷新章节信息。两个条件同时满足才刷：
+  ///
+  /// 1. 总开关 [comicInfoAutoUpdate]（默认 **false**，用户定案：进详情页不该
+  ///    每次都联网，手动刷新按钮永远可用）；
+  /// 2. **当前是网络模式** —— 本地模式看的就是我们补全的那份信息，联网刷新
+  ///    只会把源侧变化带进本地记录、把用户改的字段顶掉。
+  bool _autoRefreshComicInfoOnOpen() =>
+      comicInfoAutoUpdate && displayMode == ComicDisplayMode.network;
 
   Future<void> _refreshComicDetails() async {
     final localComic =
@@ -859,10 +901,7 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
           if (!mounted || generation != _detailsRefreshGeneration) return false;
           setState(() {
             _localComic = refreshed;
-            data = _localDetails(
-              refreshed,
-              _comicStateRepository.load(widget.sourceKey, widget.id),
-            );
+            data = _composeDetails();
             detailsLoadError = null;
           });
           return true;
@@ -889,7 +928,7 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
         if (!mounted || generation != _detailsRefreshGeneration) return false;
         setState(() {
           _localComic = refreshed;
-          data = _localDetails(refreshed, state);
+          data = _composeDetails();
           detailsLoadError = null;
         });
         return true;
@@ -920,7 +959,8 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
   /// 矩阵，据它补全属于"变多"，不违反上面那条"本地优先"原则。
   ComicDetails _mergeOnlineMetadata(ComicDetails online) {
     final current = data;
-    if (_localComic == null || current == null) return online;
+    final local = _localComic;
+    if (local == null || current == null) return online;
     final tags = <String, List<String>>{};
     for (final entry in current.tags.entries) {
       tags[entry.key] = List<String>.from(entry.value);
@@ -931,8 +971,13 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
         if (!existing.contains(tag)) existing.add(tag);
       }
     }
+    // 章节并集的**底**必须是本地记录，不能是 `data`：网络模式下 `data`
+    // 就是 `online` 本身，拿它当底等于自己和自己合，从别的源补进来的那几话
+    // （例如 comix.to 的 153-157）会被"合并"掉，再跟着 `_persistEnrichedChapters`
+    // 写回本地时就有丢章风险。
+    final baseChapters = local.effectiveChapters ?? current.chapters;
     return current.copyWith(
-      chapters: current.chapters?.mergedWith(online.chapters) ?? online.chapters,
+      chapters: baseChapters?.mergedWith(online.chapters) ?? online.chapters,
       description: online.description ?? current.description,
       tags: tags,
       recommend: online.recommend ?? current.recommend,
@@ -950,6 +995,55 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     );
   }
 
+  /// 按当前显示模式挑出要展示的那一份信息。
+  ///
+  /// 这不是"合并"，是**二选一**：网络模式看站点原文，本地模式看我们自己
+  /// 补全的版本。之前两种模式共用一个 `data`，于是切换按钮只影响章节过滤、
+  /// 信息区毫无变化，用户看到的"两边冲突"就是这么来的。
+  ComicDetails _composeDetails([ComicDetails? online]) {
+    final local = _localComic;
+    final state = _comicStateRepository.load(widget.sourceKey, widget.id);
+    if (local == null) return online ?? _onlineDetails ?? data!;
+    if (displayMode == ComicDisplayMode.local) return _localView(local, state);
+    final source = _onlineDetails ?? online;
+    // 还没拿到过网络响应（离线 / 源不可用）→ 只能显示本地版本，但这是
+    // 降级而不是"覆盖"：下次刷新成功会切回站点原文。
+    if (source == null) return _localView(local, state);
+    return _networkView(source, local);
+  }
+
+  /// 本地模式：库里的信息，再叠上覆盖层（我们亲手补的那份）。
+  ///
+  /// 覆盖层之所以还要叠：网络漫画的"编辑本地信息"写的是
+  /// `comic_field_overrides`，而 `LocalComic.title` 是下载时的源标题，
+  /// 两份都算本地编辑，漏掉任何一份都会让用户觉得"我改的不见了"。
+  ComicDetails _localView(LocalComic local, ComicState state) =>
+      overlayLocalOverrides(_localDetails(local, state));
+
+  /// 网络模式：站点原文为底，只把章节矩阵换成**并集**。
+  ///
+  /// 章节取并集而不是直接用 `online.chapters`：本地库矩阵记录着下载时的
+  /// 全部翻译组，源这次可能只回一部分；并集只会变多，不会把已下载的话
+  /// 弄丢（丢了就连目录名都算不出来）。
+  ComicDetails _networkView(ComicDetails online, LocalComic local) {
+    final localChapters = local.effectiveChapters;
+    if (localChapters == null) return online;
+    return online.copyWith(
+      chapters: localChapters.mergedWith(online.chapters),
+    );
+  }
+
+  /// 切换「网络/本地」之后重建 `data`。
+  ///
+  /// 旧实现只调 `update()`（纯 setState）→ `data` 还是切换前那一份，
+  /// 于是右侧信息区纹丝不动，只有章节列表跟着变了。
+  void _applyDisplayMode() {
+    if (!mounted) return;
+    setState(() {
+      data = _composeDetails();
+    });
+  }
+
   Future<bool> _fetchNetworkDetails(ComicSource source, int generation) async {
     int retryCount = 0;
     String lastError = 'Load failed';
@@ -959,9 +1053,12 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
         if (!mounted || generation != _detailsRefreshGeneration) return false;
         if (res.success) {
           detailsLoadError = null;
+          // 原样留档：网络模式要显示站点原文，本地模式要显示我们补全的
+          // 版本，两份都得在手上（见 `_onlineDetails`）。
+          _onlineDetails = res.data;
           final merged = _mergeOnlineMetadata(res.data);
           setState(() {
-            data = merged;
+            data = _composeDetails(merged);
           });
           ComicDetailsCache().update(widget.sourceKey, widget.id, res.data);
           // 源这边是完整矩阵：把它并回本地记录，让被覆盖过的（丢组、丢话的）
@@ -1027,11 +1124,9 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       if (refreshed == null) return;
       setState(() {
         _localComic = refreshed;
-        data = (data ?? merged).copyWith(
-          chapters: refreshed.chapters,
-          // 「更新」日期刚回写进 tags，立刻反映到详情页展示。
-          tags: _tagsMapOf(refreshed),
-        );
+        // 按模式重建而不是就地打补丁：网络模式的 tags 必须保持源站命名空间
+        // （标签点开要能跳站点搜索），塞进本地 `作者:`/`标签:` 那套就废了。
+        data = _composeDetails(merged);
       });
       // 章节矩阵变了 → 目录名解析方式跟着变，立刻重跑一次磁盘对账。
       await _reconcileDiskState(refreshed);
@@ -1192,7 +1287,10 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
           IconButton(
             onPressed: () {
               ComicOverrideStore.instance.toggleDisplayMode(overrideComicId);
-              update();
+              // 必须重建 `data` 而不是只 setState：两种模式看的是两份信息
+              // （站点原文 / 我们补全的版本），只 setState 就会出现
+              // "模式切了、右侧信息区一点没变"。
+              _applyDisplayMode();
             },
             icon: Icon(
               displayMode == ComicDisplayMode.local
@@ -1348,7 +1446,13 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       image: comicDetailCoverProvider(
         sourceKey: comic.sourceKey,
         id: comic.id,
-        cover: widget.cover ?? comic.cover,
+        // `data` 已按显示模式分流：网络模式是源封面、本地模式是库里的
+        // 本地封面路径。`widget.cover` 只是从列表带过来的**快照**，拿它
+        // 覆盖 `data` 会让本地模式又退回旧网络图（主页历史卡片与本地
+        // 卡片封面不一致就是这么来的），所以只在 data 为空时兜底。
+        cover: comic.cover.trim().isNotEmpty
+            ? comic.cover
+            : (widget.cover ?? ''),
         localComic: _localComic,
       ),
       fit: BoxFit.cover,
@@ -2248,7 +2352,10 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     final imageProvider = comicDetailCoverProvider(
       sourceKey: comic.sourceKey,
       id: comic.id,
-      cover: widget.cover ?? comic.cover,
+      // 同上：data 里的封面已按模式分流，快照只做兜底。
+      cover: comic.cover.trim().isNotEmpty
+          ? comic.cover
+          : (widget.cover ?? ''),
       localComic: _localComic,
     );
 
@@ -2284,7 +2391,13 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       final imageProvider = comicDetailCoverProvider(
         sourceKey: comic.sourceKey,
         id: comic.id,
-        cover: widget.cover ?? comic.cover,
+        // `data` 已按显示模式分流：网络模式是源封面、本地模式是库里的
+        // 本地封面路径。`widget.cover` 只是从列表带过来的**快照**，拿它
+        // 覆盖 `data` 会让本地模式又退回旧网络图（主页历史卡片与本地
+        // 卡片封面不一致就是这么来的），所以只在 data 为空时兜底。
+        cover: comic.cover.trim().isNotEmpty
+            ? comic.cover
+            : (widget.cover ?? ''),
         localComic: _localComic,
       );
 

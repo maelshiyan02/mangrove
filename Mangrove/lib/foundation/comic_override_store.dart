@@ -95,6 +95,15 @@ class ComicOverrideStore {
   static const fieldTags = 'tags';
   static const fieldPageCount = 'page_count';
 
+  /// 章节级语言标注：`{ 源章节 id: BCP 47 语言标签 }`。
+  ///
+  /// 为什么还要有"记录表侧"的标注，明明目录名里已经有 `[zh-Hans]` 了：
+  /// 目录名是**约定**，不是**所有权**。有些源（或其镜像）的目录我们不拥有
+  /// —— 改它会断翻译工程（工程目录按章节名建）、断别的设备已经记下的
+  /// 认知、下一次下载还会被源侧原样覆盖回来。所以语言必须有第二个落点：
+  /// 这本漫画自己的记录。读取顺序 **记录表 > 目录名**。
+  static const fieldChapterLanguages = 'chapter_languages';
+
   final Map<String, Map<String, Object?>> _cache = {};
 
   /// 读一本漫画的全部覆盖值（无覆盖返回空 Map，绝不返回 null）。
@@ -214,6 +223,50 @@ class ComicOverrideStore {
     final next = displayModeFor(comicId).toggled;
     setDisplayMode(comicId, next);
     return next;
+  }
+
+  // ---------------------------------------------------------------------
+  // 章节级语言标注（记录表侧的"第二落点"，见 [fieldChapterLanguages]）
+  // ---------------------------------------------------------------------
+
+  /// 这本漫画声明的「章节 id → 语言」映射；没标过返回空 Map。
+  Map<String, String> chapterLanguagesOf(String comicId) {
+    final raw = valueOf(comicId, fieldChapterLanguages);
+    if (raw is Map) {
+      final result = <String, String>{};
+      raw.forEach((key, value) {
+        if (key == null || value == null) return;
+        final text = value.toString().trim();
+        if (text.isEmpty) return;
+        result[key.toString()] = text;
+      });
+      return result;
+    }
+    return const {};
+  }
+
+  /// 单个章节的标注语言；没标过返回 null（调用方自行回落到目录名）。
+  String? chapterLanguageOf(String comicId, String chapterKey) {
+    final text = chapterLanguagesOf(comicId)[chapterKey]?.trim() ?? '';
+    return text.isEmpty ? null : text;
+  }
+
+  /// 给单个章节标语言；[language] 传空串等价于清除标注。
+  void setChapterLanguage(
+    String comicId,
+    String chapterKey,
+    String? language,
+  ) {
+    final map = Map<String, String>.from(chapterLanguagesOf(comicId));
+    final text = language?.trim() ?? '';
+    if (text.isEmpty) {
+      if (!map.containsKey(chapterKey)) return;
+      map.remove(chapterKey);
+    } else {
+      if (map[chapterKey] == text) return;
+      map[chapterKey] = text;
+    }
+    setField(comicId, fieldChapterLanguages, map.isEmpty ? null : map);
   }
 
   /// 让这本漫画回到"跟随全局默认"。

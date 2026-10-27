@@ -22,6 +22,20 @@ class HistoryImageProvider
   @override
   Future<Uint8List> load(chunkEvents, checkStop) async {
     var url = history.cover;
+    // 历史行记的是**当时那一帧的封面 URL**，是快照。漫画换过封面（本地
+    // 封面池、手工换图）之后，本地库已经指向新图，历史卡片却还挂着第一代
+    // 老图 —— 主页历史栏与本地栏同一本书两张脸，就是这么来的。
+    //
+    // 判据只看**本地库有没有这本 + 封面是不是本地文件路径**：网络漫画没
+    // 下载过时本地库压根没有记录，不会误伤；下载过的如果封面还是源 URL，
+    // 说明用户没换过，也不必抢。
+    if (history.type != ComicType.local) {
+      final localComic = LocalManager().find(history.id, history.type);
+      final cover = localComic?.cover.trim() ?? '';
+      if (localComic != null && cover.isNotEmpty && !_isRemoteRef(cover)) {
+        return LocalComicImageProvider(localComic).load(chunkEvents, checkStop);
+      }
+    }
     if (history.type == ComicType.local) {
       if (BtProjectManager.isBtComic(history.id)) {
         // A BT cover is a page key relative to the project dir (e.g.
@@ -66,8 +80,7 @@ class HistoryImageProvider
       // Keep the row's list visibility: this fetch can land after the user
       // deleted the record, and a plain add would put it back (issue #270).
       HistoryManager().updateHistoryKeepingVisibility(history);
-    }
-    await for (var progress in ImageDownloader.loadThumbnail(
+    }    await for (var progress in ImageDownloader.loadThumbnail(
       url,
       history.type.sourceKey,
       history.id,
@@ -103,4 +116,16 @@ class HistoryImageProvider
 
   @override
   String? get fallbackUrl => history.cover;
+}
+
+/// 这个封面串能不能直接交给网络/文件栈。
+///
+/// 相对路径（`cover/[KR][cover]season(3).jpg`、`cover.jpg`）只能由
+/// [LocalComicImageProvider] 拼 `baseDir` 读盘；喂给 HTTP 栈就是
+/// "relative URL without a base"。
+bool _isRemoteRef(String cover) {
+  final text = cover.trim().toLowerCase();
+  return text.startsWith('http://') ||
+      text.startsWith('https://') ||
+      text.startsWith('file://');
 }
