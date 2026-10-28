@@ -44,7 +44,7 @@ import urllib.request
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WEB_HOSTS = ["www.copy5000.com", "www.copy4000.com", "www.copy-manga.com"]
+WEB_HOSTS = ["www.copy5000.com", "www.copy4000.com", "2026copy.com"]
 SITE_TAG = "copymanga"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
