@@ -42,11 +42,44 @@ Mangrove is a free and open-source, multi-platform comic reader forked from Vene
 - [x] AI page translation while reading (experimental): images and OCR stay on-device, and only recognized text is sent to an LLM you configure; beginner provider templates/model fetching plus advanced custom settings, resource-saving/balanced/fast presets, whole-chapter pre-translation, smart erase and bounded text layout
 - [x] Custom collections: read comics published as separate volumes or parts as one, across sources
 
+## Mangrove-specific capabilities (recent)
+
+- **Whole-chapter pagination fix for baozimh**: source script v1.2.9. `loadEp` self-heals page by page —
+  detects a truncated first page, refetches per-page ids, de-duplicates by URL while preserving order,
+  and stops once a page adds nothing. Reader and downloader share the same page list, so a chapter can
+  no longer download half-way.
+- **Network / local display modes**: the same title can switch between a network source and the local
+  library; the details page merges local records with network refresh, normalising chapter identity by
+  chapter number + scanlation group so refreshing never duplicates chapters.
+- **Local comic management and chapter editing**: create local comics, add/delete chapters, change the
+  cover (file picker or candidate pool), register unlisted download folders, and clean duplicate folder
+  records.
+- **Download manager with automatic missing-page repair**: rolling-window concurrency (3 in flight) with
+  staged timeouts of 5/10/15/30 s; failed pages land in `missing_pages.json`, and `repair_download`
+  refetches from that table.
+- **Chapter de-duplication on refresh**: hide duplicate chapters per scanlation group, and persist a
+  custom chapter order in the comic's settings.
+- **Translation studio**: per-text-block visual editing (font, size, stroke, vertical layout, position)
+  with a full undo stack.
+- **Relocatable app data**: the data root follows the `data/` folder next to the executable and can be
+  moved as a whole; portable-root detection walks up to 6 levels, carrying sources, library and
+  download records with it.
+
 ## Guide
 
 Setup steps and interactions for each feature are documented in the **[guide](doc/guide.en.md)**. It is also available in the app under Settings → About → Guide.
 
 ## Building
+
+### In-repo tooling (Windows, recommended)
+
+```bash
+python tools/run_build_task.py      # release build; pass criterion is BUILD_OK in builds/build.log
+python tools/run_headless_task.py   # headless-surface check; read [CLI PRINT] {"status":...}
+```
+
+> This repository does **not** run `flutter build` / `dart` directly: builds go through the tooling
+> above so artefacts, logs and verification results all land in `builds/`.
 
 <details>
 <summary><b>Local build</b></summary>
