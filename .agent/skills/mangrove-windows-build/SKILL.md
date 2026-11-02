@@ -5,7 +5,7 @@ description: Build and verify the Mangrove Flutter Windows release. Use when ask
 
 # Mangrove Windows 构建与验收
 
-工作区根目录（**会改名/搬迁 ⇒ 勿写死绝对路径**），Flutter 工程在 `Mangrove\`，一键脚本是工作区根的 `build_mangrove.ps1`，绿色成品落 `builds\mangrove`。
+工作区根目录（**会改名/搬迁 ⇒ 勿写死绝对路径**），Flutter 工程在 `Mangrove\`，一键脚本是 `tools\build_mangrove.ps1`，绿色成品落 `builds\mangrove`。
 
 ## 环境事实（不在系统 PATH，勿重新安装）
 
@@ -48,14 +48,14 @@ Start-ScheduledTask -TaskName 'MangroveBuild'   # 需 dangerouslyDisableSandbox
 
 ### 2. 预检脚本编码（必做）
 
-`build_mangrove.ps1` 含中文注释，**必须是 UTF-8 with BOM**，否则 PowerShell 5.1 按 GBK 误读导致大括号/引号解析错误（典型报错：`Unexpected token ... 宸叉敞鍏?sqlite3`）。
+`tools\build_mangrove.ps1` 含中文注释，**必须是 UTF-8 with BOM**，否则 PowerShell 5.1 按 GBK 误读导致大括号/引号解析错误（典型报错：`Unexpected token ... 宸叉敞鍏?sqlite3`）。
 
 检查与修复（无 BOM 时执行）：
 
 ```powershell
 # 或直接跑：powershell -File .agent\skills\mangrove-windows-build\scripts\check_bom.ps1
 $root = '<项目根>'                      # 见 §目录约定：勿写死
-$p = Join-Path $root 'build_mangrove.ps1'
+$p = Join-Path $root 'tools\build_mangrove.ps1'
 $b=[System.IO.File]::ReadAllBytes($p)
 if (-not ($b[0]-eq0xEF -and $b[1]-eq0xBB -and $b[2]-eq0xBF)) {
   $c=Get-Content -Raw -Encoding UTF8 $p
@@ -68,7 +68,7 @@ if (-not ($b[0]-eq0xEF -and $b[1]-eq0xBB -and $b[2]-eq0xBF)) {
 `flutter build windows` 会编译 rhttp 的 Rust 部分，rustup 要写 `D:\dev\rust\rustup\tmp`；沙箱内执行必报 `could not create temp file ... (os error 5)` 并附 `TRAE Sandbox Error: hit restricted`。用 Shell 工具时必须带 `dangerouslyDisableSandbox: true`，放后台：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build_mangrove.ps1
+powershell -ExecutionPolicy Bypass -File .\tools\build_mangrove.ps1
 ```
 
 工作目录 = 项目根（**会改名，勿写死**）。全量 release（C++ + Rust + Dart AOT）约数分钟到十几分钟。
