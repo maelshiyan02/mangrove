@@ -340,10 +340,21 @@ Future<int> refreshLocalComicChapters(LocalComic comic) async {
   // 已知目录名集合（小写）：规范名 + 原始 key 名都纳入，确保幂等、不重复识别。
   final knownDirNames = <String>{};
   final existing = comic.chapters;
+  // 🔴 2026-11-02：**话号身份**闸门（忽略站点标签），补字符串闸门的漏。
+  //   下载漫画的本地记录 key 是干净话号（`1`），磁盘目录却是 `1 [baozimh]`。
+  //   旧闸门只比整串目录名，认不出「同一话的带站标写法」，于是点一次
+  //   「刷新章节」就把每个目录名当成新章登记 ⇒ 整本翻倍（用户 2026-11-02 报：
+  //   125 话变 249 格）。这里按 (话号, 组) 建集合，组不同仍各留。
+  final knownIdentities = <String>{};
   if (existing != null) {
     for (final key in existing.allVersionKeys) {
       knownDirNames.add(chapterDirectoryName(existing, key).toLowerCase());
       knownDirNames.add(sanitizePathSegment(key).toLowerCase());
+      final ref = parseChapterDirectoryName(key) ??
+          parseChapterDirectoryName(chapterDirectoryName(existing, key));
+      if (ref != null) {
+        knownIdentities.add('${ref.number}|${ref.groupKey}');
+      }
     }
   }
 
@@ -381,8 +392,12 @@ Future<int> refreshLocalComicChapters(LocalComic comic) async {
     final canonicalName = sanitizePathSegment(
       chapterDirectoryName(existing, sanitizePathSegment(entry.name)),
     ).toLowerCase();
+    final diskRef = parseChapterDirectoryName(entry.name);
+    final diskIdentity =
+        diskRef == null ? null : '${diskRef.number}|${diskRef.groupKey}';
     if (knownDirNames.contains(rawName) ||
-        knownDirNames.contains(canonicalName)) {
+        knownDirNames.contains(canonicalName) ||
+        (diskIdentity != null && knownIdentities.contains(diskIdentity))) {
       continue;
     }
     // 只认"有图"的文件夹，避免把无关目录登记成空章。

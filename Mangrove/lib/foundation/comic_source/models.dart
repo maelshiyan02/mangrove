@@ -471,6 +471,23 @@ class ComicChapterVersion {
       'ComicChapterVersion(group=$scanlationGroup, lang=$language, title=$title, key=$chapterKey)';
 }
 
+/// 章节合并时的**身份键**：话号 + 翻译组 + 语种，**刻意忽略站点标签**。
+///
+/// 用于 [ComicChapters.mergedWith] 去重。本地记录里的 key 是干净话号（`1`），
+/// 而目录名 key 往往带站标（`1 [baozimh]`）——两者是同一章的两种写法，判等时
+/// 必须归一，否则「刷新章节」后整本翻倍（2026-11-02 用户实测：125 话变 249 格）。
+///
+/// - 有可解析话号 → `n:<话号>|g:<组|语种>`（站标 `[baozimh]` 已被
+///   `parseChapterTitle` 视为非组名，天然不进组位）。
+/// - 无话号（番外 / UUID）→ 退回 key 本身，避免把所有无话号章节挤成一格。
+String _chapterMergeIdentity(ComicChapterVersion v) {
+  final num = parseChapterTitle(v.chapterKey).chapterNumber;
+  final group = (v.scanlationGroup ?? '').trim().toLowerCase();
+  final lang = (v.language ?? '').trim().toLowerCase();
+  if (num == null) return 'k:${v.chapterKey}|g:$group|l:$lang';
+  return 'n:$num|g:$group|l:$lang';
+}
+
 /// 一条版本记录：章节所属话号 + 该话的某一个版本。
 ///
 /// 用 record 而非 class，是为了让"话号 → 版本"这一对值在版本矩阵里
@@ -780,15 +797,31 @@ class ComicChapters {
     if (other == null) return this;
     if (isVersioned && other.isVersioned) {
       final merged = <String, List<ComicChapterVersion>>{};
+      // 🔴 2026-11-02 「刷新章节后翻倍」根因修复（用户实测）：
+      //   判等口径改为 **话号 + 翻译组（忽略站点标签）**。本地记录用干净 key
+      //   （`1`），而磁盘目录名 key 带站标（`1 [baozimh]`）——两者是同一章，
+      //   旧实现按整串 key 判等，于是各建一格 ⇒ 249 章 = 125 本地 + 124 目录名。
+      //   忽略站标后 `1` 与 `1 [baozimh]` 归为同一身份 `n:1|g:`，只保留先到的
+      //   那一格（本地 key），源侧的重复版本直接跳过。不同翻译组（`1 [Asura]`
+      //   vs `1 [DivaScans]`）身份不同，仍各留（多组并集语义不变）。
+      final identityToKey = <String, String>{};
       for (final entry in _versionedChapters!.entries) {
         merged[entry.key] = List<ComicChapterVersion>.of(entry.value);
+        for (final v in entry.value) {
+          identityToKey[_chapterMergeIdentity(v)] = entry.key;
+        }
       }
       for (final entry in other._versionedChapters!.entries) {
-        final target =
-            merged.putIfAbsent(entry.key, () => <ComicChapterVersion>[]);
-        final known = {for (final v in target) v.chapterKey};
         for (final version in entry.value) {
-          if (known.add(version.chapterKey)) target.add(version);
+          final identity = _chapterMergeIdentity(version);
+          // 同话同组已在本地 ⇒ 这是同一章的重复登记，跳过（绝不新建格）。
+          if (identityToKey.containsKey(identity)) continue;
+          final target =
+              merged.putIfAbsent(entry.key, () => <ComicChapterVersion>[]);
+          if (target.every((v) => v.chapterKey != version.chapterKey)) {
+            target.add(version);
+          }
+          identityToKey[identity] = entry.key;
         }
       }
       return ComicChapters.versioned(merged);
@@ -814,8 +847,19 @@ class ComicChapters {
         !other.isVersioned &&
         !other.isGrouped) {
       final merged = Map<String, String>.of(_chapters ?? const {});
+      // 🔴 2026-11-02 同版本化分支：扁平章节按**话号**去重，忽略站点标签。
+      //   `1` 与 `1 [baozimh]` 是同一章，不能各留一格。
+      final nums = <String>{};
+      for (final k in merged.keys) {
+        final n = parseChapterTitle(k).chapterNumber;
+        if (n != null) nums.add(n.toString());
+      }
       for (final e in (other._chapters ?? const {}).entries) {
-        merged.putIfAbsent(e.key, () => e.value);
+        if (merged.containsKey(e.key)) continue;
+        final n = parseChapterTitle(e.key).chapterNumber;
+        if (n != null && nums.contains(n.toString())) continue;
+        merged[e.key] = e.value;
+        if (n != null) nums.add(n.toString());
       }
       return ComicChapters(merged);
     }
