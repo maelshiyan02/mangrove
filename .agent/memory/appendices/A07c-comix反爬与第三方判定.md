@@ -3,7 +3,7 @@
 > **触发时机**：comix 采集出现 `Third-party apps are not supported`、`请稍候…`、
 > 503、或"明明过完验证还是被拦"**之前**读本篇。
 > 上位：`A07-comix源.md`（源配置/WAF/token）｜`A07b`（章节列表/分组/翻页）
-> 取证全过程：`.agent/documents/worklog/comix-第三方判定取证与采集链路修复.md`
+> 取证全过程：`.agent/documents/worklog/10-comix浏览器与本地库P-DL9-LC-20261017_20261024/P-DL9.3-WORKLOG-第三方判定取证与采集链路修复-20261019.md`
 
 ---
 

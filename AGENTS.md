@@ -9,11 +9,12 @@
 |---|---|---|
 | 0 | **`../_shared/index.md`**（工作区根的共享层，在本仓库之外） | 跨项目全局规则 / 通用网络 / 共享 venv / 方法论 M01~M14 |
 | 1 | **`.agent/memory/MEMORY.md`** | 主记忆：框架 + 索引 + 三条不能违反的底线（**必读**） |
-| 2 | **`.agent/memory/appendices/A0x-*.md`** | 项目事实（A01~A14，按 MEMORY.md 索引里的「触发时机」按需读；**开工先看 A08**） |
+| 2 | **`.agent/memory/appendices/A0x-*.md`** | 项目事实（A01~A25，按 MEMORY.md 索引里的「触发时机」按需读；**开工先看 A08**） |
 | 3 | **`.agent/kb/INDEX.md`** | 项目内方法论 M01~M11（做设计/验证/交接前读；M12~M14 在共享层） |
+| 4 | **`.agent/documents/INDEX.md`** | 文档唯一导航：12 个阶段目录 + 全量新旧文件名对照 |
 
-历史决策的来龙去脉：`.agent/memory/appendices/W00-工作日志索引.md`
-（总索引 + 五卷明细：W00a=W01~W42、W00b=W43~W54、W00c=P11~P20、W00d=P21~P32、W00e=P33~P45）。
+历史决策的来龙去脉：`.agent/memory/appendices/W00-工作日志索引.md`（阶段导航与编号口径）；
+日志本体按工程阶段归档在 `.agent/documents/worklog/01…12-阶段/`，明细 W00a~W00e 为历史索引。
 
 ## 两条硬约束
 

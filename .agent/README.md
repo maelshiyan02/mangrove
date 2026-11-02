@@ -11,8 +11,12 @@
 | `memory/MEMORY.md` | **主记忆（唯一被自动注入的文件，≤3K 字符）**：框架 + 索引 + 三条底线 |
 | `memory/appendices/` | 编号附录 `A01~A08`（项目事实）+ `W00`（工作日志编号索引） |
 | `memory/YYYY-MM-DD.md` | 每日工作日志（**只追加**） |
-| `documents/worklog/` | 42 篇历史工作日志本体（= 项目根的 `docs/`） |
-| `documents/plans/` | 计划类文档 |
+| `documents/worklog/` | 历史工作日志本体，按 12 个工程阶段归档在 `01…12-*/`（= 项目根的 `docs/`） |
+| `documents/analysis/` | 调研、可行性分析、根因分析 |
+| `documents/plans/` | 实施计划、修改计划 |
+| `documents/handoff/` | 换 agent 开场白与交接词 |
+| `documents/testing/` | 可复跑的 GUI/自动化复测脚本 |
+| `documents/INDEX.md` | **文档唯一导航**：阶段目录 + 全量新旧文件名对照 |
 | `skills/` | 技能（如 `mangrove-windows-build`） |
 | `specs/` | 规格 |
 | `kb/` | **跨项目可复用**的知识库（当前：`methodology/` M01~M07） |
@@ -26,10 +30,13 @@
 3. 要做**设计/验证/交接**类决策时，读 **`kb/INDEX.md`** 挑对应方法论。
 4. 要查历史决策的来龙去脉时，看 **`memory/appendices/W00-工作日志索引.md`**。
 
-## 🔴 两条纪律
+## 🔴 三条纪律
 
 1. **绝不写绝对路径。** 项目根目录**将来会改名**。用相对路径；脚本必须由**自身位置**推导根目录。
 2. **不要再手动同步。** 过去那套「写完 `.workbuddy` 再拷回 `.trae`」已作废 —— 联接已经保证是同一份。
+3. **文件不许散落。** 项目根只留 `README.md`/`AGENTS.md`/`CLAUDE.md`；文档按
+   `P{编号}-{TYPE}-{主题}-{YYYYMMDD}.md` 命名并放进对应分类目录（见 `documents/INDEX.md`）。
+   完成使命的一次性脚本与过时截图随任务结束删除。
 
 ## 接入新的 AI agent
 

@@ -26,7 +26,7 @@ import 'dart:convert';
 /// diff is therefore a real change we made, never codec noise — which is what
 /// lets S8's "save" be trusted against real FT workspaces.
 ///
-/// See `docs/P6.1-现状探查报告.md` §3 and `tools/spike/s6_probe_dart_json.dart`
+/// See `.agent/documents/analysis/P6.1-ANALYSIS-现状探查-20261005.md` §3 and `tools/spike/s6_probe_dart_json.dart`
 /// for the probe that established these rules.
 class PyJson {
   const PyJson._();

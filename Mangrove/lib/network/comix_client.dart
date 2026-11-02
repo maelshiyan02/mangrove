@@ -13,7 +13,7 @@
 /// - **DOM 兜底**：若钩子未生效（UserScript 被站方改动影响等），回退到 v1 的
 ///   DOM 采集 + dispatchEvent 翻页方案，逻辑保持可用。
 ///
-/// 已逆向确认的 comix.to API（见 docs/P4-agent-handoff-comix-to.md）：
+/// 已逆向确认的 comix.to API（见 `.agent/documents/handoff/P4-HANDOFF-comix-to源-agent交接-20260929.md`）：
 /// - 章节列表：`GET /api/v1/manga/{hid}/chapters?page=N&...&__=token`
 ///   → `{status:"ok", result:{items:[{id,url,number,volume,name,group:{id,name},
 ///   isOfficial,...}], meta:{last_page,...}}}`（axios 拦截器解包 status/result，
