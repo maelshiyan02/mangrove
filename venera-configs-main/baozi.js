@@ -41,7 +41,13 @@ class Baozi extends ComicSource {
   //      (Dio 层抛 CloudflareException), UI 靠该消息自动跑离屏验证再重试。
   //      v1.2.6 曾把它包成 DomainChallenge 且自塞 UA —— 已在 v1.2.7 撤销
   //      (UA 非变量, 挑战判据是 TLS 指纹; 引擎缺省注入 webUA)。
-  version = "1.2.7";
+  // 🔴 2026-10-31 (Mangrove P54-baozi) 整章分页 + comicId 后缀修复 (v1.2.8):
+  //   站点现把每章再分页(标题 "第N话(a/b)"), 且阅读页 URL 的 comicId 必须带
+  //   per-comic 后缀(<cid>_<suffix>, 如 _9lavj0), 否则第 2 页起被站点钳制回第 1 页
+  //   → 逐页去重 added=0 提前 break → 整章恒被截断成 50 页(实测"秘密小姐"第11话
+  //   只显 50 页, 实有 144 页)。修复: loadInfo 从章节 href 提取后缀存盘, loadEp 拼
+  //   到 comicId 后。appcn 兜底路径维持不带后缀(P48 行为, 未实测验证)。
+  version = "1.2.9";
 
   minAppVersion = "1.0.0";
 
@@ -130,6 +136,14 @@ class Baozi extends ComicSource {
 
   // 上次成功的网页域名, init() 时从持久化数据恢复
   _goodDomain = null;
+
+  // 🔴 2026-10-31 (Mangrove P54-baozi) 整章分页修复:
+  //   站点把每章再分页(标题如 "第11话(1/3)"), 且阅读页 URL 的 comicId 现在必须带
+  //   per-comic 后缀(形如 <cid>_9lavj0), 否则第 2 页起被站点钳制回第 1 页内容,
+  //   逐页去重后 added=0 提前 break → 整章恒被截断成 50 页(用户实测"秘密小姐"第11话
+  //   只显示 50 页, 实有 144 页)。loadInfo 从章节 href 提取该后缀存于此 + 持久化,
+  //   loadEp 拼到 comicId 后面。无后缀(旧站点/无分页章)时维持空串, 兼容旧行为。
+  _comicIdSuffix = null;
 
   init() {
     try {
@@ -702,6 +716,28 @@ class Baozi extends ComicSource {
         .replace(/月/g, "-")
         .replace(/日/g, "");
 
+      // 🔴 2026-10-31 提取 per-comic 后缀供 loadEp 拼接(整章分页修复):
+      //   章节链接现为 /user/page_direct?comic_id=<cid>_<suffix>&section_slot=0&...
+      //   阅读页 URL 的 comicId 必须带此后缀, 否则第 2 页起被站点钳制回第 1 页。
+      try {
+        const firstChapHref = document
+          .querySelector("#chapter-items a, #chapters_other_list a")
+          ?.attributes?.["href"];
+        if (firstChapHref) {
+          const sm = firstChapHref.match(
+            new RegExp(
+              "comic_id=" +
+                id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
+                "(_[^&\\s\"]+)"
+            )
+          );
+          if (sm && sm[1]) {
+            this._comicIdSuffix = sm[1];
+            this.saveData("baozi_chapter_suffix_" + id, sm[1]);
+          }
+        }
+      } catch (e) {}
+
       return new ComicDetails({
         title: title,
         cover: cover,
@@ -716,6 +752,18 @@ class Baozi extends ComicSource {
       });
     },
     loadEp: async (comicId, epId) => {
+      // 🔴 2026-11-02 整章分页修复(最终版, 自愈式):
+      //   旧实现把 per-comic 后缀寄望于 loadInfo 预先抽取(this._comicIdSuffix /
+      //   saveData)。但**阅读器直进章节时 loadInfo 不会先跑** → 后缀缺失 → 第 2 页
+      //   被站点钳制回第 1 页 → 逐页去重 added=0 提前 break → 整章恒 50 页。
+      //   现改为 loadEp **自给自足**: 先取首页(站点对"首页无后缀"也返回正确内容),
+      //   再从首页 HTML 的翻页链接里**现取**本漫画 per-comic 后缀(形如 <cid>_<suffix>),
+      //   之后逐页用带后缀的 effectiveId 抓取, 按图片 URL 去重保序。不同镜像后缀不同
+      //   → 从当前镜像 HTML 现取, 天然镜像无关。
+      //   兼容站点两种形态:
+      //     · 整章单页(如 appcn, 144 图一次给全) → 首页即全, 第 2 页无新图 → break;
+      //     · 整章分页(如 webmota, 每页 ~50, 标题 (1/3)) → 跟随分页拿全 144。
+
       // 网页阅读页与 App 页 DOM 同构, 使用同一解析器
       // 🔴 2026-10-11 (Mangrove P41) 站点 Vue SSR + AMP 改版:
       //   .comic-contain
@@ -742,11 +790,7 @@ class Baozi extends ComicSource {
         return images;
       };
 
-      // 🔴 2026-10-11 (Mangrove P42) 站点把**每个章节再分页**:
-      //   章节页标题形如 "第1话(1/4)", URL 依次 0_<ep>.html / 0_<ep>_2.html …
-      //   每页约 50 张, 且相邻页**有重叠**(part1 = 1..50, part2 = 47..100)。
-      //   旧实现只取第一页 → 每章恒定 50 张, 用户看到"被限制成 50 页"。
-      //   现改为逐页抓取后按图片 URL **去重保序**, 拿回整章。
+      // 标题形如 "第1话(1/4)" → {current,total}; 无分页标记的站点返回 null
       const pagerOf = (body) => {
         const t = String(body).match(/<title>([^<]*)<\/title>/);
         if (!t) return null;
@@ -757,77 +801,116 @@ class Baozi extends ComicSource {
       const pagePath = (page) =>
         page === 1 ? `0_${epId}.html` : `0_${epId}_${page}.html`;
 
-      // getPage(page) 返回该页 {status, body}(取不到返回 null)。
-      // 首页无图 → 视作域名被风控(抛 DomainBlock 触发换域);
-      // 已知总页数时中间页失败 → 同样抛 DomainBlock 触发换域, 避免静默截断。
-      const collectPages = async (getPage) => {
-        const images = [];
-        const seen = new Set();
-        let total = null;
-        for (let page = 1; page <= 200; page++) {
-          const res = await getPage(page);
-          if (!res || res.status !== 200) {
-            if (page === 1) {
-              throw `Invalid status code: ${res ? res.status : "null"}`;
+      // 🔴 从首页 HTML 的翻页链接提取本漫画 per-comic 后缀。
+      //   首页里形如 .../comic/chapter/<cid>(_<suffix>)?/0_<epId>_<N>.html (N>=2)
+      //   的链接, 捕获其中的 _<suffix> 段。兜底返回 ""(单页站点无需后缀)。
+      const detectSuffix = (body) => {
+        try {
+          const doc = new HtmlDocument(body);
+          const cidQ = comicId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const epQ = String(epId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp(
+            "comic/chapter/" + cidQ + "(_[^/\"\\s]+)?/0_" + epQ + "_(\\d+)\\.html"
+          );
+          let suffix = "";
+          doc.querySelectorAll("a").forEach((a) => {
+            const href = (a.attributes && a.attributes["href"]) || "";
+            const m = href.match(re);
+            if (m && m[2] && parseInt(m[2], 10) >= 2) {
+              suffix = m[1] || "";
             }
-            if (total != null && page <= total) {
-              throw new Error(
-                `DomainBlock: chapter page ${page} status ${res ? res.status : "null"}`
-              );
-            }
-            break;
-          }
-          const pager = pagerOf(res.body);
-          if (pager) {
-            // 越界页被站点钳制到末页(标题变成 "(5/4)"), 直接结束
-            if (pager.current > pager.total) break;
-            if (total == null) total = pager.total;
-          }
-          let added = 0;
-          for (const url of parseImages(res.body)) {
-            if (seen.has(url)) continue;
-            seen.add(url);
-            images.push(url);
-            added++;
-          }
-          if (page === 1) {
-            if (images.length === 0) {
-              throw new Error("DomainBlock: empty chapter images");
-            }
-            // 🔴 2026-10-27 (Mangrove P48) 镜像"200 但残缺/串错书"识别:
-            //   最新章镜像未同步时, 章页只给极少量图且引用了**非本书 slug**
-            //   的资源(实证 152 章引用 meishaonianbangjiashijian-aojianyixi2
-            //   这个错 slug, 其在镜像 CDN 上根本不存在 ⇒ 404)。完整正确的图
-            //   只在官方 app 域(appcn.baozimh.com, 用 s2/s.baozicdn.com)。
-            //   主信号: 所有首图都不含本书 slug(comicId) ⇒ 串错书;
-            //   仅当同时满足"首图极少(<5)"才判残缺 —— 正常章图多(≥50)且 slug
-            //   正确, 两者互斥, 不会同时成立, 故不会误伤正常章。
-            const slugOk = images.some((u) => u.indexOf(comicId) >= 0);
-            if (!slugOk && images.length < 5) {
-              throw new Error(
-                "DomainBlock: mirror chapter images reference a different comic " +
-                  "(slug mismatch, likely an unsynced latest chapter)"
-              );
-            }
-          } else if (added === 0) {
-            // 没有分页标记的站点形态下, 靠"本页没有新图"判断到底
-            break;
-          }
-          if (total != null && page >= total) break;
+          });
+          return suffix;
+        } catch (e) {
+          return "";
         }
-        return images;
       };
 
       // 1) 优先走网页阅读页: 随主域名自动故障转移, 无需 Cloudflare 验证
       //    https://<lang>.<镜像>/comic/chapter/<comicId>/0_<epId>.html
       try {
         const images = await this.withDomains(async (base) => {
-          return await collectPages(async (page) => {
-            const res = await Network.get(
-              `${base}/comic/chapter/${comicId}/${pagePath(page)}`
+          // 1a) 取首页(无需后缀, 站点对首页无后缀也返回正确内容)
+          const firstRes = await Network.get(
+            `${base}/comic/chapter/${comicId}/${pagePath(1)}`
+          );
+          if (!firstRes || firstRes.status !== 200) {
+            throw `Invalid status code: ${firstRes ? firstRes.status : "null"}`;
+          }
+          // 1b) 自愈: 从首页翻页链接现取后缀, 兜底 loadInfo 留下的值 / 持久化
+          let comicIdSuffix =
+            detectSuffix(firstRes.body) || this._comicIdSuffix || "";
+          if (!comicIdSuffix) {
+            try {
+              comicIdSuffix =
+                this.loadData("baozi_chapter_suffix_" + comicId) || "";
+            } catch (e) {}
+          }
+          if (comicIdSuffix) {
+            try {
+              this._comicIdSuffix = comicIdSuffix;
+              this.saveData("baozi_chapter_suffix_" + comicId, comicIdSuffix);
+            } catch (e) {}
+          }
+          const effectiveId =
+            comicIdSuffix && !comicId.endsWith(comicIdSuffix)
+              ? comicId + comicIdSuffix
+              : comicId;
+
+          // 1c) 逐页收集(首页已取, 后续页用带后缀的 effectiveId)
+          const seen = new Set();
+          const collected = [];
+          const pushImages = (urls) => {
+            let added = 0;
+            for (const u of urls) {
+              if (seen.has(u)) continue;
+              seen.add(u);
+              collected.push(u);
+              added++;
+            }
+            return added;
+          };
+
+          let added = pushImages(parseImages(firstRes.body));
+          if (collected.length === 0) {
+            throw new Error("DomainBlock: empty chapter images");
+          }
+          // 🔴 2026-10-27 (Mangrove P48) 镜像"200 但残缺/串错书"识别(保留):
+          //   主信号: 所有首图都不含本书 slug(comicId) ⇒ 串错书; 仅当同时满足
+          //   "首图极少(<5)"才判残缺。正常章图多(≥50)且 slug 正确, 两者互斥。
+          const slugOk = collected.some((u) => u.indexOf(comicId) >= 0);
+          if (!slugOk && collected.length < 5) {
+            throw new Error(
+              "DomainBlock: mirror chapter images reference a different comic " +
+                "(slug mismatch, likely an unsynced latest chapter)"
             );
-            return { status: res.status, body: res.body };
-          });
+          }
+          let pager = pagerOf(firstRes.body);
+          let total = pager ? pager.total : null;
+
+          // 跟随分页: 第 2 页起用带后缀的 effectiveId
+          for (let page = 2; page <= 200; page++) {
+            const res = await Network.get(
+              `${base}/comic/chapter/${effectiveId}/${pagePath(page)}`
+            );
+            if (!res || res.status !== 200) {
+              if (total != null && page <= total) {
+                throw new Error(
+                  `DomainBlock: chapter page ${page} status ${res ? res.status : "null"}`
+                );
+              }
+              break;
+            }
+            const pg = pagerOf(res.body);
+            if (pg) {
+              if (pg.current > pg.total) break; // 越界被站点钳制到末页
+              if (total == null) total = pg.total;
+            }
+            const pgAdded = pushImages(parseImages(res.body));
+            if (pgAdded === 0) break; // 无新图即到底(兼容无分页标记站点)
+            if (total != null && page >= total) break;
+          }
+          return collected;
         });
         return { images: images };
       } catch (webError) {
