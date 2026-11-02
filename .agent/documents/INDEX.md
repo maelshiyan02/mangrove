@@ -30,6 +30,7 @@
 | `analysis/` | 调研、可行性分析、根因分析（ANALYSIS） |
 | `handoff/` | 换 agent 开场白与交接词（HANDOFF / OPENER） |
 | `testing/` | 可复跑的 GUI/自动化复测脚本（TEST） |
+| `plans/P47-ASSETS-comix阅读器参考截图/` | P47 阅读器对比用的 15 张参考截图（计划配套素材，不是文档） |
 
 ## 3. 新旧文件名对照（全量）
 
