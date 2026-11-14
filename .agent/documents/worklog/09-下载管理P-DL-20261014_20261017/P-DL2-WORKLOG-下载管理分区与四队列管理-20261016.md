@@ -1,5 +1,8 @@
 # 下载管理分区（主页常驻）+ 四队列管理页 + 统计/修复二级弹窗
 
+> 📌 **现状校正（2026-11-14）**：本文是当时的记录，**正文保留原文不改**；其结论的当前状态以
+> [`A08`](../../../memory/appendices/A08-排期与阶段现状.md) 与 [`P55 审计`](../../analysis/P55-ANALYSIS-项目进度与文档一致性审计-20261114.md) 为准。
+
 日期：2026-10-14
 模块：`lib/foundation/download_manager_store.dart`（新）、`lib/pages/download_manager_page.dart`（新）、
 `lib/pages/download_manager_dialogs.dart`（新）、`lib/components/download_wave_progress.dart`（新）、

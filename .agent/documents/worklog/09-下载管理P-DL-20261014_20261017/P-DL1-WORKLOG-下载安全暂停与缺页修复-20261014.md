@@ -1,5 +1,8 @@
 # 下载缺页根因修复 + 关闭软件安全暂停保护
 
+> 📌 **现状校正（2026-11-14）**：本文是当时的记录，**正文保留原文不改**；其结论的当前状态以
+> [`A08`](../../../memory/appendices/A08-排期与阶段现状.md) 与 [`P55 审计`](../../analysis/P55-ANALYSIS-项目进度与文档一致性审计-20261114.md) 为准。
+
 日期：2026-10-14
 模块：`lib/network/download.dart`、`lib/network/repair_download.dart`、`lib/foundation/local.dart`、`lib/foundation/tray.dart`
 

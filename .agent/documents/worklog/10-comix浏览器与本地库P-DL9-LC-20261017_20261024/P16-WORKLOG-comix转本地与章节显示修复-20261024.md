@@ -1,5 +1,8 @@
 # P16 · comix 源转本地漫画 + 章节显示只留话号
 
+> 📌 **现状校正（2026-11-14）**：本文是当时的记录，**正文保留原文不改**；其结论的当前状态以
+> [`A08`](../../../memory/appendices/A08-排期与阶段现状.md) 与 [`P55 审计`](../../analysis/P55-ANALYSIS-项目进度与文档一致性审计-20261114.md) 为准。
+
 > 日期：2026-10-24
 > 范围：`ComicLibrary/downloads` 下 5 本 comix.to 漫画（Exception：The Runaway 早已是本地）
 > 版本：`2.8.18+262` → 本次未改版本号（代码仅 `chapters.dart` 显示层 + 记录表数据）

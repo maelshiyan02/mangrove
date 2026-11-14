@@ -1,5 +1,8 @@
 # comix 第三方判定取证与采集链路修复
 
+> 📌 **现状校正（2026-11-14）**：本文是当时的记录，**正文保留原文不改**；其结论的当前状态以
+> [`A08`](../../../memory/appendices/A08-排期与阶段现状.md) 与 [`P55 审计`](../../analysis/P55-ANALYSIS-项目进度与文档一致性审计-20261114.md) 为准。
+
 > 时间：2026-10-19 16:14–16:35
 > 触发：用户实跑「创建下载任务」，CfT 窗口出现 `Third-party apps are not supported`；
 > 运行日志同时出现 `page 2 not effective after wait, stopping` 与 `setState` 空断言崩溃。
