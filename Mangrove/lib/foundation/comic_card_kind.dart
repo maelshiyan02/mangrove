@@ -33,7 +33,7 @@
 library;
 
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
-import 'package:mangrove/foundation/translation_project/finished_export.dart';
+import 'package:mangrove/foundation/translation/studio/finished_export.dart';
 
 /// 一张卡片属于三个根里的哪一个。
 enum ComicCardKind {

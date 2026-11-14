@@ -6,7 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import 'package:mangrove/foundation/bundled_fonts.dart';
-import 'package:mangrove/foundation/image_translation/font_fit.dart';
+import 'package:mangrove/foundation/translation/engine/font_fit.dart';
 import 'package:mangrove/foundation/log.dart';
 
 import 'block_resize_geometry.dart';

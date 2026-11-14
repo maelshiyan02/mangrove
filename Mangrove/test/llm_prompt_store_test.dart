@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangrove/foundation/appdata.dart';
-import 'package:mangrove/foundation/image_translation/llm_translator.dart';
+import 'package:mangrove/foundation/translation/engine/llm_translator.dart';
 
 void main() {
   const key = LlmPromptStore.settingKey;

@@ -12,8 +12,8 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mangrove/foundation/translation_project/json_codec.dart';
-import 'package:mangrove/foundation/translation_project/project_validator.dart';
+import '../lib/foundation/translation/studio/json_codec.dart';
+import '../lib/foundation/translation/studio/project_validator.dart';
 
 /// Formatting rules captured from Python's `json.dumps(v, ensure_ascii=False)`.
 ///

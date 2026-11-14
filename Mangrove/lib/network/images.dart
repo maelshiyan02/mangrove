@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:mangrove/foundation/cache_manager.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
-import 'package:mangrove/foundation/image_translation/rate_limiter.dart';
+import 'package:mangrove/foundation/translation/engine/rate_limiter.dart';
 import 'package:mangrove/foundation/js_engine.dart';
 import 'package:mangrove/foundation/consts.dart';
 import 'package:mangrove/utils/translations.dart';

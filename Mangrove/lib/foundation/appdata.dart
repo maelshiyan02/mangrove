@@ -5,7 +5,7 @@ import 'package:uuid/uuid.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/color_scheme_preset.dart';
 import 'package:mangrove/foundation/follow_update_scope.dart';
-import 'package:mangrove/foundation/image_translation/llm_translator.dart';
+import 'package:mangrove/foundation/translation/engine/llm_translator.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/source_platform.dart';
 import 'package:mangrove/utils/data_sync.dart';

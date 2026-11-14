@@ -4,7 +4,7 @@ import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
-import 'package:mangrove/foundation/translation_project/finished_export.dart';
+import 'package:mangrove/foundation/translation/studio/finished_export.dart';
 import 'package:mangrove/utils/cover_pool.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/local_comic_scanner.dart';

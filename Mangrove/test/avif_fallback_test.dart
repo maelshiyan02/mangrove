@@ -2,8 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mangrove/foundation/image_provider/avif_fallback.dart';
 import 'package:mangrove/foundation/image_provider/cached_image.dart';
 import 'package:mangrove/foundation/image_provider/reader_image.dart';
-import 'package:mangrove/foundation/image_translation/translation_config.dart';
-import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import 'package:mangrove/foundation/translation/engine/translation_config.dart';
+import 'package:mangrove/foundation/translation/engine/translation_types.dart';
 
 /// An AVIF whose pixels the engine cannot decode fails *after* the header has
 /// parsed and a codec has been produced, so the failure never reaches the code

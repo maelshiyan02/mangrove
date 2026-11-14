@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/js_engine.dart';
 import 'package:mangrove/foundation/log.dart';
-import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader_app.dart';
 import 'package:mangrove/network/images.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/translations.dart';
@@ -26,11 +26,12 @@ import 'package:mangrove/foundation/appdata.dart';
 /// 产物**（[StudioReaderRenderer]）。于是阅读路径上不再有任何"翻译"动作 ——
 /// 它要么有产物可显示，要么显示原图，**不会**在翻页时开始一次网络请求。
 ///
-/// ## 引擎层原样保留
+/// ## 引擎层去哪了
 ///
-/// `ImageTranslationService` / `image_translation/` 一个文件都没删：它们仍是
-/// 工作室管线（`StudioPagePipeline`）的检测/OCR/翻译腿，也仍是
-/// `PreTranslationTaskManager` 的后端。退出的只是**阅读器的进入点**。
+/// 旧引擎（`ImageTranslationService` / `image_translation/`）已随旧链路**整体
+/// 删除**：阅读器既不再做读时翻译，也不再持有整章翻译队列。工作室管线仍用
+/// 引擎层的检测/OCR/翻译/渲染基元，但那套代码现在归在
+/// `foundation/translation/engine/` 下，与阅读路径没有接线。
 class ReaderImageProvider
     extends BaseImageProvider<image_provider.ReaderImageProvider> {
   /// Image provider for normal image.

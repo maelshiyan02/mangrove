@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangrove/foundation/comic_type.dart';
-import 'package:mangrove/foundation/image_translation/pre_translation_tasks.dart';
+import '../lib/foundation/translation/studio/pre_translation_tasks.dart';
 
 void main() {
   group('PreTranslationChapter JSON', () {

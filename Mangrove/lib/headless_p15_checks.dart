@@ -15,12 +15,12 @@ library;
 
 import 'dart:typed_data';
 
-import 'package:mangrove/foundation/image_translation/font_fit.dart';
-import 'package:mangrove/foundation/image_translation/translation_types.dart'
+import 'package:mangrove/foundation/translation/engine/font_fit.dart';
+import 'package:mangrove/foundation/translation/engine/translation_types.dart'
     show IntRect;
-import 'package:mangrove/foundation/translation_project/block_group.dart';
-import 'package:mangrove/foundation/translation_project/page_size_probe.dart';
-import 'package:mangrove/foundation/translation_project/strip_decode_planner.dart';
+import 'package:mangrove/foundation/translation/studio/block_group.dart';
+import 'package:mangrove/foundation/translation/studio/page_size_probe.dart';
+import 'package:mangrove/foundation/translation/studio/strip_decode_planner.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 
 // ── WEBP 字节夹具 ───────────────────────────────────────────────────────

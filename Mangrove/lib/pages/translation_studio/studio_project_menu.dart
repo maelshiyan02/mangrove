@@ -53,10 +53,10 @@ import 'package:mangrove/foundation/context.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/open_folder.dart';
-import 'package:mangrove/foundation/translation_project/project_bootstrap.dart';
-import 'package:mangrove/foundation/translation_project/studio_project_entry.dart';
-import 'package:mangrove/foundation/translation_project/studio_reader.dart';
-import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
+import 'package:mangrove/foundation/translation/studio/project_bootstrap.dart';
+import 'package:mangrove/foundation/translation/studio/studio_project_entry.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader_app.dart';
 import 'package:mangrove/foundation/widget_utils.dart';
 import 'package:mangrove/utils/translations.dart';
 

@@ -51,8 +51,8 @@ import 'package:mangrove/components/components.dart';
 // `components.dart` 只是自己 import 了它，**没有**把它 export 出去
 // ⇒ 这里必须显式 import，否则报的错读起来像"拼错了方法名"。
 import 'package:mangrove/foundation/context.dart';
-import 'package:mangrove/foundation/image_translation/balloon_clustering.dart';
-import 'package:mangrove/foundation/translation_project/run_plan.dart';
+import 'package:mangrove/foundation/translation/engine/balloon_clustering.dart';
+import 'package:mangrove/foundation/translation/studio/run_plan.dart';
 import 'package:mangrove/foundation/widget_utils.dart';
 import 'package:mangrove/utils/translations.dart';
 

@@ -9,14 +9,14 @@
 // 会话（本会话无渲染表面），不在本文件覆盖范围。
 library;
 
-import 'package:mangrove/foundation/image_translation/translation_types.dart'
+import 'package:mangrove/foundation/translation/engine/translation_types.dart'
     show IntRect;
-import 'package:mangrove/foundation/translation_project/block_group.dart';
-import 'package:mangrove/foundation/translation_project/cross_page_block.dart';
-import 'package:mangrove/foundation/translation_project/seam_detect.dart';
-import 'package:mangrove/foundation/translation_project/seam_window.dart';
-import 'package:mangrove/foundation/translation_project/span_artifacts.dart';
-import 'package:mangrove/foundation/translation_project/strip_hidden_pages.dart';
+import 'package:mangrove/foundation/translation/studio/block_group.dart';
+import 'package:mangrove/foundation/translation/studio/cross_page_block.dart';
+import 'package:mangrove/foundation/translation/studio/seam_detect.dart';
+import 'package:mangrove/foundation/translation/studio/seam_window.dart';
+import 'package:mangrove/foundation/translation/studio/span_artifacts.dart';
+import 'package:mangrove/foundation/translation/studio/strip_hidden_pages.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 
 // ── 夹具：§8.3 的两页（p003 / p004，均 1600×2400）──────────────────────

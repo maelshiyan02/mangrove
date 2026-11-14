@@ -34,7 +34,7 @@ import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/res.dart';
 import 'package:mangrove/foundation/source_migration_tasks.dart';
-import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader_app.dart';
 import 'package:mangrove/network/cloudflare.dart';
 import 'package:mangrove/pages/comic_details_page/comic_page.dart';
 import 'package:mangrove/pages/favorites/favorites_page.dart';

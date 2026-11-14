@@ -2,8 +2,8 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mangrove/foundation/image_translation/page_renderer.dart';
-import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import 'package:mangrove/foundation/translation/engine/page_renderer.dart';
+import 'package:mangrove/foundation/translation/engine/translation_types.dart';
 
 RgbaImage _whiteImage(int width, int height) {
   var pixels = Uint8List(width * height * 4);

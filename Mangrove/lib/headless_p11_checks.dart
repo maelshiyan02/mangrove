@@ -12,10 +12,10 @@ library;
 
 import 'dart:io';
 
-import 'package:mangrove/foundation/translation_project/project.dart';
-import 'package:mangrove/foundation/translation_project/project_io.dart';
-import 'package:mangrove/foundation/translation_project/seam_review.dart';
-import 'package:mangrove/foundation/translation_project/text_block.dart'
+import 'package:mangrove/foundation/translation/studio/project.dart';
+import 'package:mangrove/foundation/translation/studio/project_io.dart';
+import 'package:mangrove/foundation/translation/studio/seam_review.dart';
+import 'package:mangrove/foundation/translation/studio/text_block.dart'
     show asObjectMap;
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 

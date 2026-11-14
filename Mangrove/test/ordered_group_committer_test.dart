@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mangrove/foundation/image_translation/ordered_group_committer.dart';
+import 'package:mangrove/foundation/translation/engine/ordered_group_committer.dart';
 
 GroupResult r(int done) => GroupResult(done, 0, <int>{});
 

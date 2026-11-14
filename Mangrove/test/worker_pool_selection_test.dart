@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mangrove/foundation/image_translation/worker_pool_selection.dart';
+import 'package:mangrove/foundation/translation/engine/worker_pool_selection.dart';
 
 void main() {
   group('pickLeastBusyIndex', () {

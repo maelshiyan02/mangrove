@@ -14,12 +14,12 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:mangrove/foundation/image_translation/translation_types.dart'
+import 'package:mangrove/foundation/translation/engine/translation_types.dart'
     show IntRect, RgbaImage;
-import 'package:mangrove/foundation/translation_project/cross_page_block.dart';
-import 'package:mangrove/foundation/translation_project/seam_window.dart';
-import 'package:mangrove/foundation/translation_project/strip_geometry.dart';
-import 'package:mangrove/foundation/translation_project/text_block.dart'
+import 'package:mangrove/foundation/translation/studio/cross_page_block.dart';
+import 'package:mangrove/foundation/translation/studio/seam_window.dart';
+import 'package:mangrove/foundation/translation/studio/strip_geometry.dart';
+import 'package:mangrove/foundation/translation/studio/text_block.dart'
     show TextBlock;
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 

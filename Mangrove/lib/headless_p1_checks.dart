@@ -18,18 +18,18 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:mangrove/foundation/bundled_fonts.dart';
-import 'package:mangrove/foundation/image_translation/balloon_clustering.dart';
-import 'package:mangrove/foundation/image_translation/font_fit.dart';
-import 'package:mangrove/foundation/image_translation/text_color.dart';
-import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import 'package:mangrove/foundation/translation/engine/balloon_clustering.dart';
+import 'package:mangrove/foundation/translation/engine/font_fit.dart';
+import 'package:mangrove/foundation/translation/engine/text_color.dart';
+import 'package:mangrove/foundation/translation/engine/translation_types.dart';
 import 'package:mangrove/foundation/system_fonts.dart';
-import 'package:mangrove/foundation/translation_project/edit_command.dart';
-import 'package:mangrove/foundation/translation_project/project.dart';
-import 'package:mangrove/foundation/translation_project/project_writer.dart';
-import 'package:mangrove/foundation/translation_project/result_renderer.dart';
-import 'package:mangrove/foundation/translation_project/rich_text_sync.dart';
-import 'package:mangrove/foundation/translation_project/studio_pipeline.dart';
-import 'package:mangrove/foundation/translation_project/text_block.dart';
+import 'package:mangrove/foundation/translation/studio/edit_command.dart';
+import 'package:mangrove/foundation/translation/studio/project.dart';
+import 'package:mangrove/foundation/translation/studio/project_writer.dart';
+import 'package:mangrove/foundation/translation/studio/result_renderer.dart';
+import 'package:mangrove/foundation/translation/studio/rich_text_sync.dart';
+import 'package:mangrove/foundation/translation/studio/studio_pipeline.dart';
+import 'package:mangrove/foundation/translation/studio/text_block.dart';
 
 /// Collects one entry per assertion, in the same shape `edit-check` reports.
 typedef CheckSink = void Function(String name, bool passed, String detail);
@@ -275,7 +275,7 @@ void _fontChecks(CheckSink check, Directory root) {
   // 这条扫的是**源码**而不是调用结果 —— 因为 `page_renderer._fillStyle` 是私有的，
   // headless 拿不到它。🔴 空结果必须判 FAIL：扫不到 `page_renderer.dart` 说明
   // 文件被改名/移动了，此时"没有裸传 fontFamily"这个结论毫无意义。
-  final renderer = File('${root.path}/lib/foundation/image_translation/page_renderer.dart');
+  final renderer = File('${root.path}/lib/foundation/translation/engine/page_renderer.dart');
   if (!renderer.existsSync()) {
     check(
       'font.renderer_resolves_family',

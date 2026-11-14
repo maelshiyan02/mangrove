@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mangrove/foundation/image_translation/translation_worker.dart';
-import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import 'package:mangrove/foundation/translation/engine/translation_worker.dart';
+import 'package:mangrove/foundation/translation/engine/translation_types.dart';
 
 void main() {
   group('resolveOcrPoolSize', () {

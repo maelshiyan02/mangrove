@@ -25,8 +25,8 @@ import 'dart:io';
 
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/log.dart';
-import 'package:mangrove/foundation/translation_project/studio_project_meta.dart';
-import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
+import 'package:mangrove/foundation/translation/studio/studio_project_meta.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader_app.dart';
 
 void _print(Map<String, dynamic> data) {
   print('[CLI PRINT] ${jsonEncode(data)}');

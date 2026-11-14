@@ -18,16 +18,16 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:mangrove/foundation/image_translation/inpaint.dart';
-import 'package:mangrove/foundation/image_translation/translation_types.dart';
-import 'package:mangrove/foundation/translation_project/block_artifacts.dart';
-import 'package:mangrove/foundation/translation_project/context_repair.dart';
-import 'package:mangrove/foundation/translation_project/gray_png.dart';
-import 'package:mangrove/foundation/translation_project/inpaint_model.dart';
-import 'package:mangrove/foundation/translation_project/mask_producer.dart';
-import 'package:mangrove/foundation/translation_project/polygon_mask.dart';
-import 'package:mangrove/foundation/translation_project/studio_block_ops.dart';
-import 'package:mangrove/foundation/translation_project/text_block.dart';
+import 'package:mangrove/foundation/translation/engine/inpaint.dart';
+import 'package:mangrove/foundation/translation/engine/translation_types.dart';
+import 'package:mangrove/foundation/translation/studio/block_artifacts.dart';
+import 'package:mangrove/foundation/translation/studio/context_repair.dart';
+import 'package:mangrove/foundation/translation/studio/gray_png.dart';
+import 'package:mangrove/foundation/translation/studio/inpaint_model.dart';
+import 'package:mangrove/foundation/translation/studio/mask_producer.dart';
+import 'package:mangrove/foundation/translation/studio/polygon_mask.dart';
+import 'package:mangrove/foundation/translation/studio/studio_block_ops.dart';
+import 'package:mangrove/foundation/translation/studio/text_block.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink, tlLiteralKeys;
 
 /// 一张纯色 RGBA 图。像素值按行给出，便于构造"白底 + 黑块"这类最小夹具。
@@ -239,11 +239,11 @@ double _maskCoverage(Uint8List mask, int w, IntRect r) {
 const _panelPath = 'lib/pages/translation_studio/studio_block_panel.dart';
 const _studioPath = 'lib/pages/translation_studio/studio_page.dart';
 const _pipelinePath =
-    'lib/foundation/image_translation/translation_pipeline.dart';
+    'lib/foundation/translation/engine/translation_pipeline.dart';
 const _rendererPath =
-    'lib/foundation/translation_project/result_renderer.dart';
+    'lib/foundation/translation/studio/result_renderer.dart';
 const _studioPipelinePath =
-    'lib/foundation/translation_project/studio_pipeline.dart';
+    'lib/foundation/translation/studio/studio_pipeline.dart';
 const _tablePath = 'assets/translation.json';
 
 Future<void> runP7Checks(
@@ -1247,9 +1247,9 @@ Future<void> runP7Checks(
     // 需要渲染表面）。纯 Dart 是它能被断言钉住的前提。
     () async {
       return !importsUi(packageRoot,
-              'lib/foundation/translation_project/gray_png.dart') &&
+              'lib/foundation/translation/studio/gray_png.dart') &&
           !importsUi(packageRoot,
-              'lib/foundation/translation_project/mask_producer.dart');
+              'lib/foundation/translation/studio/mask_producer.dart');
     },
     () async {
       // 🔴 同一个判据喂给渲染器：它**真的** import 了 `dart:ui`，
@@ -1980,7 +1980,7 @@ Future<void> runP7Checks(
     () async {
       // 故障：入口不判"模型缺失"（直接把 null 会话交给推理）⇒ 修复按钮抛错。
       return !codeHas(
-        'lib/foundation/translation_project/inpaint_model.dart',
+        'lib/foundation/translation/studio/inpaint_model.dart',
         'if (!isInstalled) return null;',
       );
     },
@@ -2004,7 +2004,7 @@ Future<void> runP7Checks(
       // 生产代码必须**真的调用**这个函数（填与读各一次以上），否则断言只
       // 测了一个没人用的工具函数。
       final src =
-          code('lib/foundation/translation_project/inpaint_model.dart');
+          code('lib/foundation/translation/studio/inpaint_model.dart');
       final used = 'inpaintImageIndex('.allMatches(src).length;
       return chwOk && used >= 5;
     },
@@ -2204,7 +2204,7 @@ Future<void> runP7Checks(
           !src.contains('class _WorkerClient') ||
           !src.contains('_lamaWorkerMain');
       final modelSrc =
-          code('lib/foundation/translation_project/inpaint_model.dart');
+          code('lib/foundation/translation/studio/inpaint_model.dart');
       if (!InpaintModel.isInstalled) {
         // 本机已装，这条分支不会走；没装时只验静态判据。
         return !perCallOpen(modelSrc);

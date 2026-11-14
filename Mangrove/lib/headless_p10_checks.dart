@@ -19,10 +19,10 @@ library;
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:mangrove/foundation/image_translation/balloon_clustering.dart'
+import 'package:mangrove/foundation/translation/engine/balloon_clustering.dart'
     show ReadingDirection;
-import 'package:mangrove/foundation/translation_project/page_size_probe.dart';
-import 'package:mangrove/foundation/translation_project/thumb_rail.dart';
+import 'package:mangrove/foundation/translation/studio/page_size_probe.dart';
+import 'package:mangrove/foundation/translation/studio/thumb_rail.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 
 const _studioPath = 'lib/pages/translation_studio/studio_page.dart';

@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'package:mangrove/components/text_block_canvas.dart';
-import 'package:mangrove/foundation/translation_project/project.dart';
+import 'package:mangrove/foundation/translation/studio/project.dart';
 import 'package:mangrove/utils/translations.dart';
 
 /// Continuous read-through preview of a whole project (P6 S7, step 6).

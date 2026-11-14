@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangrove/foundation/comic_type.dart';
-import 'package:mangrove/foundation/image_translation/pre_translation_tasks.dart';
-import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import '../lib/foundation/translation/studio/pre_translation_tasks.dart';
+import 'package:mangrove/foundation/translation/engine/translation_types.dart';
 
 PreTranslationTask taskWith(List<PreTranslationChapter> chapters) {
   return PreTranslationTask(

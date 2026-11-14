@@ -27,18 +27,18 @@ library;
 
 import 'dart:io';
 
-import 'package:mangrove/foundation/translation_project/studio_reader.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 
 const _readerImagesPath = 'lib/pages/reader/images.dart';
 const _readerImageProviderPath =
     'lib/foundation/image_provider/reader_image.dart';
-const _decisionPath = 'lib/foundation/translation_project/studio_reader.dart';
-const _appPath = 'lib/foundation/translation_project/studio_reader_app.dart';
-const _enqueuePath = 'lib/foundation/translation_project/studio_enqueue.dart';
+const _decisionPath = 'lib/foundation/translation/studio/studio_reader.dart';
+const _appPath = 'lib/foundation/translation/studio/studio_reader_app.dart';
+const _enqueuePath = 'lib/foundation/translation/studio/studio_enqueue.dart';
 const _readerSettingsPath = 'lib/pages/settings/reader.dart';
 const _tasksPath =
-    'lib/foundation/image_translation/pre_translation_tasks.dart';
+    'lib/foundation/translation/studio/pre_translation_tasks.dart';
 const _tasksPagePath = 'lib/pages/tasks_page.dart';
 const _toolPath = 'lib/headless_pipeline_check.dart';
 const _initPath = 'lib/init.dart';
@@ -526,7 +526,7 @@ void runP8Checks(
     // 故障路径 = 框架直接 import 并调用工作室的整章循环。
     () => _taskFrameworkStaysOutOfTheStudioEngine(
       'studioRunner;\n'
-      "import 'package:mangrove/foundation/translation_project/"
+      "import 'package:mangrove/foundation/translation/studio/"
       "studio_chapter_runner.dart';\n"
       'await StudioChapterRunner.run(project: p, pageKeys: k, options: o);',
     ),
@@ -578,18 +578,16 @@ void runP8Checks(
   );
 
   probe(
-    'reader_image_path_never_asks_the_engine_whether_a_page_is_translated',
-    // 🔴 V4 的断言锁：源码里 `ImageTranslationService.instance.isTranslated(`
-    // 的调用点必须归零。留着它 = 旧内联链路还在被触发，只是走不到而已。
-    () =>
-        !_engineCallSites(packageRoot, 'isTranslated(').any(
-          (site) => site.startsWith('lib/pages/') ||
-              site.startsWith('lib/foundation/image_provider/'),
-        ),
-    // 🔴 对照组：**引擎文件自己**必须有这个方法体（否则上面的"归零"可能只是
-    // 扫描器坏了 —— 空结果判 FAIL）。喂进去之后判据必须为 false。
-    () => _engineCallSites(packageRoot, 'isTranslated(').isEmpty,
-    () => '绿=阅读路径与图片 provider 里一处都没有 / 故障=全仓都空（扫描器坏了）',
+    'reader_path_never_asks_the_legacy_engine',
+    // 🔴 旧引擎（`ImageTranslationService`）已随旧链路**整体删除**，所以判据
+    // 从"没有它的调用点"收紧成"没有任何一处提到它"：页面与图片 provider 只要
+    // 再出现这个名字，就意味着有人把读时翻译那条路接回来了。
+    () => !_anyCodeMentionsLegacyEngine(packageRoot),
+    // 故障路径 = 把一段**旧调用**喂给同一个判据（它确实提到旧引擎）。
+    () => !_mentionsLegacyEngine(
+      'translationKey = ImageTranslationService.cacheKeyFor(a, b, c, d);',
+    ),
+    () => '绿=阅读路径与图片 provider 里一处都不提旧引擎 / 故障=旧写法片段被判出',
   );
 
   probe(
@@ -888,6 +886,37 @@ List<String> _engineCallSites(Directory packageRoot, String needle) {
     hits.add(rel);
   }
   return hits;
+}
+
+/// 这段源码是不是还在提旧引擎（`ImageTranslationService`）。
+///
+/// 旧引擎文件删除后，`_engineCallSites(..., 'ImageTranslationService')` 在
+/// 干净仓库里必然为空 —— 拿"全仓为空"当故障路径会变成恒真的装饰品，所以
+/// 故障路径改喂一段**字面**的旧调用。
+bool _mentionsLegacyEngine(String source) =>
+    source.contains('ImageTranslationService');
+
+/// 页面层 / 图片 provider 层的**代码**（剥掉注释）里还有没有旧引擎的名字。
+///
+/// 🔴 必须剥注释：文件头解释"旧引擎已删除，不要接回来"是**正当**的说明，
+/// 把它判成越界等于逼人删注释。
+bool _anyCodeMentionsLegacyEngine(Directory packageRoot) {
+  for (final rel in const [
+    'lib/pages',
+    'lib/foundation/image_provider',
+  ]) {
+    final dir = Directory('${packageRoot.path}/$rel');
+    if (!dir.existsSync()) continue;
+    for (final entity in dir.listSync(recursive: true)) {
+      if (entity is! File || !entity.path.endsWith('.dart')) continue;
+      final source = entity
+          .readAsStringSync()
+          .replaceAll(RegExp(r'//.*$', multiLine: true), '')
+          .replaceAll(RegExp(r'/\*[\s\S]*?\*/'), '');
+      if (_mentionsLegacyEngine(source)) return true;
+    }
+  }
+  return false;
 }
 
 /// 阅读器入口是不是"按绑定取工程"（判据即断言里那三个合取项）。

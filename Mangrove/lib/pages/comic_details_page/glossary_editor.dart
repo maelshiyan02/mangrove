@@ -3,7 +3,7 @@ import 'package:mangrove/components/components.dart';
 // `context.pop` / `context.showMessage` / `context.colorScheme` / `ts` 全从这里
 // 来（原本也在，删掉它编辑器就编译不过）。
 import 'package:mangrove/foundation/app.dart';
-import 'package:mangrove/foundation/translation_project/glossary_backend.dart';
+import 'package:mangrove/foundation/translation/studio/glossary_backend.dart';
 import 'package:mangrove/utils/translations.dart';
 
 /// Per-comic glossary editor: lists the name/proper-noun translations the

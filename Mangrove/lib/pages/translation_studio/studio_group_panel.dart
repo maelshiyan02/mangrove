@@ -14,8 +14,8 @@ library;
 
 import 'package:flutter/material.dart';
 
-import 'package:mangrove/foundation/translation_project/block_group.dart';
-import 'package:mangrove/foundation/translation_project/group_translate.dart';
+import 'package:mangrove/foundation/translation/studio/block_group.dart';
+import 'package:mangrove/foundation/translation/studio/group_translate.dart';
 import 'package:mangrove/foundation/widget_utils.dart';
 import 'package:mangrove/utils/translations.dart';
 

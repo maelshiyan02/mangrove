@@ -3,10 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:mangrove/foundation/appdata.dart';
-import 'package:mangrove/foundation/image_translation/llm_translator.dart';
-import 'package:mangrove/foundation/image_translation/script_translator.dart';
-import 'package:mangrove/foundation/image_translation/translation_dispatcher.dart';
-import 'package:mangrove/foundation/image_translation/translation_engines.dart';
+import 'package:mangrove/foundation/translation/engine/llm_translator.dart';
+import 'package:mangrove/foundation/translation/engine/script_translator.dart';
+import 'package:mangrove/foundation/translation/engine/translation_dispatcher.dart';
+import 'package:mangrove/foundation/translation/engine/translation_engines.dart';
 import 'package:mangrove/foundation/log.dart';
 
 /// 与 headless.dart 中同签名的收尾打印；本文件自包含，避免循环依赖。

@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'package:mangrove/foundation/bundled_fonts.dart';
 import 'package:mangrove/foundation/system_fonts.dart';
-import 'package:mangrove/foundation/translation_project/text_block.dart';
+import 'package:mangrove/foundation/translation/studio/text_block.dart';
 import 'package:mangrove/foundation/widget_utils.dart';
 import 'package:mangrove/utils/translations.dart';
 

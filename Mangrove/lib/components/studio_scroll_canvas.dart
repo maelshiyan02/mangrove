@@ -8,10 +8,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HardwareKeyboard, KeyEvent;
 
 import 'package:mangrove/foundation/log.dart';
-import 'package:mangrove/foundation/translation_project/cross_page_block.dart'
+import 'package:mangrove/foundation/translation/studio/cross_page_block.dart'
     show SpanPart;
-import 'package:mangrove/foundation/translation_project/strip_decode_planner.dart';
-import 'package:mangrove/foundation/translation_project/strip_geometry.dart';
+import 'package:mangrove/foundation/translation/studio/strip_decode_planner.dart';
+import 'package:mangrove/foundation/translation/studio/strip_geometry.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/translations.dart';
 

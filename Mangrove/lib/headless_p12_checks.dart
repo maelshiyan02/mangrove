@@ -14,14 +14,14 @@ library;
 
 import 'dart:io';
 
-import 'package:mangrove/foundation/image_translation/translation_types.dart'
+import 'package:mangrove/foundation/translation/engine/translation_types.dart'
     show IntRect;
-import 'package:mangrove/foundation/translation_project/block_group.dart';
-import 'package:mangrove/foundation/translation_project/edit_command.dart';
-import 'package:mangrove/foundation/translation_project/group_translate.dart';
-import 'package:mangrove/foundation/translation_project/project.dart';
-import 'package:mangrove/foundation/translation_project/project_io.dart';
-import 'package:mangrove/foundation/translation_project/text_block.dart'
+import 'package:mangrove/foundation/translation/studio/block_group.dart';
+import 'package:mangrove/foundation/translation/studio/edit_command.dart';
+import 'package:mangrove/foundation/translation/studio/group_translate.dart';
+import 'package:mangrove/foundation/translation/studio/project.dart';
+import 'package:mangrove/foundation/translation/studio/project_io.dart';
+import 'package:mangrove/foundation/translation/studio/text_block.dart'
     show TextBlock;
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 

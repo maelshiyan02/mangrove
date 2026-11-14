@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangrove/foundation/appdata.dart';
-import 'package:mangrove/foundation/image_translation/translation_performance_config.dart';
+import 'package:mangrove/foundation/translation/engine/translation_performance_config.dart';
 
 void main() {
   test('unknown and old settings default to balanced', () {

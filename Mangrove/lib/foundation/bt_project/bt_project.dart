@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../image_translation/translation_types.dart';
+import '../translation/engine/translation_types.dart';
 import '../path_roots.dart';
-import '../translation_project/project.dart';
-import '../translation_project/project_io.dart';
+import '../translation/studio/project.dart';
+import '../translation/studio/project_io.dart';
 
 /// Read-only access to one BallonsTranslator project file (imgtrans_*.json).
 ///
@@ -111,7 +111,7 @@ class BtProject {
   /// Pure-Dart parse path, separated from IO so tests can feed fixtures.
   ///
   /// Retained as the reference implementation and as [load]'s fallback; the
-  /// full model in `lib/foundation/translation_project/` is the primary path
+  /// full model in `lib/foundation/translation/studio/` is the primary path
   /// now that the studio needs to read and write the same files.
   static BtProject parse(Map<String, dynamic> json, File jsonFile) {
     final jsonDir = jsonFile.parent.absolute.path.replaceAll('\\', '/');

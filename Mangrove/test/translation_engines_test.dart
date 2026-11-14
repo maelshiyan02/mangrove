@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mangrove/foundation/image_translation/translation_engines.dart';
-import 'package:mangrove/foundation/image_translation/translation_models.dart';
-import 'package:mangrove/foundation/image_translation/translation_worker.dart';
+import 'package:mangrove/foundation/translation/engine/translation_engines.dart';
+import 'package:mangrove/foundation/translation/engine/translation_models.dart';
+import 'package:mangrove/foundation/translation/engine/translation_worker.dart';
 
 void main() {
   group('TranslationEngines registry', () {

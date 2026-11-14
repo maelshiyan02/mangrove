@@ -29,8 +29,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mangrove/foundation/translation_project/glossary_backend.dart';
-import 'package:mangrove/foundation/translation_project/glossary_store.dart';
+import 'package:mangrove/foundation/translation/studio/glossary_backend.dart';
+import 'package:mangrove/foundation/translation/studio/glossary_store.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink, tlLiteralKeys;
 
 /// 一条断言：绿路径 + 故障路径 + 可诊断的 detail。
@@ -68,7 +68,7 @@ class _Fixture {
 
 const _editorPath = 'lib/pages/comic_details_page/glossary_editor.dart';
 const _storeBackendPath =
-    'lib/foundation/translation_project/glossary_backend.dart';
+    'lib/foundation/translation/studio/glossary_backend.dart';
 const _studioPath = 'lib/pages/translation_studio/studio_page.dart';
 const _comicPagePath = 'lib/pages/comic_details_page/comic_page.dart';
 const _actionsPath = 'lib/pages/comic_details_page/actions.dart';

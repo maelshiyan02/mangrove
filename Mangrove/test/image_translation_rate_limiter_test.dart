@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mangrove/foundation/image_translation/rate_limiter.dart';
+import 'package:mangrove/foundation/translation/engine/rate_limiter.dart';
 
 void main() {
   group('classifyStatus', () {

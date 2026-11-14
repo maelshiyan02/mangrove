@@ -26,8 +26,8 @@ library;
 
 import 'dart:io';
 
-import 'package:mangrove/foundation/translation_project/glossary_bridge.dart';
-import 'package:mangrove/foundation/translation_project/glossary_store.dart';
+import 'foundation/translation/engine/glossary_bridge.dart';
+import 'package:mangrove/foundation/translation/studio/glossary_store.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 
 /// 一条断言：绿路径 + 故障路径 + 可诊断的 detail。
@@ -428,11 +428,11 @@ Future<void> runP4Checks(
   probe(
     'wiring.page_run_carries_glossary',
     () async => codeHas(
-      'lib/foundation/translation_project/studio_pipeline.dart',
+      'lib/foundation/translation/studio/studio_pipeline.dart',
       'glossary: outcome.glossary',
     ),
     () async => codeHas(
-      'lib/foundation/translation_project/studio_pipeline.dart',
+      'lib/foundation/translation/studio/studio_pipeline.dart',
       'glossary: __never_carried__',
     ),
     () => 'StudioPageRun 必须把本页回报的专名带出去',
@@ -441,11 +441,11 @@ Future<void> runP4Checks(
   probe(
     'wiring.dispatcher_bridges_glossary',
     () async => codeHas(
-      'lib/foundation/image_translation/translation_dispatcher.dart',
+      'lib/foundation/translation/engine/translation_dispatcher.dart',
       'GlossaryBridge.protect',
     ),
     () async => codeHas(
-      'lib/foundation/image_translation/translation_dispatcher.dart',
+      'lib/foundation/translation/engine/translation_dispatcher.dart',
       'GlossaryBridge.__never__',
     ),
     () => '不吃术语表的引擎必须走桥接',
@@ -454,11 +454,11 @@ Future<void> runP4Checks(
   probe(
     'wiring.dispatcher_routes_public_free',
     () async => codeHas(
-      'lib/foundation/image_translation/translation_dispatcher.dart',
+      'lib/foundation/translation/engine/translation_dispatcher.dart',
       'activeIsPublicFree',
     ),
     () async => codeHas(
-      'lib/foundation/image_translation/translation_dispatcher.dart',
+      'lib/foundation/translation/engine/translation_dispatcher.dart',
       '__never_checked_public__',
     ),
     () => '免 Key 公共端点同样没有术语表通道，必须和本地 NMT 一起走桥接',

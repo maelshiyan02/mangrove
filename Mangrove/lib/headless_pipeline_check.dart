@@ -55,12 +55,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
-import 'package:mangrove/foundation/image_translation/balloon_clustering.dart';
-import 'package:mangrove/foundation/image_translation/translation_config.dart';
-import 'package:mangrove/foundation/translation_project/project.dart';
-import 'package:mangrove/foundation/translation_project/project_io.dart';
-import 'package:mangrove/foundation/translation_project/studio_chapter_runner.dart';
-import 'package:mangrove/foundation/translation_project/studio_pipeline.dart';
+import 'package:mangrove/foundation/translation/engine/balloon_clustering.dart';
+import 'package:mangrove/foundation/translation/engine/translation_config.dart';
+import 'package:mangrove/foundation/translation/studio/project.dart';
+import 'package:mangrove/foundation/translation/studio/project_io.dart';
+import 'package:mangrove/foundation/translation/studio/studio_chapter_runner.dart';
+import 'package:mangrove/foundation/translation/studio/studio_pipeline.dart';
 
 void _cli(Map<String, dynamic> data) =>
     print('[CLI PRINT] ${jsonEncode(data)}');

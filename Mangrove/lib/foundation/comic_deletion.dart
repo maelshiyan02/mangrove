@@ -38,7 +38,7 @@ import 'dart:io';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/comic_card_kind.dart';
 import 'package:mangrove/foundation/local.dart';
-import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader_app.dart';
 import 'package:path/path.dart' as p;
 
 /// 一次删除的范围 —— 就是弹窗里那个勾选框的两种状态。

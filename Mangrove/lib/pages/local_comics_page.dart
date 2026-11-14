@@ -25,9 +25,9 @@ import 'package:mangrove/pages/favorites/favorites_page.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/translations.dart';
 import 'package:mangrove/pages/home_page.dart';
-import 'package:mangrove/foundation/translation_project/finished_export.dart';
-import 'package:mangrove/foundation/translation_project/project.dart';
-import 'package:mangrove/foundation/translation_project/studio_project_meta.dart';
+import 'package:mangrove/foundation/translation/studio/finished_export.dart';
+import 'package:mangrove/foundation/translation/studio/project.dart';
+import 'package:mangrove/foundation/translation/studio/studio_project_meta.dart';
 import 'package:mangrove/pages/translation_studio/studio_project_menu.dart';
 
 /// Short remaining-time text for the download progress label, e.g. "45s",

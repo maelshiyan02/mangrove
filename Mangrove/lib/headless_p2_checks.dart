@@ -19,7 +19,7 @@ import 'dart:ui' show Offset, Rect;
 
 import 'package:mangrove/components/block_resize_geometry.dart';
 import 'package:mangrove/foundation/bundled_fonts.dart';
-import 'package:mangrove/foundation/translation_project/studio_pipeline.dart';
+import 'package:mangrove/foundation/translation/studio/studio_pipeline.dart';
 
 import 'headless_p1_checks.dart' show CheckSink;
 
@@ -269,7 +269,7 @@ void _koreanFontChecks(CheckSink check, Directory root) {
   // 13) 两条渲染路径都必须真的**接线**到那条链。两条路径不共享代码（P9.4 §6），
   //     所以只接一条 = 预览与成品在韩文上不一致 —— 静默的。
   final wiring = <String, String>{
-    'lib/foundation/image_translation/page_renderer.dart': 'product renderer',
+    'lib/foundation/translation/engine/page_renderer.dart': 'product renderer',
     'lib/components/text_block_canvas.dart': 'studio canvas',
   };
   final unwired = <String>[];

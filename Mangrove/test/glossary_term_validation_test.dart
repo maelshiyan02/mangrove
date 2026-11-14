@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mangrove/foundation/image_translation/llm_translator.dart';
+import 'package:mangrove/foundation/translation/engine/llm_translator.dart';
 
 /// Guards the glossary hygiene rule: the per-comic glossary is sent with every
 /// LLM request, so it must only ever hold short proper nouns. These cases pin

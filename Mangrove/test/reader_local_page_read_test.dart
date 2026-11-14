@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangrove/foundation/image_provider/base_image_provider.dart';
 import 'package:mangrove/foundation/image_provider/reader_image.dart';
-import 'package:mangrove/foundation/translation_project/studio_reader.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader.dart';
 import 'package:mangrove/utils/io.dart';
 import 'package:mangrove/utils/translations.dart';
 

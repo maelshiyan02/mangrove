@@ -31,21 +31,21 @@ import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/comic_card_kind.dart';
 import 'package:mangrove/foundation/comic_deletion.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
-import 'package:mangrove/foundation/image_translation/font_fit.dart';
-import 'package:mangrove/foundation/translation_project/chapter_translation_state.dart';
-import 'package:mangrove/foundation/translation_project/studio_project_entry.dart';
-import 'package:mangrove/foundation/translation_project/studio_reader.dart';
+import 'package:mangrove/foundation/translation/engine/font_fit.dart';
+import 'package:mangrove/foundation/translation/studio/chapter_translation_state.dart';
+import 'package:mangrove/foundation/translation/studio/studio_project_entry.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 
 const _entryPath =
-    'lib/foundation/translation_project/studio_project_entry.dart';
+    'lib/foundation/translation/studio/studio_project_entry.dart';
 const _menuPath = 'lib/pages/translation_studio/studio_project_menu.dart';
 const _studioPagePath = 'lib/pages/translation_studio/studio_page.dart';
 const _launcherPath = 'lib/pages/translated_comics_page.dart';
 const _readerAppPath =
-    'lib/foundation/translation_project/studio_reader_app.dart';
+    'lib/foundation/translation/studio/studio_reader_app.dart';
 const _bootstrapPath =
-    'lib/foundation/translation_project/project_bootstrap.dart';
+    'lib/foundation/translation/studio/project_bootstrap.dart';
 const _btManagerPath = 'lib/foundation/bt_project/bt_project_manager.dart';
 const _homePagePath = 'lib/pages/home_page.dart';
 const _localComicsPath = 'lib/pages/local_comics_page.dart';
@@ -815,6 +815,34 @@ void runP9Checks(CheckSink check, {required Directory packageRoot}) {
     () => '绿=徽标=成品页数(90) / 故障=有绑定就算的版本在 0 页上显示 1 页',
   );
 
+  // ── 翻译模块分层：engine 不认识 studio ────────────────────────────────
+  //
+  // 🔴 2026-11 归并目录时立的规矩：`foundation/translation/engine/` 是
+  // **可独立复用的基元层**（OCR/翻译引擎/渲染/排版），`studio/` 才是工程与
+  // 页面流程。依赖只能单向 studio → engine。
+  //
+  // 一旦 engine 反过来 import studio（哪怕只有一行 file_export 之类），
+  // 任何"只想用引擎"的调用方都会被拖上一整套工程依赖 —— 而这类越界在
+  // 代码评审里几乎看不见（import 排版一样、编译也一定过）。
+
+  probe(
+    'translation.layers_point_one_way',
+    // 判据：engine 目录里没有任何文件引用 studio 或 pages。
+    () => _layerIsFreeOf(
+      packageRoot,
+      'engine',
+      const ['translation/studio', '/pages/'],
+    ),
+    // 故障路径 = **对照组**：studio 层确实 import 了 engine ⇒ 同一判据为
+    // false，说明这个扫描看得见东西，不是恒真。
+    () => _layerIsFreeOf(
+      packageRoot,
+      'studio',
+      const ['translation/engine'],
+    ),
+    () => '绿=engine 不引用 studio/pages / 故障=对照组（studio 引用 engine）⇒ 判据非恒真',
+  );
+
   // ── 跑 ──────────────────────────────────────────────────────────────
 
   for (final item in probes) {
@@ -1064,10 +1092,15 @@ bool _planDelegatesToScanNames(String source) {
   return slice.contains('scanPageNames(');
 }
 
-/// 页面是不是挂了共享的 `StudioProjectMenu`（而不是手搭一个菜单）。
+/// 页面是不是挂了共享的 `StudioProjectMenu`。
+///
+/// 🔴 2026-11 删掉了原来那条"且没有任何 `PopupMenuButton<String>(`"的反向
+/// 子句：工作室页面里**章节行**自带 `PopupMenuButton<String>`（逐章操作），
+/// 与"顶栏用哪一个菜单组件"毫无关系。那条子句把一次合法的功能演进判成
+/// 违规 —— 闸门把人逼向错的改法，比漏判更糟。真正要钉的只有一件事：
+/// 顶栏动作挂的是**共享组件**，不是各页面自己手搭一份。
 bool _mountsSharedMenu(String source) =>
-    source.contains('StudioProjectMenu()') &&
-    !RegExp(r'PopupMenuButton<\s*String\s*>\(').hasMatch(source);
+    source.contains('StudioProjectMenu()');
 
 /// 这段源码是不是**只**经 `StudioReaderLink` 建工程（不自己调 bootstrap）。
 bool _usesReaderLink(String source) =>
@@ -1482,4 +1515,32 @@ String _badgeActual(_BadgeCount badge) {
   return 'badge(90)=${badge(90)}; '
       'badge(0)=${badge(0)}; '
       'tab(90)=${isTranslatedTab(studioProductPages: 90)}';
+}
+
+/// [layer] 目录下**没有任何**文件（去掉注释后）包含 [forbidden] 里的任一片段。
+///
+/// 🔴 先剥注释再判：文件头的注释里写"本层不要 import ../studio"是**正当**的
+/// 约束说明，把它算成越界会让这条门禁逼着人删注释 —— 那正是 `A02` 说的
+/// "断言把人往错的方向推"。空目录/不存在的目录一律返回 false（不能因为
+/// 目录被误删就静默变绿）。
+bool _layerIsFreeOf(
+  Directory packageRoot,
+  String layer,
+  List<String> forbidden,
+) {
+  final dir = Directory('${packageRoot.path}/lib/foundation/translation/$layer');
+  if (!dir.existsSync()) return false;
+  var seen = 0;
+  for (final entity in dir.listSync()) {
+    if (entity is! File || !entity.path.endsWith('.dart')) continue;
+    seen++;
+    final source = entity
+        .readAsStringSync()
+        .replaceAll(RegExp(r'//.*$', multiLine: true), '')
+        .replaceAll(RegExp(r'/\*[\s\S]*?\*/'), '');
+    for (final needle in forbidden) {
+      if (source.contains(needle)) return false;
+    }
+  }
+  return seen > 0;
 }

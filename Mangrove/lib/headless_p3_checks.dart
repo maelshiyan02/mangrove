@@ -21,13 +21,13 @@ library;
 
 import 'dart:io';
 
-import 'package:mangrove/foundation/image_translation/translation_types.dart';
-import 'package:mangrove/foundation/translation_project/artifact_reconciliation.dart';
-import 'package:mangrove/foundation/translation_project/project.dart';
-import 'package:mangrove/foundation/translation_project/project_bootstrap.dart';
-import 'package:mangrove/foundation/translation_project/project_io.dart';
-import 'package:mangrove/foundation/translation_project/studio_project_meta.dart';
-import 'package:mangrove/foundation/translation_project/text_block.dart';
+import 'package:mangrove/foundation/translation/engine/translation_types.dart';
+import 'package:mangrove/foundation/translation/studio/artifact_reconciliation.dart';
+import 'package:mangrove/foundation/translation/studio/project.dart';
+import 'package:mangrove/foundation/translation/studio/project_bootstrap.dart';
+import 'package:mangrove/foundation/translation/studio/project_io.dart';
+import 'package:mangrove/foundation/translation/studio/studio_project_meta.dart';
+import 'package:mangrove/foundation/translation/studio/text_block.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink;
 
 /// FT 写工程 JSON 的顶层键序。建出来的工程必须长这个样子，否则「存一次」

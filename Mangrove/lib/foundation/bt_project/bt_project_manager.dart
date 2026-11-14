@@ -8,8 +8,8 @@ import 'package:flutter/painting.dart';
 import '../appdata.dart';
 import '../comic_source/comic_source.dart' show ComicChapters;
 import '../comic_type.dart';
-import '../image_translation/page_renderer.dart';
-import '../image_translation/translation_types.dart';
+import '../translation/engine/page_renderer.dart';
+import '../translation/engine/translation_types.dart';
 import '../local.dart';
 import '../log.dart';
 import '../path_roots.dart';
@@ -17,11 +17,11 @@ import '../../utils/file_type.dart';
 import '../../utils/io.dart';
 import '../chapter_title_parser.dart';
 import 'bt_project.dart';
-import '../translation_project/artifact_reconciliation.dart';
-import '../translation_project/project.dart';
-import '../translation_project/project_bootstrap.dart';
-import '../translation_project/project_io.dart';
-import '../translation_project/studio_project_meta.dart';
+import '../translation/studio/artifact_reconciliation.dart';
+import '../translation/studio/project.dart';
+import '../translation/studio/project_bootstrap.dart';
+import '../translation/studio/project_io.dart';
+import '../translation/studio/studio_project_meta.dart';
 
 /// Registers BallonsTranslator projects as read-only local comics.
 ///

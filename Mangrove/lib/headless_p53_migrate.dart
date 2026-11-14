@@ -48,12 +48,12 @@ import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
-import 'package:mangrove/foundation/translation_project/project.dart';
-import 'package:mangrove/foundation/translation_project/project_bootstrap.dart';
-import 'package:mangrove/foundation/translation_project/project_io.dart';
-import 'package:mangrove/foundation/translation_project/studio_project_meta.dart';
-import 'package:mangrove/foundation/translation_project/studio_reader.dart';
-import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
+import 'package:mangrove/foundation/translation/studio/project.dart';
+import 'package:mangrove/foundation/translation/studio/project_bootstrap.dart';
+import 'package:mangrove/foundation/translation/studio/project_io.dart';
+import 'package:mangrove/foundation/translation/studio/studio_project_meta.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader_app.dart';
 
 /// 与 `headless.dart` 的 `cliPrint` 同格式的进度输出。
 ///

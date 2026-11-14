@@ -15,7 +15,7 @@
 // `edit-check` 直接检查出来；而 `pages/settings/reader.dart` 不在白名单里。
 library;
 
-import 'package:mangrove/foundation/translation_project/studio_enqueue.dart';
+import 'package:mangrove/foundation/translation/studio/studio_enqueue.dart';
 import 'package:mangrove/utils/translations.dart';
 
 /// 一条入队结果对应的提示语。

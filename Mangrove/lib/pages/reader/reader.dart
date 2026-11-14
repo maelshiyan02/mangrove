@@ -35,7 +35,7 @@ import 'package:mangrove/foundation/history.dart';
 import 'package:mangrove/foundation/image_enhance_shader.dart';
 import 'package:mangrove/foundation/image_provider/cached_image.dart';
 import 'package:mangrove/foundation/image_provider/reader_image.dart';
-import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
+import 'package:mangrove/foundation/translation/studio/studio_reader_app.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/missing_pages.dart';

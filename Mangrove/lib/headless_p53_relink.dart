@@ -27,8 +27,8 @@ import 'dart:io';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
-import 'package:mangrove/foundation/translation_project/project_bootstrap.dart';
-import 'package:mangrove/foundation/translation_project/studio_project_meta.dart';
+import 'package:mangrove/foundation/translation/studio/project_bootstrap.dart';
+import 'package:mangrove/foundation/translation/studio/studio_project_meta.dart';
 
 void _print(Map<String, dynamic> data) {
   print('[CLI PRINT] ${jsonEncode(data)}');

@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangrove/foundation/appdata.dart';
-import 'package:mangrove/foundation/image_translation/translation_config.dart';
-import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import 'package:mangrove/foundation/translation/engine/translation_config.dart';
+import 'package:mangrove/foundation/translation/engine/translation_types.dart';
 
 // The AI-translation language pair and text-removal mode are per-comic (#178).
 // They used to be written straight to the global settings keys even while

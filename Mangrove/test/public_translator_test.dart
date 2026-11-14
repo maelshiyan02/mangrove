@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mangrove/foundation/image_translation/llm_translator.dart';
-import 'package:mangrove/foundation/image_translation/public_translator.dart';
+import 'package:mangrove/foundation/translation/engine/llm_translator.dart';
+import 'package:mangrove/foundation/translation/engine/public_translator.dart';
 
 /// The keyless engine returns one translation per input line, and the render
 /// stage maps them onto bubbles by position. A response that is short, long or

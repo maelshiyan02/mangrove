@@ -5,7 +5,7 @@ import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/background_keepalive.dart';
 import 'package:mangrove/foundation/comic_type.dart';
-import 'package:mangrove/foundation/image_translation/translated_export.dart';
+import 'translation/studio/translated_export.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/utils/cbz.dart';

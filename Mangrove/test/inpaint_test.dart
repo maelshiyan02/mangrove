@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mangrove/foundation/image_translation/inpaint.dart';
-import 'package:mangrove/foundation/image_translation/translation_types.dart';
+import 'package:mangrove/foundation/translation/engine/inpaint.dart';
+import 'package:mangrove/foundation/translation/engine/translation_types.dart';
 
 /// Builds a solid-colour RGBA page.
 RgbaImage _solid(int w, int h, int r, int g, int b) {

@@ -27,8 +27,8 @@ import 'dart:io';
 // `ReadingDirection` 住在 `balloon_clustering.dart`，而 `run_plan.dart` 只是
 // **import** 它、没有 export ⇒ 这里必须显式 import，否则报的错读起来像
 // "拼错了枚举名"。
-import 'package:mangrove/foundation/image_translation/balloon_clustering.dart';
-import 'package:mangrove/foundation/translation_project/run_plan.dart';
+import 'package:mangrove/foundation/translation/engine/balloon_clustering.dart';
+import 'package:mangrove/foundation/translation/studio/run_plan.dart';
 import 'package:mangrove/headless_p1_checks.dart' show CheckSink, tlLiteralKeys;
 
 /// 一条断言：绿路径 + 故障路径 + 可诊断的 detail。
