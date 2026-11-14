@@ -22,7 +22,6 @@ import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/cache_manager.dart';
 import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/chapter_download_status.dart';
-import 'package:mangrove/foundation/download_manager_store.dart';
 import 'package:mangrove/foundation/chapter_title_parser.dart';
 import 'package:mangrove/foundation/chapter_duplicates.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
@@ -36,9 +35,6 @@ import 'package:mangrove/foundation/history.dart';
 import 'package:mangrove/foundation/image_enhance_shader.dart';
 import 'package:mangrove/foundation/image_provider/cached_image.dart';
 import 'package:mangrove/foundation/image_provider/reader_image.dart';
-import 'package:mangrove/foundation/image_translation/translation_config.dart';
-import 'package:mangrove/foundation/image_translation/translation_service.dart';
-import 'package:mangrove/foundation/image_translation/translation_types.dart';
 import 'package:mangrove/foundation/translation_project/studio_reader_app.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/log.dart';
@@ -336,31 +332,7 @@ class _ReaderState extends State<Reader>
         ReadLaterManager().remove(cid, type);
       }
     });
-    ImageTranslationService.instance.addListener(_onPageTranslated);
     super.initState();
-  }
-
-  /// When on, the reader shows original (untranslated) images even though
-  /// translation is enabled — a temporary, session-only toggle so the reader
-  /// can check the source art without turning translation off in settings.
-  bool showOriginalPages = false;
-
-  void toggleShowOriginalPages() {
-    showOriginalPages = !showOriginalPages;
-    // The provider key embeds the translation flag, so switching produces new
-    // providers; clear the live image cache so the toggled variant is shown
-    // immediately instead of a stale cached frame.
-    PaintingBinding.instance.imageCache.clear();
-    PaintingBinding.instance.imageCache.clearLiveImages();
-    if (mounted) setState(() {});
-  }
-
-  /// A background page translation finished: rebuild so the affected page's
-  /// provider identity changes and the translated image swaps in.
-  void _onPageTranslated() {
-    if (mounted) {
-      setState(() {});
-    }
   }
 
   bool _isInitialized = false;
@@ -424,8 +396,6 @@ class _ReaderState extends State<Reader>
     autoPageTurningTimer?.cancel();
     autoScrollTimer?.cancel();
     focusNode.dispose();
-    ImageTranslationService.instance.removeListener(_onPageTranslated);
-    ImageTranslationService.instance.clearQueue();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     stopVolumeEvent();
     Future.microtask(() {

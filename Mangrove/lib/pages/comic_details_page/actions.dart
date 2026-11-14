@@ -355,40 +355,6 @@ abstract mixin class _ComicPageActions {
     );
   }
 
-  /// Clears every translation (both stored text and rendered images) and the
-  /// learned glossary for this comic, so subsequent reading / pre-translation is
-  /// produced fresh. Reached by long-pressing the pre-translate button; used
-  /// when translations came out wrong and need to be redone.
-  void reTranslate() {
-    showConfirmDialog(
-      context: App.rootContext,
-      title: "Re-translate this comic?".tl,
-      content:
-          "This clears all translations and the learned glossary for this comic, then translates again."
-              .tl,
-      onConfirm: () async {
-        await ImageTranslationService.instance.retranslate(
-          comic.id,
-          comic.sourceKey,
-        );
-        // This comic's status is stale now; drop its ticks too.
-        PreTranslationTaskManager.instance.resetComicStatus(
-          comic.id,
-          comic.sourceKey,
-        );
-        App.rootContext.showMessage(message: "Translation results cleared".tl);
-        // Offer to pre-translate again right away; the user can also just
-        // reopen the reader, which translates on demand.
-        if (ImageTranslationService.isReadyForComic(
-          comic.id,
-          comic.sourceKey,
-        )) {
-          preTranslate();
-        }
-      },
-    );
-  }
-
   /// read the comic
   ///
   /// [ep] the episode number, start from 1
@@ -935,7 +901,7 @@ abstract mixin class _ComicPageActions {
     final cid = comic.id;
     final sourceKey = comic.sourceKey;
     if (BtProjectManager.isBtComic(cid)) {
-      return ImageTranslationService.isEnabledForComic(cid, sourceKey);
+      return BtTranslationSwitch.isEnabled(cid, sourceKey);
     }
     final local = LocalManager().find(cid, comic.comicType);
     if (local == null || local.downloadedChapters.isEmpty) return false;
@@ -957,8 +923,7 @@ abstract mixin class _ComicPageActions {
     final cid = comic.id;
     final sourceKey = comic.sourceKey;
     if (BtProjectManager.isBtComic(cid)) {
-      ImageTranslationService.setEnabledForComic(cid, sourceKey, value);
-      appdata.saveData();
+      BtTranslationSwitch.setEnabled(cid, sourceKey, value);
       update();
       return;
     }
@@ -1041,51 +1006,6 @@ abstract mixin class _ComicPageActions {
         context.showMessage(message: "Failed to set cover".tl);
       }
     }
-  }
-
-  /// Long-press menu on the translate button: the fast path (tap) starts a
-  /// pre-translation, while this exposes the less-common "re-translate" action
-  /// for when cached translations came out wrong.
-  void showTranslationMenu() {
-    var context = App.rootContext;
-    if (!ImageTranslationService.isEnabledForComic(comic.id, comic.sourceKey)) {
-      context.showMessage(
-        message: "Enable AI translation in the reader for this comic first".tl,
-      );
-      return;
-    }
-    // No readiness gate here: the glossary and re-translate entries work
-    // without models, and the pre-translate entry prompts on its own.
-    showMenuX(context, Offset(context.width - 16, context.padding.top), [
-      MenuEntry(
-        icon: Icons.translate_rounded,
-        text: "Pre-translate".tl,
-        onClick: preTranslate,
-      ),
-      MenuEntry(
-        icon: Icons.menu_book_outlined,
-        text: "Glossary".tl,
-        onClick: openGlossary,
-      ),
-      MenuEntry(
-        icon: Icons.refresh_rounded,
-        text: "Re-translate".tl,
-        onClick: reTranslate,
-      ),
-    ]);
-  }
-
-  /// Opens the per-comic glossary editor so the user can view or correct the
-  /// learned name translations that keep proper nouns consistent across pages.
-  void openGlossary() {
-    App.rootContext.to(
-      () => GlossaryEditorPage(
-        backend: ServiceGlossaryBackend(
-          cid: comic.id,
-          sourceKey: comic.sourceKey,
-        ),
-      ),
-    );
   }
 
   void showComments() {

@@ -62,9 +62,10 @@ class _ReaderSettingsState extends State<ReaderSettings> {
     final eid = widget.chapterEid;
     if (cid == null || sourceKey == null) return;
 
-    // BT 工程自己就是产物（`renderBtPage`），不进工作室管线。
+    // BT 工程自己就是产物（`renderBtPage`），不进工作室管线；它的译文开关
+    // 由 [BtTranslationSwitch] 单独持有。
     if (BtProjectManager.isBtComic(cid)) {
-      ImageTranslationService.setEnabledForComic(cid, sourceKey, value);
+      BtTranslationSwitch.setEnabled(cid, sourceKey, value);
       appdata.saveData();
       setState(() {});
       widget.onChanged?.call("enableImageTranslation");
@@ -112,7 +113,7 @@ class _ReaderSettingsState extends State<ReaderSettings> {
     final eid = widget.chapterEid;
     if (cid == null || sourceKey == null) return false;
     if (BtProjectManager.isBtComic(cid)) {
-      return ImageTranslationService.isEnabledForComic(cid, sourceKey);
+      return BtTranslationSwitch.isEnabled(cid, sourceKey);
     }
     if (eid == null) return false;
     return StudioReaderStore.bindingFor(
@@ -1510,35 +1511,6 @@ class _ReaderSettingsState extends State<ReaderSettings> {
         actionTitle: "Manage".tl,
         callback: () => context.to(
           () => TranslationModelsPage(sourceLang: _effectiveSourceLang()),
-        ),
-      ),
-      _CallbackSetting(
-        title: "Clear translation results".tl,
-        subtitle:
-            "Deletes all stored page translations and rendered images. Language and glossary learned per comic are kept."
-                .tl,
-        actionTitle: "Clear".tl,
-        callback: () => showConfirmDialog(
-          context: App.rootContext,
-          title: "Clear translation results".tl,
-          content:
-              "Deletes every stored page translation and rendered image. Translating them again will spend API tokens."
-                  .tl,
-          btnColor: context.colorScheme.error,
-          onConfirm: () async {
-            var removed = await ImageTranslationService.instance
-                .clearAllTranslationCache();
-            PreTranslationTaskManager.instance.clearAllChapterStatus();
-            if (context.mounted) {
-              context.showMessage(
-                message: "Translation results cleared".tl,
-              );
-            }
-            Log.info(
-              'Image Translation',
-              'Cleared $removed translated pages by user',
-            );
-          },
         ),
       ),
     ];

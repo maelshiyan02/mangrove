@@ -12,8 +12,6 @@ import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/domain_database.dart';
 import 'package:mangrove/foundation/favorites.dart';
 import 'package:mangrove/foundation/history.dart';
-import 'package:mangrove/foundation/image_translation/translation_service.dart';
-import 'package:mangrove/foundation/image_translation/translation_store.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/sqlite_connection.dart';
@@ -29,6 +27,17 @@ import 'io.dart';
 /// The extracting phase reports bytes-written-so-far (indeterminate) by
 /// polling the output directory, not a precise percentage.
 enum ImportPhase { preparing, extracting, applying, reloading }
+
+/// 仍要随备份走的**翻译相关** `implicitData` 键。
+///
+/// 旧引擎（`ImageTranslationService`）删除后只剩三条还活着：BT 工程译文开关、
+/// 术语表与屏蔽词（后两者由 `GlossaryStore` 持有，沿用了旧键名）。语言锁
+/// （`imageTranslationComicLangs`）随旧引擎一起下线，不再进备份。
+const _translationPrefKeys = [
+  'imageTranslationEnabledComics',
+  'imageTranslationComicGlossary',
+  'imageTranslationBlockedTerms',
+];
 
 /// Progress callback for [importAppData] / [importPicaData].
 /// [message] is an untranslated English key (the UI localizes it); [extractedBytes]
@@ -311,9 +320,6 @@ Future<File> exportAppData({
     'local_favorite.db',
     'local.db',
     'read_later.db',
-    // Finished per-page translation text (durable, user-cleared). Riding the
-    // backup lets another device render a page without re-paying OCR + LLM.
-    'image_translation.db',
     // Without a checkpoint, logins living in cookie.db's WAL sidecar were
     // silently missing from every backup.
     'cookie.db',
@@ -346,7 +352,7 @@ Future<File> exportAppData({
   Uint8List? translationPrefsBytes;
   {
     final prefs = <String, dynamic>{};
-    for (final key in ImageTranslationService.syncedPrefKeys) {
+    for (final key in _translationPrefKeys) {
       final value = appdata.implicitData[key];
       if (value is Map && value.isNotEmpty) {
         prefs[key] = value;
@@ -381,10 +387,6 @@ Future<File> exportAppData({
         "image_translation_prefs.json",
         translationPrefsBytes,
       );
-    }
-    var translationStoreFile = FilePath.join(dataPath, "image_translation.db");
-    if (File(translationStoreFile).existsSync()) {
-      zipFile.addFile("image_translation.db", translationStoreFile);
     }
     if (File(domainFile).existsSync()) {
       zipFile.addFile("data/mangrove.db", domainFile);
@@ -668,34 +670,23 @@ Future<void> _importAppDataLocked(
       report(ImportPhase.applying, 'Importing local library');
       await LocalManager().restoreFrom(localDbFile.path);
     }
-    // Finished per-page translation text. Unlike the wholesale-replaced stores
-    // above, this MERGES: two devices that translated different chapters keep
-    // both halves, and a shared page keeps the local row (see [mergeFrom]). No
-    // file swap, so it runs on the live handle rather than close-swap-reopen.
-    var translationStoreFile = cacheDir.joinFile("image_translation.db");
-    if (await translationStoreFile.exists()) {
-      report(ImportPhase.applying, 'Importing translations');
-      await TranslationStore().mergeFrom(translationStoreFile.path);
-    }
     });
-    // Per-comic translation preferences (enable switch / language lock /
-    // glossary / blocked terms). They live in implicitData, so they ride the
-    // backup as their own JSON rather than in appdata.json. Applied AFTER the
-    // implicitData.json block above so a foreign backup carrying both can't
-    // clobber these, and wholesale-replaced (newest backup wins, matching the
-    // agreed policy). The service caches these maps lazily, so drop its caches.
+    // Per-comic translation preferences (BT switch / glossary / blocked terms).
+    // They live in implicitData, so they ride the backup as their own JSON
+    // rather than in appdata.json. Applied AFTER the implicitData.json block
+    // above so a foreign backup carrying both can't clobber these, and
+    // wholesale-replaced (newest backup wins, matching the agreed policy).
     var translationPrefsFile = cacheDir.joinFile("image_translation_prefs.json");
     if (await translationPrefsFile.exists()) {
       try {
         var prefs = jsonDecode(await translationPrefsFile.readAsString());
         if (prefs is Map) {
-          for (final key in ImageTranslationService.syncedPrefKeys) {
+          for (final key in _translationPrefKeys) {
             if (prefs[key] is Map) {
               appdata.implicitData[key] = prefs[key];
             }
           }
           appdata.writeImplicitData();
-          ImageTranslationService.instance.reloadSyncedPrefs();
         }
       } catch (e, s) {
         Log.warning('Import Data', 'Failed to import translation prefs: $e\n$s');

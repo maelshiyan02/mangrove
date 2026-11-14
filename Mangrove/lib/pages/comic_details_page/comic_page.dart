@@ -12,6 +12,7 @@ import 'package:mangrove/components/rich_comment_content.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
+import 'package:mangrove/foundation/translation/bt_translation_switch.dart';
 import 'package:mangrove/foundation/chapter_download_status.dart';
 import 'package:mangrove/foundation/chapter_directory.dart';
 import 'package:mangrove/foundation/chapter_duplicates.dart';
@@ -30,8 +31,6 @@ import 'package:mangrove/foundation/image_translation/pre_translation_tasks.dart
 import 'package:mangrove/foundation/image_translation/llm_translator.dart';
 import 'package:mangrove/foundation/image_translation/translation_config.dart';
 import 'package:mangrove/foundation/image_translation/translation_models.dart';
-import 'package:mangrove/foundation/image_translation/translation_service.dart';
-import 'package:mangrove/foundation/image_translation/translation_store.dart';
 import 'package:mangrove/foundation/log.dart';
 import 'package:mangrove/foundation/read_later.dart';
 import 'package:mangrove/foundation/image_provider/cached_image.dart';
@@ -45,9 +44,7 @@ import 'package:mangrove/pages/missing_pages_dialog.dart';
 import 'package:mangrove/network/cache.dart';
 import 'package:mangrove/pages/aggregated_search_page.dart';
 import 'package:mangrove/pages/comic_collection_edit_page.dart';
-import 'package:mangrove/foundation/image_translation/glossary_service_backend.dart';
 import 'package:mangrove/pages/comic_details_page/chapter_order_editor.dart';
-import 'package:mangrove/pages/comic_details_page/glossary_editor.dart';
 import 'package:mangrove/pages/comic_details_page/related_sources_section.dart';
 import 'package:mangrove/pages/favorites/favorites_page.dart';
 import 'package:mangrove/pages/reader/reader.dart';
@@ -358,9 +355,6 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     scrollController.addListener(onScroll);
     ComicCollectionStore.changes.addListener(_onCollectionChanged);
     PreTranslationTaskManager.instance.addListener(update);
-    // The per-comic translation toggle lives in the service; listen so the
-    // pre-translate button appears/disappears the moment it changes.
-    ImageTranslationService.instance.addListener(update);
     super.initState();
   }
 
@@ -369,7 +363,6 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     scrollController.removeListener(onScroll);
     ComicCollectionStore.changes.removeListener(_onCollectionChanged);
     PreTranslationTaskManager.instance.removeListener(update);
-    ImageTranslationService.instance.removeListener(update);
     super.dispose();
   }
 
@@ -1203,13 +1196,6 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
   Future<void> onDataLoaded() async {
     _comicStateRepository.mirrorComicDetails(comic);
     _loadRelatedSources();
-    TranslationStore().updateComicMetadata(
-      comic.sourceKey,
-      comic.comicId,
-      comicTitle: comic.title,
-      comicCover: comic.cover,
-      chapterTitles: comic.chapters?.allChapters ?? const {},
-    );
     isLiked = comic.isLiked ?? false;
     isFavorite = comic.isFavorite ?? false;
     // For sources with multi-folder favorites, prefer querying folders to get accurate favorite status
@@ -1700,51 +1686,6 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
                     icon: const Icon(Icons.chat_bubble_outline_rounded),
                     text: (comic.commentCount ?? 'Comments'.tl).toString(),
                     onPressed: showComments,
-                  ),
-                // Only the per-comic switch gates visibility. Readiness (OCR
-                // models on this device, a configured LLM) deliberately does
-                // not: neither rides the backup, so a comic enabled on one
-                // device showed no button at all on another, with nothing to
-                // tap and no hint why. preTranslate explains and offers to fix.
-                if (ImageTranslationService.isEnabledForComic(
-                  comic.id,
-                  comic.sourceKey,
-                ))
-                  Builder(
-                    builder: (context) {
-                      var manager = PreTranslationTaskManager.instance;
-                      var task = manager.runningTaskFor(
-                        comic.id,
-                        comic.sourceKey,
-                      );
-                      if (task != null) {
-                        // Same live figure the tasks page shows: committed
-                        // counters alone sit still for minutes while a group
-                        // is in flight.
-                        var progress =
-                            manager.activityOf(task.id)?.liveProgress(task) ??
-                            task.progress;
-                        var pct = task.total == 0
-                            ? null
-                            : (progress * 100).clamp(0, 100).toStringAsFixed(0);
-                        return _ActionButton(
-                          icon: const Icon(Icons.translate_rounded),
-                          activeIcon: const Icon(Icons.translate_rounded),
-                          isActive: true,
-                          text: pct == null
-                              ? 'Translating'.tl
-                              : '${'Translating'.tl} $pct%',
-                          onPressed: preTranslate,
-                          onLongPressed: showTranslationMenu,
-                        );
-                      }
-                      return _ActionButton(
-                        icon: const Icon(Icons.translate_rounded),
-                        text: 'Pre-translate'.tl,
-                        onPressed: preTranslate,
-                        onLongPressed: showTranslationMenu,
-                      );
-                    },
                   ),
               ],
             ),
@@ -2863,14 +2804,9 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
 
   /// S9.5-b 追补：每章在**工作室工程**里的成品页数（`eid` → 页数）。
   ///
-  /// 🔴 与 `_translatedChapterIds`（只来自旧 `TranslationStore`）是**并集**
-  /// 关系，不是替代关系 —— 旧库里还躺着 S9.5-b 之前翻的、别处同步来的章，
-  /// 只认工程会让那些章的标记与页签**全部消失**。判据见
-  /// `chapter_translation_state.dart`。
+  /// 旧引擎的 `TranslationStore` 已随旧链路删除，所以这份计数是**唯一**来源。
+  /// 判据见 `chapter_translation_state.dart`。
   Map<String, int> _studioProductPages = const {};
-
-  /// 旧引擎那一侧的成品页数（`eid` → 页数）。
-  Map<String, int> _legacyStoredPages = const {};
 
   /// Entry indices hidden because their title repeats an earlier entry of the
   /// SAME group, and the comic's "hide duplicate chapters" switch is on. Scoping
@@ -2912,11 +2848,10 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
         : null;
     _resetGroupTabController();
     PreTranslationTaskManager.instance.addListener(_onTaskUpdate);
-    TranslationStore().addListener(_onStoreUpdate);
     _loadTranslationState();
   }
 
-  /// 读两侧的成品页数并刷新 UI。
+  /// 读工作室工程的成品页数并刷新 UI。
   ///
   /// 🔴 必须是 **await 后再 setState**，且 `mounted` 要复查：工作室侧要读工程
   /// json（磁盘 IO），一个几十页的工程足以让用户在弹窗打开的瞬间就把它关掉 ——
@@ -2927,29 +2862,14 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
       cid: widget.cid,
       sourceKey: widget.sourceKey,
     );
-    final legacy = <String, int>{};
-    for (final (eid, title) in widget.entries) {
-      final stored = ImageTranslationService.storedPageCount(
-        widget.cid,
-        widget.sourceKey,
-        eid,
-        comicTitle: widget.title,
-        comicCover: widget.cover,
-        chapterTitle: title,
-      );
-      if (stored > 0) legacy[eid] = stored;
-    }
     if (!mounted) return;
-    setState(() {
-      _studioProductPages = studio;
-      _legacyStoredPages = legacy;
-    });
+    setState(() => _studioProductPages = studio);
     // 🔴 页数变了，状态页签的归属也可能变：一条刚翻完的章要从未翻译页**移出**。
     // 不重算的话用户会停在"未翻译"页签里，看着刚翻完的章还在那儿。
     if (_hasStatusTabs) _recomputeTranslatedIds();
   }
 
-  /// 用并集判据重算「已翻译」章集合。
+  /// 用工作室成品页数重算「已翻译」章集合。
   void _recomputeTranslatedIds() {
     setState(() {
       _translatedChapterIds
@@ -2959,7 +2879,6 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
               .where(
                 (e) => isTranslatedTab(
                   studioProductPages: _studioProductPages[e.$1] ?? 0,
-                  legacyStoredPages: _legacyStoredPages[e.$1] ?? 0,
                 ),
               )
               .map((e) => e.$1),
@@ -2978,7 +2897,6 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
       ?..removeListener(_onGroupTabChanged)
       ..dispose();
     PreTranslationTaskManager.instance.removeListener(_onTaskUpdate);
-    TranslationStore().removeListener(_onStoreUpdate);
     super.dispose();
   }
 
@@ -3069,43 +2987,6 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
     if (mounted) setState(() {});
   }
 
-  void _onStoreUpdate() {
-    if (!mounted) return;
-    // 🔴 S9.5-b 追补：旧做法是 `_translatedChapterIds..clear()..addAll(current)`
-    // （`current` 来自 `TranslationStore.chaptersFor`）。那**只覆盖旧引擎**那一侧
-    // —— 工作室翻完的章不在 `TranslationStore` 里 ⇒ `addAll` 会把「已翻译」集合
-    // **收窄**，于是"工作室刚翻完的那一章"的标记与页签归属**被旧库反向清掉**。
-    // 现在只更新 legacy 页数，再走并集判据重算（两侧都算）。
-    final legacy = <String, int>{};
-    for (final (eid, title) in widget.entries) {
-      final stored = ImageTranslationService.storedPageCount(
-        widget.cid,
-        widget.sourceKey,
-        eid,
-        comicTitle: widget.title,
-        comicCover: widget.cover,
-        chapterTitle: title,
-      );
-      if (stored > 0) legacy[eid] = stored;
-    }
-    setState(() => _legacyStoredPages = legacy);
-    _recomputeTranslatedIds();
-  }
-
-  /// Opens the per-comic glossary editor from the pre-translate menu.
-  void _openGlossary() {
-    App.rootContext.to(
-      () => GlossaryEditorPage(
-        // 阅读器按 `cid@sourceKey` 分表；工作室那条路径用 comicId（见
-        // `glossary_backend.dart`）。
-        backend: ServiceGlossaryBackend(
-          cid: widget.cid,
-          sourceKey: widget.sourceKey,
-        ),
-      ),
-    );
-  }
-
   /// Resets the translations of the chapters the user checked and translates
   /// them again. Only the selected chapters' stored text + rendered pages are
   /// dropped (the learned glossary is kept, so other chapters stay consistent),
@@ -3119,13 +3000,6 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
       );
       return;
     }
-    if (!ImageTranslationService.isReadyForComic(
-      widget.cid,
-      widget.sourceKey,
-    )) {
-      App.rootContext.showMessage(message: 'Configure AI translation first'.tl);
-      return;
-    }
     var picked = List<int>.from(selected)..sort();
     showConfirmDialog(
       context: context,
@@ -3134,12 +3008,15 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
           "This clears the translations of the @count selected chapters, then translates them again."
               .tlParams({'count': picked.length}),
       onConfirm: () async {
-        var service = ImageTranslationService.instance;
         var eids = <String>{};
         for (var i in picked) {
           var eid = widget.entries[i].$1;
           eids.add(eid);
-          await service.retranslate(widget.cid, widget.sourceKey, eid: eid);
+          await StudioChapterProductCount.clearChapter(
+            cid: widget.cid,
+            sourceKey: widget.sourceKey,
+            eid: eid,
+          );
         }
         PreTranslationTaskManager.instance.resetChapterStatus(
           widget.cid,
@@ -3171,12 +3048,9 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
     // it needn't be re-run. Total page count is not stored, so this reports how
     // many pages carry a result rather than a percentage.
     if (chapter == null) {
-      // 🔴 S9.5-b 追补：两侧取**并集**。工作室管线只写工程 `result/`，一行都
-      // 不写旧 `TranslationStore` —— 只读旧库时，用户用工作室翻完的整章在这里
-      // **看不到任何标记**，症状与"翻译没生效"一模一样。
+      // 只认工作室工程里的成品：旧引擎的 `TranslationStore` 已随旧链路删除。
       final pages = translatedPageCountForBadge(
         studioProductPages: _studioProductPages[eid] ?? 0,
-        legacyStoredPages: _legacyStoredPages[eid] ?? 0,
       );
       if (pages == null) return null;
       return Row(
@@ -3301,12 +3175,10 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
     if (manager.isChapterActive(widget.cid, widget.sourceKey, eid)) {
       return false;
     }
-    // 🔴 S9.5-b 追补：并集判据。工作室翻完的章在旧库里是 0 ⇒ 菜单不出现 ⇒
-    // 用户**没有任何入口**能重译或删除它，只能回工作室手工改。
+    // 只认工作室工程里的成品（旧 `TranslationStore` 已删除）。
     return chapterHasTranslation(
       source: chapterTranslationSource(
         studioProductPages: _studioProductPages[eid] ?? 0,
-        legacyStoredPages: _legacyStoredPages[eid] ?? 0,
       ),
     );
   }
@@ -3325,14 +3197,7 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
           "This removes the stored translation and rendered pages of \"@title\". The original images are unaffected."
               .tlParams({'title': title}),
       onConfirm: () async {
-        // 🔴 S9.5-b 追补：**两侧都要清**。只调 `retranslate` 的话，工作室
-        // 侧 `result/` 与工程 json 里的译文块原封不动 —— 用户点了"删除译文"，
-        // 提示也弹了，翻开漫画却仍是译文（成品位图还在 `result/` 里）。
-        await ImageTranslationService.instance.retranslate(
-          widget.cid,
-          widget.sourceKey,
-          eid: eid,
-        );
+        // 只清工作室侧：旧引擎的即时缓存已随旧链路删除。
         await StudioChapterProductCount.clearChapter(
           cid: widget.cid,
           sourceKey: widget.sourceKey,
@@ -3368,13 +3233,6 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
   /// just this chapter (the glossary is kept so it stays consistent with the
   /// rest of the comic).
   void _reTranslateChapter(int index) {
-    if (!ImageTranslationService.isReadyForComic(
-      widget.cid,
-      widget.sourceKey,
-    )) {
-      App.rootContext.showMessage(message: 'Configure AI translation first'.tl);
-      return;
-    }
     var eid = widget.entries[index].$1;
     var title = widget.entries[index].$2;
     showConfirmDialog(
@@ -3384,15 +3242,7 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
           "This clears the translation of \"@title\" and translates it again."
               .tlParams({'title': title}),
       onConfirm: () async {
-        // 🔴 与 `_deleteChapterTranslation` 同一条纪律：工作室侧也要清，
-        // 否则"重译"跑的是新任务，而工程里旧的译文块还在 ——
-        // 去重只读既有块（`overlapsExistingBlock`）⇒ 新译文会被当成重复而
-        // **整章丢弃**，用户看到"重译了但译文没变"。
-        await ImageTranslationService.instance.retranslate(
-          widget.cid,
-          widget.sourceKey,
-          eid: eid,
-        );
+        // 只清工作室侧：旧引擎的即时缓存已随旧链路删除。
         await StudioChapterProductCount.clearChapter(
           cid: widget.cid,
           sourceKey: widget.sourceKey,
@@ -3445,10 +3295,17 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
         if (running != null) {
           PreTranslationTaskManager.instance.cancel(running.id);
         }
-        await ImageTranslationService.instance.retranslate(
-          widget.cid,
-          widget.sourceKey,
-        );
+        // 清掉这一本每一章的工作室成品（旧引擎的缓存已随旧链路删除）。
+        for (final eid in StudioReaderStore.eidsFor(
+          cid: widget.cid,
+          sourceKey: widget.sourceKey,
+        )) {
+          await StudioChapterProductCount.clearChapter(
+            cid: widget.cid,
+            sourceKey: widget.sourceKey,
+            eid: eid,
+          );
+        }
         PreTranslationTaskManager.instance.resetComicStatus(
           widget.cid,
           widget.sourceKey,
@@ -3598,11 +3455,6 @@ class _SelectPreTranslateChapterState extends State<_SelectPreTranslateChapter>
 
   List<MenuEntry> _menuEntries() {
     return [
-      MenuEntry(
-        icon: Icons.menu_book_outlined,
-        text: "Glossary".tl,
-        onClick: _openGlossary,
-      ),
       MenuEntry(
         icon: _showTranslated
             ? Icons.refresh_rounded

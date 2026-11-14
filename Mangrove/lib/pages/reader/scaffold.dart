@@ -144,22 +144,12 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
       }
     });
     super.initState();
-    // Refresh the translation status badge as pages start/finish/fail; the
-    // top bar lives in an OverlayEntry that a parent setState won't rebuild.
-    ImageTranslationService.instance.addListener(_onTranslationStatusChanged);
     Future.delayed(const Duration(milliseconds: 200), addDragListener);
-  }
-
-  void _onTranslationStatusChanged() {
-    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _zoomBarTimer?.cancel();
-    ImageTranslationService.instance.removeListener(
-      _onTranslationStatusChanged,
-    );
     // The orientation lock belongs to the reader only: hand the device back to
     // the platform default so other pages stay unaffected.
     if (rotation != null) {
@@ -557,7 +547,6 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
                     onPressed: openChapterComments,
                   ),
                 ),
-              ...buildTranslationControls(),
               MenuButton(entries: buildMoreMenuEntries()),
               Tooltip(
                 message: "Settings".tl,
@@ -572,116 +561,6 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
         ),
       ),
     );
-  }
-
-  /// Cache key of the currently visible page's translated variant plus the
-  /// comic's own render mode, or null when translation is not enabled for this
-  /// comic or the page can't be resolved. The mode travels with the key because
-  /// the status/error markers are per rendered image, and the mode is a
-  /// per-comic setting.
-  ({String cacheKey, InpaintMode mode})? _currentTranslationTarget() {
-    final reader = context.reader;
-    if (!ImageTranslationService.enabledFor(
-      reader.cid,
-      reader.type.sourceKey,
-    )) {
-      return null;
-    }
-    final images = reader.images;
-    if (images == null || images.isEmpty) return null;
-    var index = (reader.page - 1).clamp(0, images.length - 1);
-    return (
-      cacheKey: ImageTranslationService.cacheKeyFor(
-        reader.type.comicSource?.key,
-        reader.cid,
-        reader.eid,
-        index + 1,
-      ),
-      mode: TranslationConfig.of(reader.cid, reader.type.sourceKey).mode,
-    );
-  }
-
-  /// The top-bar translation affordances: a status badge (translating / failed
-  /// with retry) and a toggle to peek at the original art. Empty when
-  /// translation is off for this comic.
-  List<Widget> buildTranslationControls() {
-    final reader = context.reader;
-    if (!ImageTranslationService.enabledFor(
-      reader.cid,
-      reader.type.sourceKey,
-    )) {
-      return const [];
-    }
-    final service = ImageTranslationService.instance;
-    final target = _currentTranslationTarget();
-    final widgets = <Widget>[];
-
-    // Show-original toggle: lets the reader compare against the source art
-    // without disabling translation in settings.
-    widgets.add(
-      Tooltip(
-        message: reader.showOriginalPages
-            ? "Show translated".tl
-            : "Show original".tl,
-        child: IconButton(
-          icon: Icon(
-            reader.showOriginalPages ? Icons.translate : Icons.image_outlined,
-          ),
-          onPressed: reader.toggleShowOriginalPages,
-        ),
-      ),
-    );
-
-    if (target != null && !reader.showOriginalPages) {
-      switch (service.statusOf(target.cacheKey, target.mode)) {
-        case PageTranslationStatus.translating:
-          widgets.add(
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 12),
-              child: SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-          );
-        case PageTranslationStatus.failed:
-          widgets.add(
-            Tooltip(
-              message:
-                  service.errorOf(target.cacheKey, target.mode) ??
-                  "Translation failed".tl,
-              child: IconButton(
-                icon: Icon(
-                  Icons.error_outline,
-                  color: context.colorScheme.error,
-                ),
-                onPressed: () =>
-                    _retryTranslation(target.cacheKey, target.mode),
-              ),
-            ),
-          );
-        case PageTranslationStatus.translated:
-        case PageTranslationStatus.noContent:
-        case PageTranslationStatus.idle:
-          break;
-      }
-    }
-    return widgets;
-  }
-
-  void _retryTranslation(String cacheKey, InpaintMode mode) {
-    final service = ImageTranslationService.instance;
-    var error = service.errorOf(cacheKey, mode);
-    service.clearFailure(cacheKey, mode);
-    // Dropping the cached image entry makes the provider reload and re-schedule
-    // the page; the failure back-off was just cleared so it runs immediately.
-    PaintingBinding.instance.imageCache.clear();
-    PaintingBinding.instance.imageCache.clearLiveImages();
-    if (mounted) setState(() {});
-    if (error != null) {
-      context.showMessage(message: error);
-    }
   }
 
   bool isLiked() {

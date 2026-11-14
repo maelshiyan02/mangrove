@@ -67,8 +67,6 @@ class _Fixture {
 }
 
 const _editorPath = 'lib/pages/comic_details_page/glossary_editor.dart';
-const _serviceBackendPath =
-    'lib/foundation/image_translation/glossary_service_backend.dart';
 const _storeBackendPath =
     'lib/foundation/translation_project/glossary_backend.dart';
 const _studioPath = 'lib/pages/translation_studio/studio_page.dart';
@@ -291,10 +289,11 @@ Future<void> runP6Checks(
     'wiring.editor_has_no_engine_dependency',
     // 🔴 本项的核心：页面只认 `GlossaryBackend`，不认旧引擎单例。
     () async => !codeHas(_editorPath, 'ImageTranslationService'),
-    // 故障路径 = **对照组**：适配器文件确实含 `ImageTranslationService`
-    // （它生来就是干这个的）⇒ 同一条判据在它身上为 false。
-    () async => !codeHas(_serviceBackendPath, 'ImageTranslationService'),
-    () => '绿=编辑器不引用旧引擎 / 故障=对照组（适配器）确实含它 ⇒ 判据非恒真',
+    // 故障路径 = **对照组**：同一个文件里换一个它确实含有的词 ⇒ 判据为 false，
+    // 说明这个扫描看得见东西。（旧引擎的适配器文件已随旧链路删除，不能再拿它
+    // 当对照 —— 一个不存在的文件会让 `codeHas` 恒 false，那条对照就废了。）
+    () async => !codeHas(_editorPath, 'GlossaryBackend'),
+    () => '绿=编辑器不引用旧引擎 / 故障=对照组（同文件含 GlossaryBackend）⇒ 判据非恒真',
   );
 
   probe(
@@ -312,31 +311,23 @@ Future<void> runP6Checks(
     () async =>
         !codeHas(_storeBackendPath, 'package:flutter/') &&
         !codeHas(_storeBackendPath, 'translation_service.dart'),
-    // 故障路径 = **对照组**：适配器文件确实 import 了旧引擎 ⇒ 同一条判据在它
-    // 身上为 false。
-    () async => !codeHas(_serviceBackendPath, 'translation_service.dart'),
+    // 故障路径 = **对照组**：工作室页面确实 import 了 Flutter ⇒ 同一条判据在
+    // 它身上为 false。
+    () async => !codeHas(_studioPath, 'package:flutter/'),
     () => '绿=glossary_backend.dart 不 import Flutter、也不 import 旧引擎 / '
-        '故障=对照组（适配器）确实 import 旧引擎 ⇒ 判据非恒真',
+        '故障=对照组（工作室页面）确实 import Flutter ⇒ 判据非恒真',
   );
 
   probe(
-    'wiring.service_backend_inert_is_a_getter',
-    // 用户随时可能换模型，页面下一次 build 必须拿到新的答案 —— 写成字段会
-    // 把"换掉 Google 以后提示还在"永远留在界面上。
-    () async => codeHas(_serviceBackendPath, 'bool get glossaryInert'),
-    () async => codeHas(_serviceBackendPath, 'final bool glossaryInert'),
-    () => '绿=inert 是 getter（每次求值）/ 故障=缓存成字段',
-  );
-
-  probe(
-    'wiring.reader_callers_pass_the_service_backend',
+    'wiring.reader_side_has_no_glossary_entry',
+    // 术语表入口只剩工作室一处：阅读器（预览页与详情页）那两个入口随旧引擎
+    // 一起下线，否则会打开一个**空表**（`ServiceGlossaryBackend` 读的库已删）。
     () async =>
-        codeHas(_comicPagePath, 'ServiceGlossaryBackend(') &&
-        codeHas(_actionsPath, 'ServiceGlossaryBackend('),
-    // 故障路径 = 同一个 needle 在**别的**、确实不该有的文件里搜 ⇒ false，
-    // 证明这条判据不是"到处都为 true"。
-    () async => codeHas('lib/pages/settings/reader.dart', 'ServiceGlossaryBackend('),
-    () => '绿=阅读器两个入口都换了写法 / 故障=对照文件（设置页）里没有它 ⇒ 判据非恒真',
+        !codeHas(_comicPagePath, 'ServiceGlossaryBackend(') &&
+        !codeHas(_actionsPath, 'ServiceGlossaryBackend('),
+    // 故障路径 = **对照组**：工作室页面确实有编辑器入口 ⇒ 同判据为 false。
+    () async => !codeHas(_studioPath, 'GlossaryEditorPage('),
+    () => '绿=阅读器侧没有术语表入口 / 故障=对照组（工作室页面）确实有 ⇒ 判据非恒真',
   );
 
   probe(

@@ -2609,7 +2609,10 @@ ImageProvider _createImageProviderFromKey(
   // 🔴 绑定缺失 = 这一章没跑过管线 = 显示原图。这里**不**去看旧引擎的即时缓存
   // （`ImageTranslationService`）：那张缓存已经没人维护，读它等于把一份过期
   // 产物冒充成译文。
-  final binding = isBtComic || reader.showOriginalPages
+  // 🔴 绑定缺失 = 这一章没跑过管线 = 显示原图。阅读器**不**持有任何翻译开关：
+  // 旧引擎的即时缓存（`ImageTranslationService`）已随旧链路删除，读时翻译
+  // 这条路不存在了。
+  final binding = isBtComic
       ? null
       : StudioReaderStore.bindingFor(
           cid: reader.cid,

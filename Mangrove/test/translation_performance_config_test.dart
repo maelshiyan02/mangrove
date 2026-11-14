@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/image_translation/translation_performance_config.dart';
-import 'package:mangrove/foundation/image_translation/pre_translation_tasks.dart';
 
 void main() {
   test('unknown and old settings default to balanced', () {
@@ -83,46 +82,9 @@ void main() {
     expect(values.llmConcurrency, 3);
   });
 
-  test('mobile Japanese pipeline keeps one group in flight', () {
-    var performance = TranslationPerformanceConfig.valuesFor(
-      TranslationPerformancePreset.fast,
-      isDesktop: false,
-    );
-    expect(
-      PreTranslationTaskManager.pipelineConcurrencyFor(
-        performance,
-        isMobile: true,
-        sourceLang: 'ja',
-        hasJapaneseModel: true,
-      ),
-      1,
-    );
-    expect(
-      PreTranslationTaskManager.pipelineConcurrencyFor(
-        performance,
-        isMobile: true,
-        sourceLang: 'auto',
-        hasJapaneseModel: true,
-      ),
-      1,
-    );
-  });
-
-  test('desktop pipeline follows LLM concurrency', () {
-    var performance = TranslationPerformanceConfig.valuesFor(
-      TranslationPerformancePreset.fast,
-      isDesktop: true,
-    );
-    expect(
-      PreTranslationTaskManager.pipelineConcurrencyFor(
-        performance,
-        isMobile: false,
-        sourceLang: 'ja',
-        hasJapaneseModel: true,
-      ),
-      performance.llmConcurrency,
-    );
-  });
+  // 旧的「整章管线并发度」两条（`PreTranslationTaskManager.pipelineConcurrencyFor`）
+  // 随旧翻译引擎一起删除：那是阅读器读时/整章翻的调度公式。工作室管线按工程
+  // 任务自己决定并发（`StudioTaskRunner`），没有这条全局推导。
 
   test('performance tuning is excluded from cross-device sync', () {
     var disabled = Appdata.syncDisabledFields(const []);

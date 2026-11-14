@@ -773,62 +773,46 @@ void runP9Checks(CheckSink check, {required Directory packageRoot}) {
     () => '绿=未动过的块保留源字号补偿 / 故障=不做补偿的那版返回 49',
   );
 
-  // ── 章节「已翻译」判据：并集，不是"换成工程"（P17）────────────────────
+  // ── 章节「已翻译」判据：只认工作室工程（P17）────────────────────────────
   //
-  // 🔴 钉的是 S9.5-b 留下的半迁移：产出搬进了工作室（成品落工程 `result/`），
-  // 但详情页**读**那一侧有四处仍只读旧 `TranslationStore`，而工作室管线一行都
-  // 不写它 ⇒ 用户用工作室翻完一整章之后，章节列表**看不到**已翻译标记、
-  // 长按菜单里**没有**「重译/删除」、「已翻译」页签**筛不出**这一章。
-  // 症状与"翻译没生效"几乎一样，但译文其实就在 `result/` 里躺着。
-  //
-  // 🔴 为什么判据是**并集**而不是替换：旧库里躺着 S9.5-b 之前翻的、别处同步来
-  // 的章。改成只认工程 ⇒ 那些章的标记/菜单/页签**全部消失** —— 从"能看见"
-  // 变成"看不见"，是更糟的回归。所以两侧任一有成品就算已翻译。
+  // 🔴 旧引擎的 `TranslationStore` 与阅读器即时缓存已随旧链路删除，所以
+  // 「已翻译」只剩一个来源：该章工程里的成品页数 > 0。这一组钉两件事：
+  // ① **0 页不算已翻译**（建了工程没跑完的章不该混进「已翻译」页签，
+  //    点进去看到的是原图）；② 负数夹到 0，不能靠"非零"绕过判据。
 
   probe(
-    'chapter_state.the_union_survives_both_sides',
-    // 行为判据（四个场景一次比完，绿红两版喂**同一组**输入）：
-    // ① 只有工作室侧有 90 页 ⇒ 已翻译（S9.5-b 之前**判不出来**的那一支）；
-    // ② 两侧都有 ⇒ both；
-    // ③ 只有旧库有 12 页 ⇒ 仍然已翻译（"只认工程"会**弄丢**的那一支）；
-    // ④ 两侧都为 0 ⇒ 未翻译且不显示徽标；负数夹到 0。
-    () => _chapterStateActual(_chapterTranslationSourceUnion) == _chapterStateTruth,
-    // 故障路径 A = **只读旧库**（S9.5-b 之前那一版）：工作室侧整个被丢掉。
-    () => _chapterStateActual(_chapterTranslationSourceLegacyOnly) == _chapterStateTruth,
-    () => '绿=并集四场景全对 / '
-        '故障=只读旧库(工作室侧丢) / 另两个故障副本由下一条断言钉住',
+    'chapter_state.studio_only_and_zero_is_none',
+    // 行为判据（同一组输入喂产品版与故障版）：
+    // 90 页 ⇒ studioOnly；0 页 ⇒ none 且不显示徽标；负数夹 0。
+    () => _chapterStateActual(_chapterTranslationSourceStudio) ==
+        _chapterStateTruth,
+    // 故障路径 = **有绑定就算已翻译**（不数产物）：0 页会被判成 studioOnly。
+    () => _chapterStateActual(_chapterTranslationSourceBindingIsEnough) ==
+        _chapterStateTruth,
+    () => '绿=90页已翻译、0页未翻译 / 故障=有绑定就算的版本把 0 页判成已翻译',
   );
 
   probe(
-    'chapter_state.the_other_two_faults_are_caught_too',
-    // 🔴 `probe` 只有**一条**红路径，而这一轮踩到的坑正是"红路径写成另一个也成立
-    // 的输入 ⇒ 断言变装饰品"。所以另两个故障副本（只认工程 / 有绑定就算）
-    // 单独用一条断言钉：要求它们**都**与产品版结论不同。
-    //
-    // 这一条的红路径 = "判据不再区分两侧"（产品版与故障版给出同一个结论）
-    // —— 那正是"把两侧并成同一个数"这类改写会造成的退化，此时本条与上一条
-    // 一起失效。
-    () =>
-        _chapterStateActual(_chapterTranslationSourceStudioOnly) !=
-            _chapterStateTruth &&
-        _chapterStateActual(_chapterTranslationSourceBindingIsEnough) !=
-            _chapterStateTruth,
-    () => _chapterStateActual(_chapterTranslationSourceStudioOnly) ==
-            _chapterStateTruth,
-    () => '绿=只认工程/有绑定就算 两个故障版都判出不同结论 / '
-        '故障=判据不再区分两侧时本条与上一条一起失效',
+    'chapter_state.negatives_are_clamped_to_zero',
+    // 🔴 计数来自磁盘工程，算错返回负数时，"非零即已翻译"会让一支空的
+    // 「已翻译」章混进列表。所以夹 0 是判据的一部分，不是防御性冗余。
+    () => _chapterStateActual(_chapterTranslationSourceStudio) ==
+        _chapterStateTruth,
+    // 故障路径 = 不夹负数的那一版：-5 被判成 studioOnly。
+    () => _chapterStateActual(_chapterTranslationSourceWithoutNegClamp) ==
+        _chapterStateTruth,
+    () => '绿=负数夹 0 后判未翻译 / 故障=不夹负数的版本把 -5 判成已翻译',
   );
 
   probe(
-    'chapter_state.the_badge_counts_both_sides',
-    // 行为判据：徽标页数 = 两侧**之和**（90+3=93）。工作室的 `result/` 与旧缓存
-    // 的页是**不同的页集合**（工程页键 vs `cacheKey`），相加不重复计数；取 max
-    // 会让"工作室翻了 90 页、旧缓存 3 页"显示成 90 —— 用户以为只翻了 90，
-    // 实际 93 页有成品。徽标与页签归属必须**同源**。
-    () => _badgeActual(_badgeUnion) == _badgeTruth,
-    // 故障路径 = 取 max 的那一版：3 页旧缓存被吞掉，显示成 90。
-    () => _badgeActual(_badgeMax) == _badgeTruth,
-    () => '绿=徽标页数取两侧之和(90+3=93) / 故障=取 max 时 3 页被吞',
+    'chapter_state.the_badge_matches_the_source',
+    // 行为判据：徽标页数就是工程里的成品页数，且徽标与页签归属**同源**
+    // （徽标说有译文，页签就必须把它归到「已翻译」—— 分叉的症状与本文件
+    // 要修的那个 bug 是同一个：半迁移）。
+    () => _badgeActual(_badgeStudio) == _badgeTruth,
+    // 故障路径 = "有绑定就给个 1 页"的那一版：0 页会显示一个假徽标。
+    () => _badgeActual(_badgeBindingIsEnough) == _badgeTruth,
+    () => '绿=徽标=成品页数(90) / 故障=有绑定就算的版本在 0 页上显示 1 页',
   );
 
   // ── 跑 ──────────────────────────────────────────────────────────────
@@ -1434,97 +1418,68 @@ double _noSourceScaleCompensation({
 // 输入；断言只比"结论字符串"，于是绿红两版可以直接对照，不必在探针里判断
 // "我现在跑的是不是产品版"（那需要函数同一性比较，脆弱且会掩盖真正的失败）。
 
-typedef _ChapterSource = ChapterTranslationSource Function(int, int);
+// ── 章节「已翻译」判据（P17）绿路径与故障路径 ───────────────────────────
+// 🔴 为什么要写成"判据函数 + 探针"两层，而不是把输入直接写进断言：
+// 2026-10-09 第一版把红路径写成"换一个**也成立**的输入"，结果故障路径**仍然
+// 是绿的**，等于装饰品。门禁如实报了 `故障路径=仍绿(装饰品)`（`A02`：失效的
+// 断言比不完整的断言危险得多）。
+//
+// 正确形状：**同一个判据签名**下放多份实现（产品版 + 两个故障版），喂**同一组**
+// 输入；断言只比"结论字符串"，于是绿红两版可以直接对照。
 
-/// 产品版：并集判据（`chapter_translation_state.dart` 的本体）。
-ChapterTranslationSource _chapterTranslationSourceUnion(
-  int studio,
-  int legacy,
-) => chapterTranslationSource(
-  studioProductPages: studio,
-  legacyStoredPages: legacy,
-);
+typedef _ChapterSource = ChapterTranslationSource Function(int studio);
 
-/// 故障路径 A：**只读旧 `TranslationStore`** —— S9.5-b 之前详情页那一版。
-/// 工作室侧的页数被整个丢掉。
-ChapterTranslationSource _chapterTranslationSourceLegacyOnly(
-  int studio,
-  int legacy,
-) => chapterTranslationSource(
-  studioProductPages: 0,
-  legacyStoredPages: legacy,
-);
+/// 产品版：只认工作室工程里的成品页数。
+ChapterTranslationSource _chapterTranslationSourceStudio(int studio) =>
+    chapterTranslationSource(studioProductPages: studio);
 
-/// 故障路径 B：**只认工程** —— "迁移"最直觉的那个改法。
-/// 旧库里 S9.5-b 之前翻的、WebDAV 同步来的章会被判成未翻译（标记消失）。
-ChapterTranslationSource _chapterTranslationSourceStudioOnly(
-  int studio,
-  int legacy,
-) => chapterTranslationSource(
-  studioProductPages: studio,
-  legacyStoredPages: 0,
-);
+/// 故障路径 A：**有绑定就算已翻译**（不数产物）。0 页的空工程会混进「已翻译」。
+ChapterTranslationSource _chapterTranslationSourceBindingIsEnough(int studio) =>
+    chapterTranslationSource(studioProductPages: studio > 0 ? studio : 1);
 
-/// 故障路径 C：**有绑定就算已翻译**（不数产物）。
-/// 空工程（建完就走了）会混进「已翻译」页签，点进去看到的是原图。
-ChapterTranslationSource _chapterTranslationSourceBindingIsEnough(
-  int studio,
-  int legacy,
-) => chapterTranslationSource(
-  studioProductPages: studio > 0 ? studio : 1,
-  legacyStoredPages: legacy,
-);
+/// 故障路径 B：**不夹负数**（"非零即已翻译"）。负数计数会让判据被绕过。
+ChapterTranslationSource _chapterTranslationSourceWithoutNegClamp(int studio) =>
+    studio == 0
+    ? ChapterTranslationSource.none
+    : ChapterTranslationSource.studioOnly;
 
 /// 产品版结论（绿路径应逐字等于这个字符串）。
 const String _chapterStateTruth =
-    'studioOnly(90,0)=studioOnly; (90,3)=both; (0,12)=legacyOnly; badge(0,12)=12; '
-    '(0,0)=none; badge(0,0)=null; tab(-1,-1)=false';
+    'source(90)=studioOnly; source(0)=none; source(-5)=none; '
+    'badge(90)=90; badge(0)=null; tab(90)=true; tab(0)=false';
 
 /// 绿路径：产品版在四个场景上的结论。
 String _chapterStateActual(_ChapterSource source) {
-  final tabNeg = isTranslatedTab(studioProductPages: -1, legacyStoredPages: -1);
-  return 'studioOnly(90,0)=${source(90, 0).name}; '
-      '(90,3)=${source(90, 3).name}; '
-      '(0,12)=${source(0, 12).name}; '
-      'badge(0,12)='
-      '${translatedPageCountForBadge(studioProductPages: 0, legacyStoredPages: 12)}; '
-      '(0,0)=${source(0, 0).name}; '
-      'badge(0,0)='
-      '${translatedPageCountForBadge(studioProductPages: 0, legacyStoredPages: 0)}; '
-      'tab(-1,-1)=$tabNeg';
+  return 'source(90)=${source(90).name}; source(0)=${source(0).name}; '
+      'source(-5)=${source(-5).name}; '
+      'badge(90)=${translatedPageCountForBadge(studioProductPages: 90)}; '
+      'badge(0)=${translatedPageCountForBadge(studioProductPages: 0)}; '
+      'tab(90)=${isTranslatedTab(studioProductPages: 90)}; '
+      'tab(0)=${isTranslatedTab(studioProductPages: 0)}';
 }
 
-typedef _BadgeCount = int? Function(int, int);
+typedef _BadgeCount = int? Function(int studio);
 
-/// 产品版：徽标页数 = 两侧之和。
-int? _badgeUnion(int studio, int legacy) =>
-    translatedPageCountForBadge(
-      studioProductPages: studio,
-      legacyStoredPages: legacy,
-    );
+/// 产品版：徽标页数 = 工程成品页数。
+int? _badgeStudio(int studio) =>
+    translatedPageCountForBadge(studioProductPages: studio);
 
-/// 故障路径：取 **max**。工作室翻了 90 页、旧缓存 3 页 ⇒ 显示 90，
-/// 用户以为只翻了 90，实际 93 页有成品。
-int? _badgeMax(int studio, int legacy) {
-  if (_chapterTranslationSourceUnion(studio, legacy) ==
+/// 故障路径：有绑定就给个 1 页 —— 0 页的空工程会显示一个假徽标。
+int? _badgeBindingIsEnough(int studio) {
+  if (_chapterTranslationSourceBindingIsEnough(studio) ==
       ChapterTranslationSource.none) {
     return null;
   }
-  return studio > legacy ? studio : legacy;
+  return studio > 0 ? studio : 1;
 }
 
 /// 产品版徽标结论（绿路径应逐字等于）。
-const String _badgeTruth = 'badge(90,3)=93; badge(0,0)=null; tab(90,0)=true';
+const String _badgeTruth = 'badge(90)=90; badge(0)=null; tab(90)=true';
 
-/// 绿路径：徽标取两侧之和，且徽标与页签归属**同源**
-/// （徽标说有译文，页签就必须把它归到「已翻译」—— 分叉的症状与本文件要修的
-/// 那个 bug 是同一个：半迁移）。
+/// 绿路径：徽标与页签归属**同源**（徽标说有译文，页签就必须把它归到
+/// 「已翻译」—— 分叉的症状与半迁移那个 bug 是同一个）。
 String _badgeActual(_BadgeCount badge) {
-  final tabStudioOnly = isTranslatedTab(
-    studioProductPages: 90,
-    legacyStoredPages: 0,
-  );
-  return 'badge(90,3)=${badge(90, 3)}; '
-      'badge(0,0)=${badge(0, 0)}; '
-      'tab(90,0)=$tabStudioOnly';
+  return 'badge(90)=${badge(90)}; '
+      'badge(0)=${badge(0)}; '
+      'tab(90)=${isTranslatedTab(studioProductPages: 90)}';
 }

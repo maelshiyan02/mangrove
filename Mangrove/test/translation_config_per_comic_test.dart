@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangrove/foundation/appdata.dart';
 import 'package:mangrove/foundation/image_translation/translation_config.dart';
-import 'package:mangrove/foundation/image_translation/translation_service.dart';
 import 'package:mangrove/foundation/image_translation/translation_types.dart';
 
 // The AI-translation language pair and text-removal mode are per-comic (#178).
@@ -149,70 +148,8 @@ void main() {
     expect(TranslationConfig.of(cidA, sourceKey).targetLang, 'en');
   });
 
-  // #287: pre-translate a chapter online, then download it, and every page read
-  // as untranslated — the key ended with the image key, which is a source url
-  // online but an absolute file:// path once downloaded. The page's position in
-  // its chapter is the one identity both paths agree on.
-  group('page cache keys are independent of how the page is fetched', () {
-    test('the same page maps to one key whether online or downloaded', () {
-      var online = ImageTranslationService.cacheKeyFor(
-        sourceKey,
-        cidA,
-        'ch1',
-        3,
-      );
-      var downloaded = ImageTranslationService.cacheKeyFor(
-        sourceKey,
-        cidA,
-        'ch1',
-        3,
-      );
-      expect(online, downloaded);
-    });
-
-    test('distinct pages, chapters and comics stay distinct', () {
-      var page3 = ImageTranslationService.cacheKeyFor(sourceKey, cidA, 'ch1', 3);
-      expect(
-        page3,
-        isNot(ImageTranslationService.cacheKeyFor(sourceKey, cidA, 'ch1', 4)),
-      );
-      expect(
-        page3,
-        isNot(ImageTranslationService.cacheKeyFor(sourceKey, cidA, 'ch2', 3)),
-      );
-      expect(
-        page3,
-        isNot(ImageTranslationService.cacheKeyFor(sourceKey, cidB, 'ch1', 3)),
-      );
-    });
-
-    test('the key stays under its chapter scope prefix so deletes match', () {
-      expect(
-        ImageTranslationService.cacheKeyFor(sourceKey, cidA, 'ch1', 3),
-        startsWith(
-          ImageTranslationService.chapterScopePrefix(sourceKey, cidA, 'ch1'),
-        ),
-      );
-    });
-
-    test('a sibling page number does not prefix-match another', () {
-      // 'p1' must not be a prefix of 'p10', or a per-page probe could collide.
-      var p1 = ImageTranslationService.cacheKeyFor(sourceKey, cidA, 'ch1', 1);
-      var p10 = ImageTranslationService.cacheKeyFor(sourceKey, cidA, 'ch1', 10);
-      expect(p10, isNot(startsWith(p1)));
-    });
-
-    test('the legacy key reproduces the old transport-derived shape', () {
-      expect(
-        ImageTranslationService.legacyCacheKeyFor(
-          'https://cdn/page-3.jpg',
-          sourceKey,
-          cidA,
-          'ch1',
-        ),
-        '${ImageTranslationService.chapterScopePrefix(sourceKey, cidA, 'ch1')}'
-        'https://cdn/page-3.jpg',
-      );
-    });
-  });
+  // 旧的「整页译文缓存键」那一组（`ImageTranslationService.cacheKeyFor` /
+  // `chapterScopePrefix` / `legacyCacheKeyFor`）随旧翻译引擎一起删除：那套键
+  // 只服务于阅读器的读时翻译缓存，而工作室管线的页面身份是**工程页序号**，
+  // 与抓取方式无关这件事由工程 json 保证，不再需要这层公式。
 }

@@ -11,14 +11,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:mangrove/foundation/download_network_guard.dart';
 import 'package:mangrove/foundation/history.dart';
 import 'package:mangrove/foundation/log.dart';
-import 'package:mangrove/foundation/image_translation/translation_store.dart';
+import 'package:mangrove/foundation/local.dart';
 import 'package:mangrove/foundation/read_later.dart';
 
 import 'appdata.dart';
 import 'bt_project/bt_project_manager.dart';
 import 'domain_database.dart';
 import 'favorites.dart';
-import 'local.dart';
 
 export "widget_utils.dart";
 export "context.dart";
@@ -180,7 +179,6 @@ class _App {
       favorites.init(),
       domain.init(dataPath),
       local.init(),
-      TranslationStore().init(),
     ];
     // One store failing must not abort its siblings: an unguarded Future.wait
     // rejected on the first error and left every later store uninitialized —
