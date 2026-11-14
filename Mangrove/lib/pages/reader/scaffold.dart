@@ -12,47 +12,27 @@ class _ReaderScaffold extends StatefulWidget {
 }
 
 class _ReaderScaffoldState extends State<_ReaderScaffold> {
-  bool _isOpen = false;
-
-  static const kTopBarHeight = 56.0;
-
-  static const kBottomBarHeight = 105.0;
-
-  bool get isOpen => _isOpen;
-
   bool get isReversed =>
       context.reader.mode == ReaderMode.galleryRightToLeft ||
       context.reader.mode == ReaderMode.continuousRightToLeft;
 
-  int showFloatingButtonValue = 0;
-
-  var lastValue = 0;
-
   _ReaderGestureDetectorState? _gestureDetectorState;
 
-  void setFloatingButton(int value) {
-    lastValue = showFloatingButtonValue;
-    if (value == 0) {
-      if (showFloatingButtonValue != 0) {
-        showFloatingButtonValue = 0;
-        update();
-      }
-    }
-    if (value == 1 && showFloatingButtonValue == 0) {
-      showFloatingButtonValue = 1;
-      update();
-    } else if (value == -1 && showFloatingButtonValue == 0) {
-      showFloatingButtonValue = -1;
-      update();
-    }
-  }
+  /// P56：桌面专属控件统一读这个开关，不再各自散读 `App.isDesktop`。
+  /// `readerLayoutMode = auto` 时按平台 + 窗宽推断；显式值可强制覆盖。
+  bool get desktopLayout => isDesktopReaderLayout(
+    setting: appdata.settings[kReaderLayoutSettingKey],
+    desktopPlatform: App.isDesktop,
+    windowWidth: context.width,
+  );
 
   _DragListener? _imageFavoriteDragListener;
 
-  /// The zoom cluster is opt-in (`readerShowZoomBar`) and desktop-only: it
-  /// exists for mouse users and must never appear on touch layouts.
+  /// 桌面布局下缩放簇常驻（comix.to 右下百分比 + ±）；旧的 opt-in 开关
+  /// 仍作为移动端布局 / 非桌面平台下的可选增强。
   bool get zoomBarEnabled =>
-      App.isDesktop && appdata.settings['readerShowZoomBar'] == true;
+      desktopLayout ||
+      (App.isDesktop && appdata.settings['readerShowZoomBar'] == true);
 
   bool _zoomBarVisible = false;
 
@@ -137,12 +117,6 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
 
   @override
   void initState() {
-    sliderFocus.canRequestFocus = false;
-    sliderFocus.addListener(() {
-      if (sliderFocus.hasFocus) {
-        sliderFocus.nextFocus();
-      }
-    });
     super.initState();
     Future.delayed(const Duration(milliseconds: 200), addDragListener);
   }
@@ -155,17 +129,7 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
     if (rotation != null) {
       SystemChrome.setPreferredOrientations(resolveReadingOrientations(null));
     }
-    sliderFocus.dispose();
     super.dispose();
-  }
-
-  void openOrClose() {
-    // Keep the platform chrome stable for the whole reading session. Changing
-    // it here changes Android's viewport while an image stream may still be
-    // resolving, which can strand the rebuilt page in its loading state (#210).
-    setState(() {
-      _isOpen = !_isOpen;
-    });
   }
 
   /// Reader-only orientation lock: null follows the device, false locks
@@ -265,48 +229,18 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
     );
   }
 
-  /// Phones in landscape have little height to spare, so the bars collapse to a
-  /// single compact row there.
-  bool get compactBars =>
-      App.isMobile &&
-      MediaQuery.orientationOf(context) == Orientation.landscape;
-
-  /// Compact top bar height. The floor follows the text scale: the title area
-  /// stacks a 16sp and a 12sp line when a chapter name is present, so a fixed
-  /// 48 overflows once the system font is enlarged.
-  double get topBarHeight => compactBars
-      ? math.min(
-          kTopBarHeight,
-          math.max(48.0, MediaQuery.textScalerOf(context).scale(16 + 12) + 16),
-        )
-      : kTopBarHeight;
-
-  double get bottomBarHeight => compactBars ? 56.0 : kBottomBarHeight;
-
-  /// The edge page rail replaces the bottom slider. Desktop-only: on a phone
-  /// the left edge belongs to the system back gesture.
+  /// 左缘页轨：桌面布局常驻（用户明确要求「页面树保留在左下/左缘」），
+  /// 移动端布局左缘属于系统返回手势，只在显式设置了 'left' 时显示。
   bool get pageRailEnabled =>
-      App.isDesktop &&
-      appdata.settings['readerProgressBarPosition'] == 'left';
+      desktopLayout ||
+      (App.isDesktop &&
+          appdata.settings['readerProgressBarPosition'] == 'left');
 
   void toggleReadingOrientation() {
     setState(() {
       rotation = nextReadingOrientation(rotation);
     });
     SystemChrome.setPreferredOrientations(resolveReadingOrientations(rotation));
-  }
-
-  /// Night mode overlay tint, selected by `readerNightModeColor` setting.
-  Color _nightModeColor() {
-    switch (appdata.settings['readerNightModeColor']) {
-      case 'black':
-        return const Color(0xFF000000);
-      case 'red':
-        return const Color(0xFF3A0000);
-      case 'warm':
-      default:
-        return const Color(0xFF2A1800);
-    }
   }
 
   @override
@@ -362,22 +296,11 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
               child: const SizedBox.expand(),
             ),
           ),
-        if (appdata.settings['readerNightMode'] == true)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: ColoredBox(
-                color: _nightModeColor().toOpacity(
-                  ((appdata.settings['readerNightModeIntensity'] as num?)
-                              ?.toDouble() ??
-                          0.45)
-                      .clamp(0.1, 0.85),
-                ),
-              ),
-            ),
-          ),
-        // R4-3 压暗。与上面的夜间遮罩是两套东西：夜间遮罩换的是色相（暖/黑/
-        // 暗红），压暗只降亮度不换色，所以它可以单独开、也可以叠加在夜间遮罩
-        // 之上。UI 上两者归到同一分组，是为了让"护眼"相关的档位挨在一起。
+        // 全局三档外观（白天/夜间/护眼）已在 App 设置与阅读器底栏切换按钮，
+        // 旧的阅读器夜间遮罩（readerNightMode 暖色叠加）已移除，避免与全局
+        // 暗色主题重复。
+        // R4-3 压暗。与已删除的夜间遮罩是两套东西：压暗只降亮度不换色，可单开，
+        // 亦可叠加在全局暗色主题之上。护眼相关的档位仍在设置里归到同一分组。
         if (dim > 0)
           Positioned.fill(
             child: IgnorePointer(
@@ -387,72 +310,68 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
         if (appdata.settings['showPageNumberInReader'] == true &&
             !isOnChapterCommentsPage)
           buildPageInfoText(),
-        if (!isOnChapterCommentsPage) buildStatusInfo(),
+        // P56：右下 58×58 浮动箭头按钮已删除，腾出的位置放常驻缩放簇。
+        // 桌面布局下不再靠 hover 唤起（comix.to 的百分比 + ± 是常驻的）。
+        // P57.2：时钟/电量与缩放簇合成同一行右对齐 —— 两者共用一条中线，
+        // 不再各写一个 `bottom` 互相错位。
+        if (!isOnChapterCommentsPage)
+          Positioned(
+            right: 12,
+            bottom: context.padding.bottom + 12,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                if (appdata.settings['enableClockAndBatteryInfoInReader'] ==
+                    true) ...[
+                  buildStatusInfo(),
+                  const SizedBox(width: 10),
+                ],
+                if (zoomBarEnabled)
+                  ReaderZoomBar(visible: desktopLayout || _zoomBarVisible),
+              ],
+            ),
+          ),
+        // 左上角极简返回钮：顶栏已删除，但退出阅读器必须保留入口。
+        // 与右上章节簇 / 右下缩放簇同一套「纯透明底 + 主题轮廓线」样式。
         Positioned(
-          right: 16,
-          bottom: 36,
-          child: IgnorePointer(
-            ignoring: showFloatingButtonValue == 0,
-            child: AnimatedSlide(
-              duration: _readerChromeAnimationDuration,
-              curve: Curves.easeOutCubic,
-              offset: showFloatingButtonValue == 0
-                  ? const Offset(0, 2)
-                  : Offset.zero,
-              child: buildEpChangeButton(),
+          top: context.padding.top + 8,
+          left: context.padding.left + 8,
+          child: RepaintBoundary(
+            child: IconButton(
+              tooltip: "Back".tl,
+              icon: Icon(
+                Icons.arrow_back,
+                color: context.colorScheme.onSurface,
+              ),
+              style: IconButton.styleFrom(
+                backgroundColor: Colors.transparent,
+                side: BorderSide(
+                  color: context.colorScheme.outline.withValues(alpha: 0.55),
+                ),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                ),
+              ),
+              onPressed: () => Navigator.maybePop(context),
             ),
           ),
         ),
-        // Sits above the chapter-change button (bottom: 36 + its 56dp) so the
-        // two never overlap when both are on screen.
-        if (zoomBarEnabled)
+        // 常驻右上角控件簇（桌面 / 有章节时）：章节胶囊 + 外观切换 + 更多菜单
+        // + 设置，独立于任何顶栏，始终可见（P57/P57.x：章节框正常显示在右上角）。
+        if (desktopLayout && context.reader.widget.chapters != null)
           Positioned(
-            right: 16,
-            bottom: 100,
-            child: ReaderZoomBar(visible: _zoomBarVisible),
+            top: context.padding.top + 8,
+            right: context.padding.right + 8,
+            child: RepaintBoundary(child: _buildTopRightCluster()),
           ),
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          height: topBarHeight + context.padding.top,
-          child: AnimatedSlide(
-            duration: _readerChromeAnimationDuration,
-            curve: Curves.easeOutCubic,
-            offset: _isOpen ? Offset.zero : const Offset(0, -1),
-            child: RepaintBoundary(child: buildTop()),
-          ),
-        ),
         if (_missingInCurrentChapter() > 0 &&
             _dismissedMissingEid != context.reader.eid)
           Positioned(
-            top: topBarHeight + context.padding.top,
+            top: context.padding.top,
             left: 0,
             right: 0,
             child: _buildMissingBanner(context, _missingInCurrentChapter()),
-          ),
-        Positioned(
-          bottom: 0,
-          left: 0,
-          right: 0,
-          child: AnimatedSlide(
-            duration: _readerChromeAnimationDuration,
-            curve: Curves.easeOutCubic,
-            offset: _isOpen ? Offset.zero : const Offset(0, 1),
-            child: RepaintBoundary(child: buildBottom()),
-          ),
-        ),
-        if (pageRailEnabled)
-          AnimatedPositioned(
-            duration: _readerChromeAnimationDuration,
-            left: 0,
-            // The rail spans the page area only: it stops above the bottom bar
-            // while the chrome is on and fills the full height once it hides,
-            // so it never covers a bar button or fights the tap-to-turn layer.
-            top: _isOpen ? topBarHeight + context.padding.top : 0,
-            bottom: _isOpen ? bottomBarHeight + context.padding.bottom : 0,
-            width: kPageRailWidth,
-            child: const RepaintBoundary(child: ReaderPageRail()),
           ),
         // R5 可选右缘竖工具栏：从右缘滑入，垂直居中，与顶/底栏并存。
         Positioned(
@@ -461,105 +380,40 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
           bottom: 0,
           child: Center(child: ReaderSideToolbar()),
         ),
+        // 左缘页轨：图层上移为最顶层（浮动控件），自左缘向右展开。
+        if (pageRailEnabled)
+          AnimatedPositioned(
+            duration: _readerChromeAnimationDuration,
+            left: 0,
+            // 收缩时仅贴左缘细条；展开时浮现面板并向右生长，不占用画布。
+            top: 0,
+            bottom: 0,
+            width: kPageRailWidth,
+            child: const RepaintBoundary(child: ReaderPageRail()),
+          ),
       ],
     );
   }
 
-  /// 顶栏标题区：开启章节胶囊且窗口够宽时用紧凑胶囊，否则维持双行书名/话名。
-  ///
-  /// 窄窗退回双行不是妥协而是必要 —— 顶栏右侧还有翻译控件、更多菜单、设置
-  /// 三个按钮组，把它们挤掉换一颗胶囊是净损失。
-  Widget _buildTopTitle(String? epName) {
-    final reader = context.reader;
-    final capsuleOn = readerChapterCapsuleEnabled(
-      appdata.settings.getReaderSetting(
-        reader.cid,
-        reader.type.sourceKey,
-        'readerChapterCapsule',
-      ),
-    );
-    if (capsuleOn &&
-        reader.widget.chapters != null &&
-        context.width >= kChapterCapsuleMinWidth) {
-      return const Align(
-        alignment: Alignment.centerLeft,
-        child: ChapterCapsule(),
-      );
-    }
-    return epName == null
-        ? Text(
-            reader.widget.name,
-            style: ts.s18,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          )
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                reader.widget.name,
-                style: ts.s16,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              Text(
-                epName,
-                style: ts.s12,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          );
-  }
-
-  Widget buildTop() {
-    final epName = context.reader.widget.chapters?.titles.elementAtOrNull(
-      context.reader.chapter - 1,
-    );
-
-    return BlurEffect(
-      child: Container(
-        padding: EdgeInsets.only(top: context.padding.top),
-        decoration: BoxDecoration(
-          color: context.colorScheme.surface.toOpacity(0.92),
-          border: Border(
-            bottom: BorderSide(color: Colors.grey.toOpacity(0.5), width: 0.5),
+  /// 桌面常驻右上角控件簇：外观切换（白天/夜间/护眼）+ 章节胶囊
+  /// （‹ Ch.n / N ›）+ 更多菜单 + 设置。顶/底工具栏已移除（P57.x），
+  /// 这些控件直接常驻于右上角，始终可见。
+  Widget _buildTopRightCluster() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        const ReaderAppearanceToggle(),
+        const ChapterCapsule(),
+        MenuButton(entries: buildMoreMenuEntries()),
+        Tooltip(
+          message: "Settings".tl,
+          child: IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: openSetting,
           ),
         ),
-        child: Padding(
-          padding: EdgeInsets.only(
-            left: context.padding.left,
-            right: context.padding.right,
-          ),
-          child: Row(
-            children: [
-              const SizedBox(width: 8),
-              const BackButton(),
-              const SizedBox(width: 8),
-              Expanded(child: _buildTopTitle(epName)),
-              const SizedBox(width: 8),
-              if (shouldShowChapterComments())
-                Tooltip(
-                  message: "Chapter Comments".tl,
-                  child: IconButton(
-                    icon: const Icon(Icons.comment),
-                    onPressed: openChapterComments,
-                  ),
-                ),
-              MenuButton(entries: buildMoreMenuEntries()),
-              Tooltip(
-                message: "Settings".tl,
-                child: IconButton(
-                  icon: const Icon(Icons.settings),
-                  onPressed: openSetting,
-                ),
-              ),
-              const SizedBox(width: 8),
-            ],
-          ),
-        ),
-      ),
+      ],
     );
   }
 
@@ -799,243 +653,7 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
     ];
   }
 
-  Widget buildBottom() {
-    // Use maxPage for display (excluding chapter comments page)
-    final displayPage = context.reader.page.clamp(1, context.reader.maxPage);
-    var text = "E${context.reader.chapter} : P$displayPage";
-    if (context.reader.widget.chapters == null) {
-      text = "P$displayPage";
-    }
-
-    final buttons = [
-      Tooltip(
-        message: "Night mode".tl,
-        child: IconButton(
-          icon: Icon(
-            appdata.settings['readerNightMode'] == true
-                ? Icons.nightlight_round
-                : Icons.nightlight_outlined,
-          ),
-          onPressed: () {
-            // Manual toggle takes over: stop following the system theme so the
-            // user's explicit choice isn't immediately overridden.
-            if (appdata.settings['readerNightModeFollowSystem'] == true) {
-              appdata.settings['readerNightModeFollowSystem'] = false;
-            }
-            appdata.settings['readerNightMode'] =
-                !(appdata.settings['readerNightMode'] == true);
-            appdata.saveData();
-            context.reader.update();
-            update();
-          },
-        ),
-      ),
-      Tooltip(
-        message: "Collect the image".tl,
-        // Both branches are separate `const Icon`s rather than one runtime ternary,
-        // so neither icon depends on a conditional to be constructed.
-        child: IconButton(
-          icon: isLiked()
-              ? const Icon(Icons.favorite)
-              : const Icon(Icons.favorite_border),
-          onPressed: addImageFavorite,
-        ),
-      ),
-      if (App.isMobile)
-        Tooltip(
-          message:
-              "${"Reading Orientation".tl}: ${switch (rotation) {
-                false => "Portrait".tl,
-                true => "Landscape".tl,
-                _ => "Auto".tl,
-              }}",
-          child: IconButton(
-            icon: Icon(switch (rotation) {
-              false => Icons.screen_lock_portrait,
-              true => Icons.screen_lock_landscape,
-              _ => Icons.screen_rotation,
-            }),
-            onPressed: toggleReadingOrientation,
-          ),
-        ),
-      Tooltip(
-        message: "Auto Page Turning".tl,
-        child: IconButton(
-          // R4-5：按页计时与匀速滚动共用一个按钮，图标只反映"是否在播"。
-          icon: context.reader.isAutoPlaying
-              ? const Icon(Icons.timer)
-              : const Icon(Icons.timer_sharp),
-          onPressed: () {
-            context.reader.toggleAutoPlay();
-            update();
-          },
-        ),
-      ),
-      if (context.reader.widget.chapters != null)
-        Tooltip(
-          message: "Chapters".tl,
-          child: IconButton(
-            icon: const Icon(Icons.library_books),
-            onPressed: openChapterDrawer,
-          ),
-        ),
-      Tooltip(
-        message: "Save Image".tl,
-        child: IconButton(
-          icon: const Icon(Icons.download),
-          onPressed: saveCurrentImage,
-        ),
-      ),
-    ];
-
-    void turnChapter(bool forward) {
-      final reader = context.reader;
-      final target = reader.visibleChapterFrom(
-        reader.chapter,
-        forward ? 1 : -1,
-      );
-      if (target != null) {
-        reader.toChapter(target);
-      } else {
-        reader.toPage(forward ? reader.maxPage : 1);
-      }
-    }
-
-    final prevChapterButton = IconButton.filledTonal(
-      onPressed: () => turnChapter(isReversed),
-      icon: const Icon(Icons.first_page),
-    );
-
-    final nextChapterButton = IconButton.filledTonal(
-      onPressed: () => turnChapter(!isReversed),
-      icon: const Icon(Icons.last_page),
-    );
-
-    final pageIndicator = GestureDetector(
-      onTap: showPageJumpDialog,
-      child: Container(
-        height: 32,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.tertiaryContainer,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Center(child: Text(text, style: const TextStyle(fontSize: 13))),
-      ),
-    );
-
-    Widget twoRowLayout() => Column(
-      children: [
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            const SizedBox(width: 8),
-            prevChapterButton,
-            // With the edge rail on, the slider's job moves out of the bar;
-            // the chapter buttons and the page indicator stay put.
-            if (pageRailEnabled) const Spacer() else Expanded(child: buildSlider()),
-            pageIndicator,
-            nextChapterButton,
-            const SizedBox(width: 8),
-          ],
-        ),
-        LayoutBuilder(
-          builder: (context, constrains) {
-            final small = (constrains.maxWidth - buttons.length * 50) < 120;
-            return Row(
-              children: [
-                const Spacer(),
-                for (var button in buttons)
-                  if (!small)
-                    button.paddingHorizontal(4)
-                  else ...[
-                    button,
-                    const Spacer(),
-                  ],
-                if (!small) const SizedBox(width: 4),
-              ],
-            );
-          },
-        ),
-      ],
-    );
-
-    // Landscape phones have little height to spare: fold the slider row and the
-    // action row into one so the bar stops covering a third of the page. Only
-    // when the width actually fits everything plus a usable slider, otherwise
-    // the single row overflows and the two-row layout is the lesser evil.
-    Widget child = compactBars
-        ? LayoutBuilder(
-            builder: (context, constrains) {
-              const kMinSliderWidth = 120.0;
-              final fits =
-                  constrains.maxWidth - (buttons.length + 2) * 48 - 74 - 8 >=
-                  kMinSliderWidth;
-              return SizedBox(
-                height: fits ? bottomBarHeight : kBottomBarHeight,
-                child: fits
-                    ? Row(
-                        children: [
-                          const SizedBox(width: 4),
-                          prevChapterButton,
-                          if (pageRailEnabled)
-                            const Spacer()
-                          else
-                            Expanded(child: buildSlider()),
-                          pageIndicator,
-                          nextChapterButton,
-                          ...buttons,
-                          const SizedBox(width: 4),
-                        ],
-                      )
-                    : twoRowLayout(),
-              );
-            },
-          )
-        : SizedBox(height: bottomBarHeight, child: twoRowLayout());
-
-    return BlurEffect(
-      child: Container(
-        decoration: BoxDecoration(
-          color: context.colorScheme.surface.toOpacity(0.92),
-          border: isOpen
-              ? Border(
-                  top: BorderSide(
-                    color: Colors.grey.toOpacity(0.5),
-                    width: 0.5,
-                  ),
-                )
-              : null,
-        ),
-        padding: EdgeInsets.only(bottom: context.padding.bottom),
-        child: Padding(
-          padding: EdgeInsets.only(
-            left: context.padding.left,
-            right: context.padding.right,
-          ),
-          child: child,
-        ),
-      ),
-    );
-  }
-
-  var sliderFocus = FocusNode();
-
-  Widget buildSlider() {
-    // Clamp page to maxPage (excluding chapter comments page)
-    final displayPage = context.reader.page.clamp(1, context.reader.maxPage);
-    return CustomSlider(
-      focusNode: sliderFocus,
-      value: displayPage.toDouble(),
-      min: 1,
-      max: context.reader.maxPage.clamp(displayPage, 1 << 16).toDouble(),
-      reversed: isReversed,
-      divisions: (context.reader.maxPage - 1).clamp(2, 1 << 16),
-      onChanged: (i) {
-        context.reader.toPage(i.toInt());
-      },
-    );
-  }
+  // P57.x：顶/底工具栏已移除，原 buildBottom / buildSlider 一并删除。
 
   Widget buildPageInfoText() {
     var epName =
@@ -1072,30 +690,48 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
     );
   }
 
+  /// 时钟 + 电量：作为右下角簇的左半部分，与缩放簇共用一行、同一中线。
+  /// 字号收到 13（与缩放簇百分比读数一致），高度靠 `crossAxisAlignment.center`
+  /// 与 34dp 的缩放簇胶囊对齐。
   Widget buildStatusInfo() {
-    if (appdata.settings['enableClockAndBatteryInfoInReader']) {
-      return Positioned(
-        bottom: 13,
-        right: 25,
-        child: Row(
-          children: [
-            _ClockWidget(),
-            const SizedBox(width: 10),
-            _BatteryWidget(),
-          ],
-        ),
-      );
-    } else {
+    if (appdata.settings['enableClockAndBatteryInfoInReader'] != true) {
       return const SizedBox.shrink();
     }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _ClockWidget(),
+        const SizedBox(width: 8),
+        _BatteryWidget(),
+      ],
+    );
   }
 
   void openChapterDrawer() {
-    _openSideBar(
-      context.reader.widget.chapters!.isGrouped
-          ? _GroupedChaptersView(context.reader)
-          : _ChaptersView(context.reader),
-      width: 400,
+    final chapters = context.reader.widget.chapters;
+    if (chapters == null) return;
+    final body = chapters.isGrouped
+        ? _GroupedChaptersView(context.reader)
+        : _ChaptersView(context.reader);
+    if (!desktopLayout) {
+      _openSideBar(body, width: 400);
+      return;
+    }
+    // P56 / comix.to 实测：右上角胶囊是**入口**，点开的是居中模态
+    // （约 555×480 + 全屏遮罩），不是右上角锚定的下拉浮层。
+    showDialog(
+      context: context,
+      builder: (dialogContext) => ContentDialog(
+        title: "Chapter list".tl,
+        content: SizedBox(width: 555, height: 480, child: body),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text("Close".tl),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1257,140 +893,6 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
     );
   }
 
-  void showPageJumpDialog() {
-    final maxPage = context.reader.maxPage;
-    final controller = TextEditingController(
-      text: context.reader.page.toString(),
-    );
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text("Jump to page".tl),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                "${"Total pages".tl}: $maxPage",
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: "Page number".tl,
-                  hintText: "1-$maxPage",
-                ),
-                onSubmitted: (value) {
-                  var page = int.tryParse(value);
-                  if (page != null) {
-                    page = page.clamp(1, maxPage);
-                    this.context.reader.toPage(page);
-                    Navigator.of(context).pop();
-                  }
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text("Cancel".tl),
-            ),
-            TextButton(
-              onPressed: () {
-                var page = int.tryParse(controller.text);
-                if (page != null) {
-                  page = page.clamp(1, maxPage);
-                  this.context.reader.toPage(page);
-                  Navigator.of(context).pop();
-                } else {
-                  showToast(
-                    message: "Invalid page number".tl,
-                    context: this.context,
-                  );
-                }
-              },
-              child: Text("Jump".tl),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget buildEpChangeButton() {
-    final extraWidth = context.padding.left + context.padding.right;
-    if (context.reader.widget.chapters == null) return const SizedBox();
-    switch (showFloatingButtonValue) {
-      case 0:
-        return Container(
-          width: 58 + extraWidth,
-          height: 58,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primaryContainer,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Icon(
-            lastValue == 1
-                ? Icons.arrow_forward_ios
-                : Icons.arrow_back_ios_outlined,
-            size: 24,
-            color: Theme.of(context).colorScheme.onPrimaryContainer,
-          ),
-        );
-      case -1:
-      case 1:
-        return SizedBox(
-          width: 58 + extraWidth,
-          height: 58,
-          child: Material(
-            color: Theme.of(context).colorScheme.primaryContainer,
-            borderRadius: BorderRadius.circular(16),
-            elevation: 2,
-            child: InkWell(
-              onTap: () {
-                if (showFloatingButtonValue == 1) {
-                  context.reader.toNextChapter();
-                } else if (showFloatingButtonValue == -1) {
-                  context.reader.toPrevChapter();
-                }
-                setFloatingButton(0);
-              },
-              borderRadius: BorderRadius.circular(16),
-              child: Center(
-                child: Icon(
-                  _getArrowIcon(isReversed, showFloatingButtonValue),
-                  size: 24,
-                  color: Theme.of(context).colorScheme.onPrimaryContainer,
-                ),
-              ),
-            ),
-          ),
-        );
-    }
-    return const SizedBox();
-  }
-
-  IconData _getArrowIcon(bool reversed, int value) {
-    if (reversed) {
-      return value == 1
-          ? Icons.arrow_back_ios_outlined
-          : Icons.arrow_forward_ios;
-    } else {
-      return value == 1
-          ? Icons.arrow_forward_ios
-          : Icons.arrow_back_ios_outlined;
-    }
-  }
-
   /// If there is only one image on screen, return it.
   ///
   /// If there are multiple images on screen,
@@ -1460,10 +962,6 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
   }
 
   Future<Offset?> _showSelectImageOverlay() {
-    if (_isOpen) {
-      openOrClose();
-    }
-
     var completer = Completer<Offset?>();
 
     var overlay = Overlay.of(context);
@@ -1578,10 +1076,12 @@ class _BatteryWidgetState extends State<_BatteryWidget> {
     }
 
     return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Icon(
           batteryIcon,
-          size: 16,
+          size: 15,
           color: batteryColor,
           // Stroke
           shadows: List.generate(9, (index) {
@@ -1601,14 +1101,14 @@ class _BatteryWidgetState extends State<_BatteryWidget> {
             Text(
               '$batteryLevel%',
               style: TextStyle(
-                fontSize: 14,
+                fontSize: 13,
                 foreground: Paint()
                   ..style = PaintingStyle.stroke
                   ..strokeWidth = 1.4
                   ..color = context.colorScheme.onInverseSurface,
               ),
             ),
-            Text('$batteryLevel%'),
+            Text('$batteryLevel%', style: const TextStyle(fontSize: 13)),
           ],
         ),
       ],
@@ -1658,14 +1158,15 @@ class _ClockWidgetState extends State<_ClockWidget> {
         Text(
           _currentTime,
           style: TextStyle(
-            fontSize: 14,
+            // 与缩放簇百分比读数同字号，视觉上同属一行控件。
+            fontSize: 13,
             foreground: Paint()
               ..style = PaintingStyle.stroke
               ..strokeWidth = 1.4
               ..color = context.colorScheme.onInverseSurface,
           ),
         ),
-        Text(_currentTime),
+        Text(_currentTime, style: const TextStyle(fontSize: 13)),
       ],
     );
   }
@@ -1730,6 +1231,50 @@ class _SelectImageOverlayContentState
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 阅读器的全局外观切换：单按钮弹出「白天 / 夜间 / 护眼」三选项。
+/// 图标随当前档位变化，选中后写入 `theme_mode` 并全局重建（取代旧夜间模式按钮）。
+///
+/// 弹出面板使用项目自绘的 [MangrovePopupMenuButton]（非 Windows/原生
+/// `PopupMenuButton`），与三档主题 / 护眼纸面统一。
+class ReaderAppearanceToggle extends StatelessWidget {
+  const ReaderAppearanceToggle({super.key});
+
+  static const List<(String, IconData, String)> kModes = [
+    ('light', Icons.wb_sunny_outlined, '白天'),
+    ('dark', Icons.nightlight_round, '夜间'),
+    ('sepia', Icons.visibility_outlined, '护眼'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final mode = appdata.settings['theme_mode'] as String?;
+    final colorScheme = Theme.of(context).colorScheme;
+    final active = kModes.firstWhere(
+      (m) => m.$1 == mode,
+      orElse: () => kModes.first,
+    );
+    return MangrovePopupMenuButton<String>(
+      tooltip: "Appearance".tl,
+      icon: Icon(active.$2, color: colorScheme.onSurface),
+      initialValue: mode,
+      onSelected: (value) {
+        appdata.settings['theme_mode'] = value;
+        appdata.saveData();
+        App.forceRebuild();
+      },
+      items: [
+        for (final m in kModes)
+          MangrovePopupItem(
+            value: m.$1,
+            leading: m.$2,
+            label: m.$3,
+            selected: m.$1 == mode,
+          ),
+      ],
     );
   }
 }

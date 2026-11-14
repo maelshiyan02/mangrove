@@ -33,8 +33,14 @@ class ChapterCapsule extends StatelessWidget {
       child: Container(
         height: 34,
         decoration: BoxDecoration(
-          color: colorScheme.surfaceContainerHighest.toOpacity(0.92),
-          borderRadius: BorderRadius.circular(4),
+          // 纯透明底 + 随主题变化的轮廓线：不再用实心色块压住画布，
+          // 夜间 / 护眼档切换时描边自动跟随 `outline`。
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: colorScheme.outline.withValues(alpha: 0.55),
+            width: 1,
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -43,7 +49,10 @@ class ChapterCapsule extends StatelessWidget {
               icon: Icons.chevron_left_rounded,
               tooltip: "Previous chapter".tl,
               enabled: prev != null,
-              onTap: () => reader.toPrevChapter(toLastPage: true),
+              onTap: prev != null &&
+                      allowReaderChapterJump(ReaderJumpOrigin.capsule)
+                  ? () => reader.toPrevChapter(toLastPage: true)
+                  : null,
             ),
             InkWell(
               borderRadius: const BorderRadius.horizontal(
@@ -64,7 +73,10 @@ class ChapterCapsule extends StatelessWidget {
               icon: Icons.chevron_right_rounded,
               tooltip: "Next chapter".tl,
               enabled: next != null,
-              onTap: () => reader.toNextChapter(),
+              onTap: next != null &&
+                      allowReaderChapterJump(ReaderJumpOrigin.capsule)
+                  ? () => reader.toNextChapter()
+                  : null,
             ),
           ],
         ),
@@ -78,13 +90,14 @@ class _CapsuleArrow extends StatelessWidget {
     required this.icon,
     required this.tooltip,
     required this.enabled,
-    required this.onTap,
+    this.onTap,
   });
 
   final IconData icon;
   final String tooltip;
   final bool enabled;
-  final VoidCallback onTap;
+  // P56：显式跳章守卫未放行时允许为空，InkWell 会自动置灰。
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {

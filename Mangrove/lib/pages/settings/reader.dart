@@ -544,6 +544,26 @@ class _ReaderSettingsState extends State<ReaderSettings> {
               comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
               useDeviceSettings: useDeviceSpecificSettings,
             ),
+            // P56：两套布局是**设置项**，不是平台硬判断。桌面布局把章节
+            // 胶囊放右上、页轨放左缘、缩放簇放右下并启用桌面快捷键。
+            SelectSetting(
+              title: "Reader layout".tl,
+              settingKey: "readerLayoutMode",
+              optionTranslation: {
+                "auto": "Auto".tl,
+                "desktop": "Desktop layout".tl,
+                "mobile": "Mobile layout".tl,
+              },
+              onChanged: () {
+                setState(() {});
+                widget.onChanged?.call("readerLayoutMode");
+              },
+              comicId: isEnabledSpecificSettings ? widget.comicId : null,
+              comicSource: isEnabledSpecificSettings
+                  ? widget.comicSource
+                  : null,
+              useDeviceSettings: useDeviceSpecificSettings,
+            ),
             SelectSetting(
               title: "Reading mode".tl,
               settingKey: "readerMode",
@@ -1073,62 +1093,6 @@ class _ReaderSettingsState extends State<ReaderSettings> {
               useDeviceSettings: useDeviceSpecificSettings,
             ),
             _SwitchSetting(
-              title: "Night mode".tl,
-              subtitle:
-                  "Dim the page with a warm overlay to reduce eye strain".tl,
-              settingKey: "readerNightMode",
-              enabled: appdata.settings['readerNightModeFollowSystem'] != true,
-              onChanged: () {
-                setState(() {});
-                widget.onChanged?.call("readerNightMode");
-              },
-            ),
-            _SwitchSetting(
-              title: "Follow system dark mode".tl,
-              subtitle:
-                  "Turn night mode on/off automatically with the system theme"
-                      .tl,
-              settingKey: "readerNightModeFollowSystem",
-              onChanged: () {
-                if (appdata.settings['readerNightModeFollowSystem'] == true) {
-                  final isDark =
-                      View.of(context).platformDispatcher.platformBrightness ==
-                      Brightness.dark;
-                  appdata.settings['readerNightMode'] = isDark;
-                  appdata.saveData();
-                  widget.onChanged?.call("readerNightMode");
-                }
-                setState(() {});
-                widget.onChanged?.call("readerNightModeFollowSystem");
-              },
-            ),
-            if (appdata.settings['readerNightMode'] == true ||
-                appdata.settings['readerNightModeFollowSystem'] == true)
-              SelectSetting(
-                title: "Night mode color".tl,
-                settingKey: "readerNightModeColor",
-                optionTranslation: {
-                  "warm": "Warm".tl,
-                  "black": "Black".tl,
-                  "red": "Dim red".tl,
-                },
-                onChanged: () {
-                  widget.onChanged?.call("readerNightModeColor");
-                },
-              ),
-            if (appdata.settings['readerNightMode'] == true ||
-                appdata.settings['readerNightModeFollowSystem'] == true)
-              _SliderSetting(
-                title: "Night mode intensity".tl,
-                settingsIndex: "readerNightModeIntensity",
-                interval: 0.05,
-                min: 0.1,
-                max: 0.85,
-                onChanged: () {
-                  widget.onChanged?.call("readerNightModeIntensity");
-                },
-              ),
-            _SwitchSetting(
               title: "Chapter capsule".tl,
               subtitle: "Compact chapter switcher in the top bar".tl,
               settingKey: "readerChapterCapsule",
@@ -1164,24 +1128,8 @@ class _ReaderSettingsState extends State<ReaderSettings> {
               comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
               useDeviceSettings: useDeviceSpecificSettings,
             ),
-            SelectSetting(
-              title: "Show / hide the bars with".tl,
-              settingKey: "readerChromeHideTrigger",
-              optionTranslation: {
-                "tapCenter": "Tap the centre".tl,
-                "singleTapAnywhere": "Tap anywhere".tl,
-                "doubleTap": "Double tap".tl,
-              },
-              help: "Tapping anywhere / double tapping replaces double-tap zoom"
-                  .tl,
-              onChanged: () {
-                setState(() {});
-                widget.onChanged?.call("readerChromeHideTrigger");
-              },
-              comicId: isEnabledSpecificSettings ? widget.comicId : null,
-              comicSource: isEnabledSpecificSettings ? widget.comicSource : null,
-              useDeviceSettings: useDeviceSpecificSettings,
-            ),
+            // 「Show / hide the bars with」已随顶/底工具栏一起退役（P57.x）：
+            // 工具栏不存在了，这个开关只剩「单击任意位置就不翻页」这一类副作用。
             _SwitchSetting(
               title: "Display time & battery info in reader".tl,
               settingKey: "enableClockAndBatteryInfoInReader",

@@ -1,0 +1,980 @@
+{
+  "url": "https://comix.to/title/qqwrm-full-time-awakening/11705838-chapter-170",
+  "viewport": {
+    "w": 1488,
+    "h": 758,
+    "dpr": 1
+  },
+  "widgets_initial": [
+    {
+      "cls": "rpage-progress rpage-progress--left",
+      "tag": "DIV",
+      "aria": "Page progress",
+      "text": "",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 758
+      },
+      "style": {
+        "position": "absolute",
+        "z": "40",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "0px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "top 0.25s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl",
+      "tag": "DIV",
+      "aria": "Reader controls",
+      "text": "Ch.170 / 170",
+      "rect": {
+        "x": 1301,
+        "y": 12,
+        "w": 175,
+        "h": 338
+      },
+      "style": {
+        "position": "fixed",
+        "z": "50",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "0px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "opacity 0.25s, right 0.25s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__row",
+      "tag": "DIV",
+      "aria": "",
+      "text": "Ch.170 / 170",
+      "rect": {
+        "x": 1301,
+        "y": 12,
+        "w": 175,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(42, 49, 52, 0.92)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "all"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__btn",
+      "tag": "BUTTON",
+      "aria": "Previous chapter",
+      "text": "",
+      "rect": {
+        "x": 1301,
+        "y": 12,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "4px 0px 0px 4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__chap",
+      "tag": "BUTTON",
+      "aria": "Chapter list",
+      "text": "Ch.170 / 170",
+      "rect": {
+        "x": 1335,
+        "y": 12,
+        "w": 107,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "0px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__chap-total mono",
+      "tag": "SPAN",
+      "aria": "",
+      "text": "/ 170",
+      "rect": {
+        "x": 1394,
+        "y": 20,
+        "w": 36,
+        "h": 18
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "0px",
+        "opacity": "1",
+        "display": "block",
+        "transition": "all"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__btn",
+      "tag": "BUTTON",
+      "aria": "Next chapter",
+      "text": "",
+      "rect": {
+        "x": 1442,
+        "y": 12,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "0px 4px 4px 0px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__col",
+      "tag": "DIV",
+      "aria": "",
+      "text": "",
+      "rect": {
+        "x": 1434,
+        "y": 56,
+        "w": 42,
+        "h": 294
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(42, 49, 52, 0.92)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "all"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__btn",
+      "tag": "A",
+      "aria": "Home",
+      "text": "",
+      "rect": {
+        "x": 1438,
+        "y": 60,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__btn",
+      "tag": "A",
+      "aria": "Manga page",
+      "text": "",
+      "rect": {
+        "x": 1438,
+        "y": 96,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__btn ",
+      "tag": "BUTTON",
+      "aria": "Toggle comments",
+      "text": "",
+      "rect": {
+        "x": 1438,
+        "y": 132,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__btn",
+      "tag": "BUTTON",
+      "aria": "Chapter list",
+      "text": "",
+      "rect": {
+        "x": 1438,
+        "y": 168,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__btn rpage-floatctl__btn--fs ",
+      "tag": "BUTTON",
+      "aria": "Enter fullscreen",
+      "text": "",
+      "rect": {
+        "x": 1438,
+        "y": 204,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__btn ",
+      "tag": "BUTTON",
+      "aria": "Start auto-scroll",
+      "text": "",
+      "rect": {
+        "x": 1438,
+        "y": 240,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__btn",
+      "tag": "BUTTON",
+      "aria": "Settings",
+      "text": "",
+      "rect": {
+        "x": 1438,
+        "y": 276,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-floatctl__btn",
+      "tag": "BUTTON",
+      "aria": "Help",
+      "text": "",
+      "rect": {
+        "x": 1438,
+        "y": 312,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-chap-ending",
+      "tag": "DIV",
+      "aria": "",
+      "text": "43Full-Time AwakeningCh. 170·Translated by ThunderscansPrev · Ch. 169N",
+      "rect": {
+        "x": 377,
+        "y": 99438,
+        "w": 720,
+        "h": 245
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "0px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "all"
+      }
+    },
+    {
+      "cls": "rpage-chap-ending__nav",
+      "tag": "DIV",
+      "aria": "",
+      "text": "Prev · Ch. 169Next",
+      "rect": {
+        "x": 377,
+        "y": 99518,
+        "w": 720,
+        "h": 44
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "0px",
+        "opacity": "1",
+        "display": "grid",
+        "transition": "all"
+      }
+    },
+    {
+      "cls": "rpage-chap-ending__nav-btn",
+      "tag": "BUTTON",
+      "aria": "",
+      "text": "Prev · Ch. 169",
+      "rect": {
+        "x": 377,
+        "y": 99518,
+        "w": 355,
+        "h": 44
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgb(42, 49, 52)",
+        "radius": "8px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.15s, color 0.15s"
+      }
+    },
+    {
+      "cls": "rpage-chap-ending__nav-btn",
+      "tag": "BUTTON",
+      "aria": "",
+      "text": "Next",
+      "rect": {
+        "x": 742,
+        "y": 99518,
+        "w": 355,
+        "h": 44
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgb(42, 49, 52)",
+        "radius": "8px",
+        "opacity": "0.4",
+        "display": "flex",
+        "transition": "background 0.15s, color 0.15s"
+      }
+    },
+    {
+      "cls": "rpage-chap-ending__placeholder mono",
+      "tag": "DIV",
+      "aria": "",
+      "text": "Comments load when you reach the end.",
+      "rect": {
+        "x": 377,
+        "y": 99662,
+        "w": 720,
+        "h": 21
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "0px",
+        "opacity": "1",
+        "display": "block",
+        "transition": "all"
+      }
+    },
+    {
+      "cls": "rpage-bottombar",
+      "tag": "FOOTER",
+      "aria": "",
+      "text": "50%",
+      "rect": {
+        "x": 0,
+        "y": 704,
+        "w": 1488,
+        "h": 54
+      },
+      "style": {
+        "position": "absolute",
+        "z": "30",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "0px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "opacity 0.25s"
+      }
+    },
+    {
+      "cls": "rpage-zoom rpage-bottombar__hide-mobile",
+      "tag": "DIV",
+      "aria": "Image width",
+      "text": "50%",
+      "rect": {
+        "x": 1358,
+        "y": 714,
+        "w": 116,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(42, 49, 52, 0.92)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "all"
+      }
+    },
+    {
+      "cls": "rpage-zoom__btn",
+      "tag": "BUTTON",
+      "aria": "Shrink image",
+      "text": "",
+      "rect": {
+        "x": 1358,
+        "y": 714,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    },
+    {
+      "cls": "rpage-zoom__value mono",
+      "tag": "SPAN",
+      "aria": "",
+      "text": "50%",
+      "rect": {
+        "x": 1392,
+        "y": 714,
+        "w": 48,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "0px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "all"
+      }
+    },
+    {
+      "cls": "rpage-zoom__btn",
+      "tag": "BUTTON",
+      "aria": "Enlarge image",
+      "text": "",
+      "rect": {
+        "x": 1440,
+        "y": 714,
+        "w": 34,
+        "h": 34
+      },
+      "style": {
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "radius": "4px",
+        "opacity": "1",
+        "display": "flex",
+        "transition": "background 0.12s, color 0.12s"
+      }
+    }
+  ],
+  "scroll_steps": [
+    {
+      "top": 0,
+      "sh": 99755,
+      "client": 758,
+      "gap": 98997
+    },
+    {
+      "top": 33369,
+      "sh": 99755,
+      "client": 758,
+      "gap": 65628
+    },
+    {
+      "top": 82526,
+      "sh": 99755,
+      "client": 758,
+      "gap": 16471
+    },
+    {
+      "top": 95480,
+      "sh": 99755,
+      "client": 758,
+      "gap": 3517
+    },
+    {
+      "top": 98930,
+      "sh": 100009,
+      "client": 758,
+      "gap": 321
+    },
+    {
+      "top": 99218,
+      "sh": 99976,
+      "client": 758,
+      "gap": 0
+    },
+    {
+      "top": 99240,
+      "sh": 103290,
+      "client": 758,
+      "gap": 3292
+    },
+    {
+      "top": 101484,
+      "sh": 103290,
+      "client": 758,
+      "gap": 1048
+    },
+    {
+      "top": 102433,
+      "sh": 103530,
+      "client": 758,
+      "gap": 339
+    },
+    {
+      "top": 102772,
+      "sh": 104719,
+      "client": 758,
+      "gap": 1189
+    },
+    {
+      "top": 103874,
+      "sh": 105297,
+      "client": 758,
+      "gap": 665
+    },
+    {
+      "top": 104527,
+      "sh": 105297,
+      "client": 758,
+      "gap": 12
+    },
+    {
+      "top": 104539,
+      "sh": 105714,
+      "client": 758,
+      "gap": 417
+    },
+    {
+      "top": 104956,
+      "sh": 105714,
+      "client": 758,
+      "gap": 0
+    },
+    {
+      "top": 104956,
+      "sh": 105714,
+      "client": 758,
+      "gap": 0
+    },
+    {
+      "top": 104956,
+      "sh": 105714,
+      "client": 758,
+      "gap": 0
+    }
+  ],
+  "end_nav": {
+    "scroll": {
+      "top": 104956,
+      "sh": 105714,
+      "client": 758,
+      "gap": 0
+    },
+    "wrap": {
+      "rect": {
+        "x": 377,
+        "y": -5518,
+        "w": 720,
+        "h": 6204
+      },
+      "display": "flex",
+      "opacity": "1"
+    },
+    "placeholder": null,
+    "navs": [
+      {
+        "text": "Prev · Ch. 169",
+        "href": "",
+        "rect": {
+          "x": 377,
+          "y": -5438,
+          "w": 355,
+          "h": 44
+        },
+        "disabled": false,
+        "cls": "rpage-chap-ending__nav-btn"
+      },
+      {
+        "text": "Next",
+        "href": "",
+        "rect": {
+          "x": 742,
+          "y": -5438,
+          "w": 355,
+          "h": 44
+        },
+        "disabled": true,
+        "cls": "rpage-chap-ending__nav-btn"
+      }
+    ]
+  },
+  "chapter_overlay": {
+    "overlays": [
+      {
+        "tag": "DIV",
+        "cls": "minidlg rpage-modal rpage-modal--chaplist",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 1488,
+          "h": 758
+        },
+        "position": "fixed",
+        "z": "120",
+        "bg": "rgba(0, 0, 0, 0.8)",
+        "text": "ChaptersAll groupsChapterVolumeDateLock to this group when prev, next chapCh.170Thunderscans·1w agoCh.170ManhwaNex·1w ag"
+      },
+      {
+        "tag": "DIV",
+        "cls": "minidlg__panel rpage-modal__panel rpage-modal__panel--chaplist",
+        "rect": {
+          "x": 464,
+          "y": 76,
+          "w": 560,
+          "h": 606
+        },
+        "position": "static",
+        "z": "auto",
+        "bg": "rgb(42, 49, 52)",
+        "text": "ChaptersAll groupsChapterVolumeDateLock to this group when prev, next chapCh.170Thunderscans·1w agoCh.170ManhwaNex·1w ag"
+      },
+      {
+        "tag": "HEADER",
+        "cls": "rpage-modal__head",
+        "rect": {
+          "x": 464,
+          "y": 76,
+          "w": 560,
+          "h": 51
+        },
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "Chapters"
+      },
+      {
+        "tag": "DIV",
+        "cls": "rpage-chaplist__toolbar",
+        "rect": {
+          "x": 464,
+          "y": 127,
+          "w": 560,
+          "h": 57
+        },
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "All groupsChapterVolumeDate"
+      },
+      {
+        "tag": "DIV",
+        "cls": "rpage-chaplist__body",
+        "rect": {
+          "x": 464,
+          "y": 219,
+          "w": 560,
+          "h": 406
+        },
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "Ch.170Thunderscans·1w agoCh.170ManhwaNex·1w agoCh.169Thunderscans·2w agoCh.169ManhwaNex·2w agoCh.168Thunderscans·2w agoC"
+      },
+      {
+        "tag": "UL",
+        "cls": "rpage-chaplist__list is-fetching",
+        "rect": {
+          "x": 478,
+          "y": 227,
+          "w": 522,
+          "h": 1565
+        },
+        "position": "static",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "Ch.170Thunderscans·1w agoCh.170ManhwaNex·1w agoCh.169Thunderscans·2w agoCh.169ManhwaNex·2w agoCh.168Thunderscans·2w agoC"
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-chaplist__item is-active",
+        "rect": {
+          "x": 478,
+          "y": 227,
+          "w": 522,
+          "h": 51
+        },
+        "position": "relative",
+        "z": "auto",
+        "bg": "rgba(102, 232, 250, 0.12)",
+        "text": "Ch.170Thunderscans·1w ago"
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-chaplist__item ",
+        "rect": {
+          "x": 478,
+          "y": 279,
+          "w": 522,
+          "h": 51
+        },
+        "position": "relative",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "Ch.170ManhwaNex·1w ago"
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-chaplist__item ",
+        "rect": {
+          "x": 478,
+          "y": 331,
+          "w": 522,
+          "h": 51
+        },
+        "position": "relative",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "Ch.169Thunderscans·2w ago"
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-chaplist__item ",
+        "rect": {
+          "x": 478,
+          "y": 383,
+          "w": 522,
+          "h": 51
+        },
+        "position": "relative",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "Ch.169ManhwaNex·2w ago"
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-chaplist__item ",
+        "rect": {
+          "x": 478,
+          "y": 436,
+          "w": 522,
+          "h": 51
+        },
+        "position": "relative",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "Ch.168Thunderscans·2w ago"
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-chaplist__item ",
+        "rect": {
+          "x": 478,
+          "y": 488,
+          "w": 522,
+          "h": 51
+        },
+        "position": "relative",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "Ch.168ManhwaNex·3w ago"
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-chaplist__item ",
+        "rect": {
+          "x": 478,
+          "y": 540,
+          "w": 522,
+          "h": 51
+        },
+        "position": "relative",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "Ch.167Thunderscans·4w ago"
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-chaplist__item ",
+        "rect": {
+          "x": 478,
+          "y": 592,
+          "w": 522,
+          "h": 51
+        },
+        "position": "relative",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "Ch.167ManhwaNex·4w ago"
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-chaplist__item ",
+        "rect": {
+          "x": 478,
+          "y": 644,
+          "w": 522,
+          "h": 51
+        },
+        "position": "relative",
+        "z": "auto",
+        "bg": "rgba(0, 0, 0, 0)",
+        "text": "Ch.166Thunderscans·1mo ago"
+      }
+    ],
+    "bodyOverflow": "hidden"
+  },
+  "settings": {
+    "hits": [
+      {
+        "tag": "DIV",
+        "cls": "cm-item__content content-rendered",
+        "text": "Man I’m not one to complain but these gotta drop faster 😭😭😭"
+      },
+      {
+        "tag": "H3",
+        "cls": "rpage-settings__title mono",
+        "text": "Keyboard scrolling"
+      },
+      {
+        "tag": "SPAN",
+        "cls": "",
+        "text": "Scroll fast"
+      },
+      {
+        "tag": "SPAN",
+        "cls": "",
+        "text": "Scroll smooth"
+      },
+      {
+        "tag": "P",
+        "cls": "rpage-settings__hint",
+        "text": "Step size for Arrow / Space / W / S keys, as percent of the viewport height."
+      },
+      {
+        "tag": "H3",
+        "cls": "rpage-settings__title mono",
+        "text": "Auto-scroll speed"
+      },
+      {
+        "tag": "P",
+        "cls": "rpage-settings__hint",
+        "text": "Speed of the play / pause auto-scroll button in the reader controls."
+      }
+    ],
+    "dialogs": [
+      {
+        "cls": "minidlg rpage-modal rpage-modal--chaplist",
+        "text": "ChaptersAll groupsChapterVolumeDateLock to this group when prev, next chapCh.170Thunderscans·1w agoCh.170ManhwaNex·1w agoCh.169Thunderscans·2w agoCh.169ManhwaNex·2w agoCh.168Thunderscans·2w agoCh.168ManhwaNex·3w agoCh.167Thunderscans·4w agoCh.167ManhwaNex·4w agoCh.166Thunderscans·1mo agoCh.166ManhwaNex·1mo agoCh.165Thunderscans·1mo agoCh.165ManhwaNex·1mo agoCh.164Thunderscans·1mo agoCh.164ManhwaNex·1mo agoCh.163Thunderscans·1mo agoCh.163ManhwaNex·1mo agoCh.162Thunderscans·2mos agoCh.162ManhwaNex·2mos agoCh.161Thunderscans·2mos agoCh.161ManhwaNex·2mos agoCh.160Thunderscans·2mos agoCh.160ManhwaNex·2mos agoCh.159Thunderscans·2mos agoCh.159ManhwaNex·2mos agoCh.158Thunderscans·2mos agoCh.157Thunderscans·2mos agoCh.156Thunderscans·2mos agoCh.155Thunderscans·2mos agoCh.154Thunderscans·3mos agoCh.153Thunderscans·3mos ago12345678"
+      },
+      {
+        "cls": "minidlg__panel rpage-modal__panel rpage-modal__panel--chaplist",
+        "text": "ChaptersAll groupsChapterVolumeDateLock to this group when prev, next chapCh.170Thunderscans·1w agoCh.170ManhwaNex·1w agoCh.169Thunderscans·2w agoCh.169ManhwaNex·2w agoCh.168Thunderscans·2w agoCh.168ManhwaNex·3w agoCh.167Thunderscans·4w agoCh.167ManhwaNex·4w agoCh.166Thunderscans·1mo agoCh.166ManhwaNex·1mo agoCh.165Thunderscans·1mo agoCh.165ManhwaNex·1mo agoCh.164Thunderscans·1mo agoCh.164ManhwaNex·1mo agoCh.163Thunderscans·1mo agoCh.163ManhwaNex·1mo agoCh.162Thunderscans·2mos agoCh.162ManhwaNex·2mos agoCh.161Thunderscans·2mos agoCh.161ManhwaNex·2mos agoCh.160Thunderscans·2mos agoCh.160ManhwaNex·2mos agoCh.159Thunderscans·2mos agoCh.159ManhwaNex·2mos agoCh.158Thunderscans·2mos agoCh.157Thunderscans·2mos agoCh.156Thunderscans·2mos agoCh.155Thunderscans·2mos agoCh.154Thunderscans·3mos agoCh.153Thunderscans·3mos ago12345678"
+      },
+      {
+        "cls": "rpage-modal__head",
+        "text": "Chapters"
+      },
+      {
+        "cls": "minidlg rpage-modal rpage-modal--settings",
+        "text": "SettingsReading directionLeft to rightRight to leftTop to bottomStrip marginResetKeyboard scrollingScroll fastScroll smooth100%ResetStep size for Arrow / Space / W / S keys, as percent of the viewport height.Auto-scroll speed150 px/sSpeed of the play / pause auto-scroll button in the reader controls.Progress barPreload imagesPreload somePreload allHide controlsSingle tapDouble tapGreyscale pagesDim pages0%"
+      }
+    ]
+  },
+  "errors": [],
+  "chapter_click": {
+    "clicked": true,
+    "text": "Ch.170 / 170"
+  },
+  "settings_click": {
+    "clicked": true,
+    "cls": "rpage-floatctl__btn"
+  }
+}

@@ -42,6 +42,7 @@ import 'package:mangrove/foundation/missing_pages.dart';
 import 'package:mangrove/network/repair_download.dart';
 import 'package:mangrove/foundation/read_later.dart';
 import 'package:mangrove/foundation/reading_statistics.dart';
+import 'package:mangrove/foundation/reader_ux_policy.dart';
 import 'package:mangrove/foundation/res.dart';
 import 'package:mangrove/network/download.dart';
 import 'package:mangrove/network/images.dart';
@@ -510,6 +511,21 @@ class _ReaderState extends State<Reader>
     );
   }
 
+  /// 把 [LogicalKeyboardKey] 换算成纯策略层的字符串 label。
+  /// 策略层零 Flutter 依赖，键盘类型不能进入 `reader_ux_policy.dart`。
+  String? _readerKeyLabel(LogicalKeyboardKey key) {
+    if (key == LogicalKeyboardKey.space) return 'space';
+    if (key == LogicalKeyboardKey.arrowUp) return 'arrowUp';
+    if (key == LogicalKeyboardKey.arrowDown) return 'arrowDown';
+    if (key == LogicalKeyboardKey.arrowLeft) return 'arrowLeft';
+    if (key == LogicalKeyboardKey.arrowRight) return 'arrowRight';
+    if (key == LogicalKeyboardKey.keyW) return 'w';
+    if (key == LogicalKeyboardKey.keyS) return 's';
+    if (key == LogicalKeyboardKey.keyA) return 'a';
+    if (key == LogicalKeyboardKey.keyD) return 'd';
+    return null;
+  }
+
   void onKeyEvent(KeyEvent event) {
     if (event.logicalKey == LogicalKeyboardKey.f12 && event is KeyUpEvent) {
       fullscreen();
@@ -522,6 +538,50 @@ class _ReaderState extends State<Reader>
         )) {
       showReaderHelpDialog(context);
       return;
+    }
+
+    // P56：桌面布局统一接管空格 / 方向键 / WASD；移动端布局交回各阅读模式
+    // 原有的「按阅读方向映射」，避免在手机端把 ←→ 误改成切章。
+    final desktopLayout = isDesktopReaderLayout(
+      setting: appdata.settings[kReaderLayoutSettingKey],
+      desktopPlatform: App.isDesktop,
+      windowWidth: MediaQuery.sizeOf(context).width,
+    );
+    final keyLabel = _readerKeyLabel(event.logicalKey);
+    if (desktopLayout && keyLabel != null) {
+      final shiftHeld =
+          HardwareKeyboard.instance.isLogicalKeyPressed(
+            LogicalKeyboardKey.shiftLeft,
+          ) ||
+          HardwareKeyboard.instance.isLogicalKeyPressed(
+            LogicalKeyboardKey.shiftRight,
+          );
+      final action = readerKeyAction(
+        key: keyLabel,
+        desktopLayout: true,
+        shiftHeld: shiftHeld,
+      );
+      if (action == ReaderKeyAction.turnForward ||
+          action == ReaderKeyAction.turnBackward) {
+        // 空格显式接管，不再依赖 Flutter 焦点激活的副产物。
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
+          _imageViewController?.handleReaderAction(action);
+        }
+        return;
+      }
+      if (action == ReaderKeyAction.prevChapter ||
+          action == ReaderKeyAction.nextChapter) {
+        // 键盘切章是显式用户操作，与其它显式入口共用同一个守卫。
+        if (event is KeyDownEvent &&
+            allowReaderChapterJump(ReaderJumpOrigin.keyboard)) {
+          if (action == ReaderKeyAction.prevChapter) {
+            toPrevChapter(toLastPage: true);
+          } else {
+            toNextChapter();
+          }
+        }
+        return;
+      }
     }
     _imageViewController?.handleKeyEvent(event);
   }
@@ -1211,6 +1271,10 @@ abstract interface class _ImageViewController {
   void handleLongPressUp(Offset location);
 
   void handleKeyEvent(KeyEvent event);
+
+  /// P56：把已经由纯策略层归一化的翻页动作落到当前阅读模式。
+  /// gallery = 翻一页；continuous = 沿主轴滚半视口（200ms / Curves.ease）。
+  void handleReaderAction(ReaderKeyAction action);
 
   /// Returns true if the event is handled.
   bool handleOnTap(Offset location);

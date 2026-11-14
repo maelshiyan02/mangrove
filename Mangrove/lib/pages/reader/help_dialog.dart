@@ -30,20 +30,25 @@ void showReaderHelpDialog(BuildContext context) {
 class ReaderHelpDialog extends StatelessWidget {
   const ReaderHelpDialog({super.key});
 
+  /// P56：帮助声明的按键集合直接指向纯策略层的权威表。
+  /// `reader-ux-check` 会逐条把这张表喂回 `readerKeyAction`，
+  /// 「帮助写了 = 代码真的接了」，杜绝 P47 那种只有文案没有实现的虚标。
+  static const List<String> documentedKeys = kReaderHelpDocumentedKeys;
+
   static const _groups = <_HelpGroup>[
     _HelpGroup(
       "Pages",
       <_HelpEntry>[
-        _HelpEntry("← →", "Turn page (gallery)"),
-        _HelpEntry("↑ ↓", "Turn page (top-to-bottom)"),
-        _HelpEntry("A D / W S", "Turn page"),
-        _HelpEntry("Space", "Turn page"),
+        _HelpEntry("Space", "Scroll down half a viewport"),
+        // gallery 是离散页码，空格语义单独定义：翻到下一页。
+        _HelpEntry("Space · gallery", "Turn page (gallery)"),
+        _HelpEntry("↑ ↓ / W S", "Turn page"),
+        _HelpEntry("← → / A D", "Previous / next chapter"),
       ],
     ),
     _HelpGroup(
       "Chapters",
       <_HelpEntry>[
-        _HelpEntry("Shift + ← →", "Previous / next chapter"),
         _HelpEntry("Esc", "Back"),
       ],
     ),

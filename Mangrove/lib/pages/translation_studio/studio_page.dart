@@ -4751,23 +4751,15 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
             Builder(
               builder: (context) {
                 final scheme = Theme.of(context).colorScheme;
-                PopupMenuItem<String> item(
+                MangrovePopupItem<String> item(
                   String value,
                   IconData icon,
                   String label,
                 ) {
-                  return PopupMenuItem<String>(
+                  return MangrovePopupItem<String>(
                     value: value,
-                    height: 38,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(icon, size: 17),
-                        const SizedBox(width: 8),
-                        Text(label, style: ts.s14),
-                      ],
-                    ),
+                    leading: icon,
+                    label: label,
                   );
                 }
 
@@ -4814,17 +4806,8 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                                 }),
                       ),
                       // ② 形状下拉。
-                      PopupMenuButton<String>(
+                      MangrovePopupMenuButton<String>(
                         tooltip: 'Block shape'.tl,
-                        padding: EdgeInsets.zero,
-                        iconSize: 20,
-                        position: PopupMenuPosition.under,
-                        offset: const Offset(0, 6),
-                        color: scheme.surface,
-                        constraints: const BoxConstraints(
-                          minWidth: 168,
-                          maxWidth: 220,
-                        ),
                         icon: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -4842,7 +4825,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                         initialValue: _blockShape,
                         onSelected: (value) =>
                             setState(() => _blockShape = value),
-                        itemBuilder: (context) => [
+                        items: [
                           item('rect', Icons.crop, 'Rectangle'.tl),
                           item(
                             'polygon',
@@ -4859,17 +4842,8 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                         ],
                       ),
                       // ③ 类型下拉。
-                      PopupMenuButton<String>(
+                      MangrovePopupMenuButton<String>(
                         tooltip: 'Block type'.tl,
-                        padding: EdgeInsets.zero,
-                        iconSize: 20,
-                        position: PopupMenuPosition.under,
-                        offset: const Offset(0, 6),
-                        color: scheme.surface,
-                        constraints: const BoxConstraints(
-                          minWidth: 168,
-                          maxWidth: 220,
-                        ),
                         icon: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -4888,7 +4862,7 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
                         initialValue: _newBlockKind,
                         onSelected: (value) =>
                             setState(() => _newBlockKind = value),
-                        itemBuilder: (context) => [
+                        items: [
                           item(
                             TextBlockKind.dialogue,
                             Icons.chat_bubble_outline,
@@ -5800,34 +5774,31 @@ class _TranslationStudioPageState extends State<TranslationStudioPage> {
     return SizedBox(
       height: 18,
       child: Center(
-        child: PopupMenuButton<SeamState>(
+        child: MangrovePopupMenuButton<SeamState>(
           tooltip: label,
-          padding: EdgeInsets.zero,
-          iconSize: 16,
-          splashRadius: 16,
           // `todo` 就是"没有记录" ⇒ 落盘时清掉该条（`null`）。
           onSelected: (value) => _setSeamReview(
             seam,
             value == SeamState.todo ? null : value.wire,
           ),
-          itemBuilder: (_) => [
-            CheckedPopupMenuItem(
+          icon: Icon(icon, size: 16, color: color),
+          items: [
+            MangrovePopupItem(
               value: SeamState.clean,
-              checked: state == SeamState.clean,
-              child: Text('Mark as clean'.tl),
+              label: 'Mark as clean'.tl,
+              selected: state == SeamState.clean,
             ),
-            CheckedPopupMenuItem(
+            MangrovePopupItem(
               value: SeamState.split,
-              checked: state == SeamState.split,
-              child: Text('Mark as truncated'.tl),
+              label: 'Mark as truncated'.tl,
+              selected: state == SeamState.split,
             ),
-            CheckedPopupMenuItem(
+            MangrovePopupItem(
               value: SeamState.todo,
-              checked: state == SeamState.todo,
-              child: Text('Clear mark'.tl),
+              label: 'Clear mark'.tl,
+              selected: state == SeamState.todo,
             ),
           ],
-          icon: Icon(icon, size: 16, color: color),
         ),
       ),
     );

@@ -140,20 +140,15 @@ class _ReaderImagesState extends State<_ReaderImages> {
       load();
       return const Center(child: CircularProgressIndicator());
     } else if (error != null) {
-      return GestureDetector(
-        onTap: () {
-          context.readerScaffold.openOrClose();
-        },
-        child: SizedBox.expand(
-          child: NetworkError(
-            message: error!,
-            retry: () {
-              setState(() {
-                reader.isLoading = true;
-                error = null;
-              });
-            },
-          ),
+      return SizedBox.expand(
+        child: NetworkError(
+          message: error!,
+          retry: () {
+            setState(() {
+              reader.isLoading = true;
+              error = null;
+            });
+          },
         ),
       );
     } else {
@@ -263,12 +258,6 @@ class _GalleryModeState extends State<_GalleryMode>
     reader = context.reader;
     controller = PageController(initialPage: reader.page);
     reader._imageViewController = this;
-    Future.microtask(() {
-      if (!mounted) {
-        return;
-      }
-      context.readerScaffold.setFloatingButton(0);
-    });
     _schedulePrecache(reader.page);
     super.initState();
   }
@@ -531,23 +520,16 @@ class _GalleryModeState extends State<_GalleryMode>
           );
         },
         onPageChanged: (i) {
+          // P56：翻过首尾页只回弹，绝不自动跳章。换章出口统一由章末双卡、
+          // 右上胶囊与桌面 ←/→ 快捷键显式触发。
           if (i == 0) {
-            if (reader.isFirstChapterOfGroup ||
-                !reader.toPrevChapter(toLastPage: true)) {
-              controller.jumpToPage(1);
-            }
+            controller.jumpToPage(1);
           } else if (i == totalPages + 1) {
-            if (reader.isLastChapterOfGroup || !reader.toNextChapter()) {
-              controller.jumpToPage(totalPages);
-            }
+            controller.jumpToPage(totalPages);
           } else {
             reader.setPage(i);
             _schedulePrecache(i);
             context.readerScaffold.update();
-            // Auto close toolbar when entering chapter comments page
-            if (isChapterCommentsPage(i) && context.readerScaffold.isOpen) {
-              context.readerScaffold.openOrClose();
-            }
           }
           // Remove other pages' controllers to reset their state.
           var keys = photoViewControllers.keys.toList();
@@ -741,6 +723,16 @@ class _GalleryModeState extends State<_GalleryMode>
   Timer? keyRepeatTimer;
 
   @override
+  void handleReaderAction(ReaderKeyAction action) {
+    // gallery 的「向下半页」语义 = 翻到下一页（离散页码没有像素插值）。
+    if (action == ReaderKeyAction.turnForward) {
+      reader.toPage(reader.page + 1);
+    } else if (action == ReaderKeyAction.turnBackward) {
+      reader.toPage(reader.page - 1);
+    }
+  }
+
+  @override
   void handleKeyEvent(KeyEvent event) {
     bool? forward;
     if (reader.mode == ReaderMode.galleryLeftToRight &&
@@ -872,7 +864,8 @@ class _ContinuousReaderEntry {
   }) : nextChapter = null,
        hasNext = false,
        isLoading = false,
-       error = null;
+       error = null,
+       isChapterEnd = false;
 
   const _ContinuousReaderEntry.separator({
     required this.chapter,
@@ -881,7 +874,18 @@ class _ContinuousReaderEntry {
     this.isLoading = false,
     this.error,
   }) : page = 0,
-       imageKey = null;
+       imageKey = null,
+       isChapterEnd = false;
+
+  /// P56：非无缝连续模式在章节图片的**内容流末尾**插入常驻双卡。
+  const _ContinuousReaderEntry.chapterEnd({required this.chapter})
+      : page = 0,
+        imageKey = null,
+        nextChapter = null,
+        hasNext = false,
+        isLoading = false,
+        error = null,
+        isChapterEnd = true;
 
   final int chapter;
   final int page;
@@ -890,9 +894,10 @@ class _ContinuousReaderEntry {
   final bool hasNext;
   final bool isLoading;
   final String? error;
+  final bool isChapterEnd;
 
   bool get isImage => imageKey != null;
-  bool get isSeparator => !isImage;
+  bool get isSeparator => !isImage && !isChapterEnd;
 }
 
 class _ContinuousModeState extends State<_ContinuousMode>
@@ -995,17 +1000,31 @@ class _ContinuousModeState extends State<_ContinuousMode>
     if (seamlessChapterReading) {
       _entries = _continuousEntries();
     } else {
-      // Single-chapter continuous mode: just this chapter's pages. Chapter
-      // changes happen via the edge-swipe gesture, which rebuilds the whole
-      // widget with the new chapter — no separators or cross-chapter joining.
+      // Single-chapter continuous mode: this chapter's pages + 章末常驻双卡。
+      // P56 起换章只能显式点击（双卡 / 右上胶囊 / ←→ 快捷键），所以即使图片
+      // 没加载完、只有一页、甚至章节为空，双卡也必须留在内容流末尾。
       final imgs = reader.images ?? const <String>[];
-      _entries = [
+      _entries = <_ContinuousReaderEntry>[
         for (var i = 0; i < imgs.length; i++)
           _ContinuousReaderEntry.image(
             chapter: reader.chapter,
             page: i + 1,
             imageKey: imgs[i],
           ),
+        if (shouldShowChapterEndNavInFlow(
+          enabled:
+              appdata.settings.getReaderSetting(
+                reader.cid,
+                reader.type.sourceKey,
+                'readerShowChapterEndNav',
+              ) !=
+              false,
+          hasChapters: reader.widget.chapters != null,
+          seamless: seamlessChapterReading,
+          imageCount: imgs.length,
+          imagesLoaded: reader.images != null,
+        ))
+          _ContinuousReaderEntry.chapterEnd(chapter: reader.chapter),
       ];
     }
     _anchorIndex = _indexOfEntry(_anchorChapter, _anchorPage);
@@ -1051,10 +1070,9 @@ class _ContinuousModeState extends State<_ContinuousMode>
       position.maxScrollExtent,
     );
     if (target == position.pixels) {
-      // 到底了：尝试续到下一话。换章会重建滚动控制器，下一 tick 的
-      // `hasClients` 会是 false 从而自然收尾 —— 自动滚动不跨章续播，这是刻意的
-      // 保守行为，避免和"滑到边缘才加载下一话"的无缝逻辑抢方向。
-      return delta > 0 ? reader.toNextChapter() : true;
+      // P56：自动滚动到底只收尾，不自动跳章。章节切换必须是显式点击，
+      // 否则匀速滚动会把用户一路送进下一话（T4 硬约束）。
+      return false;
     }
     _scrollController.jumpTo(target);
     return true;
@@ -1615,7 +1633,6 @@ class _ContinuousModeState extends State<_ContinuousMode>
         prepareToPrevChapter = false;
         prepareToNextChapter = false;
       });
-      context.readerScaffold.setFloatingButton(0);
     }
     var isZoomedIn = (scale ?? photoViewController.scale) != 1.0;
     if (isZoomedIn != this.isZoomedIn) {
@@ -1745,6 +1762,10 @@ class _ContinuousModeState extends State<_ContinuousMode>
   /// Builds the widget for a flat entry (image, chapter-join separator, or a
   /// non-seamless single page).
   Widget _buildEntry(_ContinuousReaderEntry entry) {
+    if (entry.isChapterEnd) {
+      // 常驻内容节点（Sliver 的一个 child），不是 Overlay / 弹出浮层。
+      return const Center(child: ChapterEndNavCards());
+    }
     if (entry.isSeparator) {
       if (entry.hasNext && entry.nextChapter != null) {
         Future.microtask(
@@ -1887,15 +1908,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
             disableScroll = false;
           });
         }
-        if (!seamlessChapterReading && fingers == 0) {
-          if (jumpToPrevChapter) {
-            context.readerScaffold.setFloatingButton(0);
-            reader.toPrevChapter(toLastPage: true);
-          } else if (jumpToNextChapter) {
-            context.readerScaffold.setFloatingButton(0);
-            reader.toNextChapter();
-          }
-        }
+        // P56：过拉不再跳章，也不再弹角落浮动按钮。章末常驻双卡是唯一出口。
       },
       onPointerCancel: (event) {
         _decreaseFingers();
@@ -1951,47 +1964,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
           delayedSetIsScrolling(false);
         }
 
-        var scale = photoViewController.scale ?? 1.0;
-
-        if (!seamlessChapterReading &&
-            notification is ScrollUpdateNotification &&
-            (scale - 1).abs() < 0.05) {
-          if (!scrollController.hasClients) return false;
-          if (scrollController.position.pixels <=
-                  scrollController.position.minScrollExtent &&
-              !reader.isFirstChapterOfGroup) {
-            if (!prepareToPrevChapter) {
-              jumpToPrevChapter = false;
-              jumpToNextChapter = false;
-              context.readerScaffold.setFloatingButton(-1);
-              setState(() {
-                prepareToPrevChapter = true;
-              });
-            }
-          } else if (scrollController.position.pixels >=
-                  scrollController.position.maxScrollExtent &&
-              !reader.isLastChapterOfGroup) {
-            if (!prepareToNextChapter) {
-              jumpToPrevChapter = false;
-              jumpToNextChapter = false;
-              context.readerScaffold.setFloatingButton(1);
-              setState(() {
-                prepareToNextChapter = true;
-              });
-            }
-          } else {
-            context.readerScaffold.setFloatingButton(0);
-            if (prepareToPrevChapter || prepareToNextChapter) {
-              jumpToPrevChapter = false;
-              jumpToNextChapter = false;
-              setState(() {
-                prepareToPrevChapter = false;
-                prepareToNextChapter = false;
-              });
-            }
-          }
-        }
-
+        // P56：滚动到顶/底只回弹，不进入「准备跳章」态、不弹角落按钮。
         return true;
       },
       child: widget,
@@ -2211,7 +2184,6 @@ class _ContinuousModeState extends State<_ContinuousMode>
       prepareToNextChapter = false;
       jumpToPrevChapter = false;
       jumpToNextChapter = false;
-      context.readerScaffold.setFloatingButton(0);
     }
     setState(() {
       _anchorChapter = chapter;
@@ -2502,6 +2474,38 @@ class _ContinuousModeState extends State<_ContinuousMode>
     _goToEntry(reader.chapter, page, animate: false);
   }
 
+  /// P56：空格 / ↑↓ / WASD 与移动端方向键共用同一套步进。
+  /// 步长取**当前阅读主轴**的视口长度 × 0.5，动画 200ms / Curves.ease。
+  void _applyTurn(bool? forward) {
+    if (forward == null || !scrollController.hasClients) return;
+    final action = forward
+        ? ReaderKeyAction.turnForward
+        : ReaderKeyAction.turnBackward;
+    final extent = _axis == Axis.vertical
+        ? reader.size.height
+        : reader.size.width;
+    final delta = readerTurnDelta(viewportExtent: extent, action: action);
+    final position = scrollController.position;
+    final target = (scrollController.offset + delta).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: kReaderTurnDurationMs),
+      curve: Curves.ease,
+    );
+  }
+
+  @override
+  void handleReaderAction(ReaderKeyAction action) {
+    if (action == ReaderKeyAction.turnForward) {
+      _applyTurn(true);
+    } else if (action == ReaderKeyAction.turnBackward) {
+      _applyTurn(false);
+    }
+  }
+
   @override
   void handleKeyEvent(KeyEvent event) {
     if (event.logicalKey == LogicalKeyboardKey.controlLeft ||
@@ -2517,6 +2521,8 @@ class _ContinuousModeState extends State<_ContinuousMode>
     if (event is KeyUpEvent) {
       return;
     }
+    // 桌面布局的空格/方向键已被 reader 层接管；这里保留移动端布局原有的
+    // 「按阅读方向映射」，只是步长统一到 0.5 视口（原来 0.25）。
     bool? forward;
     if (reader.mode == ReaderMode.continuousLeftToRight &&
         event.logicalKey == LogicalKeyboardKey.arrowRight) {
@@ -2537,19 +2543,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
         event.logicalKey == LogicalKeyboardKey.arrowRight) {
       forward = false;
     }
-    if (forward == true) {
-      scrollController.animateTo(
-        scrollController.offset + context.height * 0.25,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.ease,
-      );
-    } else if (forward == false) {
-      scrollController.animateTo(
-        scrollController.offset - context.height * 0.25,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.ease,
-      );
-    }
+    _applyTurn(forward);
   }
 
   @override

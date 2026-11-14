@@ -28,15 +28,33 @@ class ChapterEndNavCards extends StatelessWidget {
     final reader = context.reader;
     final chapters = reader.widget.chapters;
     if (chapters == null) return const SizedBox();
+    // P56 / comix.to 实测：两张 355×44 **并排**、间距 10，常驻内容流。
+    // 窄窗时两张等比收缩，不溢出。
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _ChapterEndNavCard(forward: false),
-          const SizedBox(height: 12),
-          _ChapterEndNavCard(forward: true),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final available = constraints.maxWidth;
+          final cardWidth = math.min(
+            kChapterEndCardWidth,
+            (available - kChapterEndCardGap) / 2,
+          );
+          return Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: cardWidth,
+                child: const _ChapterEndNavCard(forward: false),
+              ),
+              const SizedBox(width: kChapterEndCardGap),
+              SizedBox(
+                width: cardWidth,
+                child: const _ChapterEndNavCard(forward: true),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -64,60 +82,54 @@ class _ChapterEndNavCard extends StatelessWidget {
         : "$label · ${(title == null || title.trim().isEmpty) ? '$target' : title}";
     return Opacity(
       opacity: enabled ? 1 : 0.38,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          return Material(
-            color: colorScheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(8),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: enabled
-                  ? () {
-                      if (forward) {
-                        reader.toNextChapter();
-                      } else {
-                        reader.toPrevChapter(toLastPage: true);
-                      }
-                    }
-                  : null,
-              child: SizedBox(
-                height: 44,
-                // Spec width is 320–360; narrower windows shrink instead of
-                // overflowing (the card already sits inside a page view).
-                width: math.min(360.0, constraints.maxWidth),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Row(
-                    children: [
-                      Icon(
-                        forward
-                            ? Icons.arrow_forward_rounded
-                            : Icons.arrow_back_rounded,
-                        size: 18,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          text,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: colorScheme.onSurface),
-                        ),
-                      ),
-                      Icon(
-                        Icons.chevron_right_rounded,
-                        size: 18,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ],
+      child: Material(
+        color: colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: enabled &&
+                  allowReaderChapterJump(ReaderJumpOrigin.chapterEndCard)
+              ? () {
+                  if (forward) {
+                    reader.toNextChapter();
+                  } else {
+                    reader.toPrevChapter(toLastPage: true);
+                  }
+                }
+              : null,
+          child: SizedBox(
+            height: kChapterEndCardHeight,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Icon(
+                    forward
+                        ? Icons.arrow_forward_rounded
+                        : Icons.arrow_back_rounded,
+                    size: 18,
+                    color: colorScheme.onSurfaceVariant,
                   ),
-                ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      text,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium
+                          ?.copyWith(color: colorScheme.onSurface),
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    size: 18,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ],
               ),
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }

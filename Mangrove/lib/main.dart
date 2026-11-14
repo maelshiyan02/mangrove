@@ -87,7 +87,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     App.registerForceRebuild(forceRebuild);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     WidgetsBinding.instance.addObserver(this);
-    syncReaderNightModeWithSystem(rebuild: false);
+    _migrateLegacyThemeMode();
     initDeferred().then((_) {
       checkUpdates();
       if (mounted) setState(() {});
@@ -96,6 +96,22 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   }
 
   bool isAuthPageActive = false;
+
+  /// 三档外观（白天 / 夜间 / 护眼）不再有「跟随系统」这一档。
+  ///
+  /// 旧安装里 `theme_mode` 可能是 `system`：如果原样保留，运行时按系统明暗走、
+  /// 设置界面却把它显示成「白天」，出现「界面写着白天、界面本身是夜间」的
+  /// 自相矛盾。这里一次性落成当时的具体档位（深色系统的用户不会被莫名切亮），
+  /// 之后 UI 与 themeMode 永远一致。
+  void _migrateLegacyThemeMode() {
+    final raw = appdata.settings['theme_mode'];
+    if (raw == 'light' || raw == 'dark' || raw == 'sepia') return;
+    final isDark =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+        Brightness.dark;
+    appdata.settings['theme_mode'] = isDark ? 'dark' : 'light';
+    appdata.saveData();
+  }
 
   OverlayEntry? hideContentOverlay;
 
@@ -148,34 +164,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     super.didChangeAppLifecycleState(state);
   }
 
-  @override
-  void didChangePlatformBrightness() {
-    syncReaderNightModeWithSystem();
-    super.didChangePlatformBrightness();
-  }
-
-  /// When "follow system" is enabled, keep the reader night mode in sync with
-  /// the system dark/light setting: on in dark mode, off in light mode.
-  ///
-  /// [rebuild] must be false when called during `initState` (the first build
-  /// hasn't happened yet, and forcing one then is illegal).
-  void syncReaderNightModeWithSystem({bool rebuild = true}) {
-    if (appdata.settings['readerNightModeFollowSystem'] != true) {
-      return;
-    }
-    final isDark =
-        WidgetsBinding.instance.platformDispatcher.platformBrightness ==
-        Brightness.dark;
-    if ((appdata.settings['readerNightMode'] == true) == isDark) {
-      return;
-    }
-    appdata.settings['readerNightMode'] = isDark;
-    appdata.saveData();
-    if (rebuild) {
-      App.forceRebuild();
-    }
-  }
-
   void forceRebuild() {
     void rebuild(Element el) {
       el.markNeedsBuild();
@@ -205,13 +193,15 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     Color primary,
     Color? secondary,
     Color? tertiary,
-    Brightness brightness,
-  ) {
+    Brightness brightness, {
+    bool sepia = false,
+  }) {
     return buildAppTheme(
       primary: primary,
       secondary: secondary,
       tertiary: tertiary,
       brightness: brightness,
+      sepia: sepia,
     );
   }
 
@@ -244,19 +234,34 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           secondary = light.secondary;
           tertiary = light.tertiary;
         }
+        final sepia = appdata.settings['theme_mode'] == 'sepia';
         return MaterialApp(
           title: "Mangrove",
           home: home,
           debugShowCheckedModeBanner: false,
-          theme: getTheme(primary, secondary, tertiary, Brightness.light),
+          theme: getTheme(
+            primary,
+            secondary,
+            tertiary,
+            Brightness.light,
+            sepia: sepia,
+          ),
           navigatorKey: App.rootNavigatorKey,
           navigatorObservers: [App.rootRouteObserver],
-          darkTheme: getTheme(primary, secondary, tertiary, Brightness.dark),
-          themeMode: switch (appdata.settings['theme_mode']) {
-            'light' => ThemeMode.light,
-            'dark' => ThemeMode.dark,
-            _ => ThemeMode.system,
-          },
+          darkTheme: getTheme(
+            primary,
+            secondary,
+            tertiary,
+            sepia ? Brightness.light : Brightness.dark,
+            sepia: sepia,
+          ),
+          themeMode: sepia
+              ? ThemeMode.light
+              : switch (appdata.settings['theme_mode']) {
+                  'light' => ThemeMode.light,
+                  'dark' => ThemeMode.dark,
+                  _ => ThemeMode.system,
+                },
           color: Colors.transparent,
           localizationsDelegates: [
             GlobalMaterialLocalizations.delegate,

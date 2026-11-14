@@ -1,0 +1,2530 @@
+{
+  "started": "2026-11-14 16:53:39",
+  "chrome": "headless=new",
+  "proxy": "http://127.0.0.1:7890",
+  "errors": [],
+  "home": {
+    "len": 10463,
+    "imgs": 191,
+    "title": "Comix - Read Comics online for free"
+  },
+  "home_links": [
+    {
+      "href": "https://comix.to/",
+      "text": ""
+    },
+    {
+      "href": "https://comix.to/browse",
+      "text": "Browse"
+    },
+    {
+      "href": "https://comix.to/community",
+      "text": ""
+    },
+    {
+      "href": "https://comix.ws/",
+      "text": "comix.ws"
+    },
+    {
+      "href": "https://comix.to/user?tab=backup",
+      "text": "MangaBaka"
+    },
+    {
+      "href": "https://comix.to/title/qqwrm-full-time-awakening",
+      "text": "Ch.1701w agoFull-Time Awakening"
+    },
+    {
+      "href": "https://comix.to/title/m9l90-im-the-only-one-who-doesnt-know-that-villainess-is-a-man",
+      "text": "Ch.421w agoI'm The Only One Who Doesn't Know That Villainess Is A Man"
+    },
+    {
+      "href": "https://comix.to/title/xqz07-engaged-to-the-blind-duke",
+      "text": "Ch.512d agoEngaged to the Blind Duke"
+    },
+    {
+      "href": "https://comix.to/title/11d9l-she-is-the-daughter-of-the-villainess-in-a-ridiculous-novel",
+      "text": "Ch.202d agoShe is the Daughter of the Villainess in a Ridiculous Novel"
+    },
+    {
+      "href": "https://comix.to/title/l7re-you-think-its-easy-rewriting-a-story",
+      "text": "Ch.972d agoYou Think It's Easy Rewriting A Story?"
+    },
+    {
+      "href": "https://comix.to/title/z0l20-god-level-assassin-im-the-shadow",
+      "text": "Ch.1563d agoGod-level Assassin, I'm the Shadow"
+    },
+    {
+      "href": "https://comix.to/title/793e-arelyn-is-sick-and-tired",
+      "text": "Ch.871d agoArelyn Is Sick and Tired"
+    },
+    {
+      "href": "https://comix.to/title/nk9re-patron-of-villains",
+      "text": "Ch.611d agoPatron of Villains"
+    },
+    {
+      "href": "https://comix.to/title/v2600-how-to-ride-the-heros-coattails",
+      "text": "Ch.4216h agoHow To Ride the Hero's Coattails"
+    },
+    {
+      "href": "https://comix.to/title/gxgm9-barbarians-adventure-in-a-fantasy-world",
+      "text": "Ch.751d agoBarbarian's Adventure in a Fantasy World"
+    },
+    {
+      "href": "https://comix.to/title/zgk6j-unbeknownst-to-me-i-am-secretly-dating-the-emperor",
+      "text": "Ch.445d agoUnbeknownst to Me, I Am Secretly Dating the Emperor"
+    },
+    {
+      "href": "https://comix.to/title/9wlr-dianas-dearest-is-the-familys-favorite",
+      "text": "Ch.735d agoDiana's Dearest Is the Family's Favorite"
+    },
+    {
+      "href": "https://comix.to/title/301dn-got-dropped-into-a-ghost-story-still-gotta-work",
+      "text": "Ch.4417h agoGot Dropped into a Ghost Story, Still Gotta Work"
+    },
+    {
+      "href": "https://comix.to/title/53myz-the-golden-handed-baby-fixes-everything",
+      "text": "Ch.201d agoThe Golden-Handed Baby Fixes Everything!"
+    },
+    {
+      "href": "https://comix.to/title/87dld-after-the-school-belle-dumped-me-i-became-a-martial-arts-god",
+      "text": "Ch.1311d agoAfter the School Belle Dumped Me, I Became a Martial Arts God"
+    },
+    {
+      "href": "https://comix.to/title/n7ee-the-villain-wants-to-live",
+      "text": "Ch.7218h agoThe Villain Wants to Live"
+    },
+    {
+      "href": "https://comix.to/title/qejdm-the-perfect-seniors-secret",
+      "text": "Ch.363d agoThe Perfect Senior's Secret!"
+    },
+    {
+      "href": "https://comix.to/title/70w00-wild-beast-warning",
+      "text": "Ch.461d agoWild Beast Warning"
+    },
+    {
+      "href": "https://comix.to/title/6lvlz-i-will-become-the-ex-wife-of-the-beast",
+      "text": "Ch.2318h agoI Will Become the Ex-Wife of the Beast"
+    },
+    {
+      "href": "https://comix.to/title/yekew-my-father-is-the-number-one-under-heaven",
+      "text": "Ch.3717h agoMy Father Is the Number One Under Heaven"
+    },
+    {
+      "href": "https://comix.to/title/3z80-this-marriage-will-surely-succeed",
+      "text": "Ch.765d agoThis Marriage Will Surely Succeed"
+    },
+    {
+      "href": "https://comix.to/title/w0wj9-not-your-monster-in-law",
+      "text": "Ch.8317h agoNot Your Monster-In-Law"
+    },
+    {
+      "href": "https://comix.to/title/55kym-why-the-villainess-wields-the-sword",
+      "text": "Ch.853d agoWhy the Villainess Wields the Sword"
+    },
+    {
+      "href": "https://comix.to/title/l9vj2-the-demon-king-overrun-by-heroes",
+      "text": "Ch.561d agoThe Demon King Overrun by Heroes"
+    },
+    {
+      "href": "https://comix.to/title/yvkww-a-wicked-husband",
+      "text": "Ch.541d agoA Wicked Husband"
+    },
+    {
+      "href": "https://comix.to/title/d129g-how-to-survive-the-horror-novel-i-wrote",
+      "text": "Ch.151d agoHow to Survive the Horror Novel I Wrote"
+    },
+    {
+      "href": "https://comix.to/title/93q1r-the-summoner-apocalypse-rewinds",
+      "text": "Ch.16814h agoThe Summoner: Apocalypse Rewinds"
+    },
+    {
+      "href": "https://comix.to/title/1vj2d-dawn-of-vengeance",
+      "text": "Ch.714d agoDawn of Vengeance"
+    },
+    {
+      "href": "https://comix.to/title/zx86-on-your-knees-your-highness",
+      "text": "Ch.5412h agoOn Your Knees, Your Highness!"
+    },
+    {
+      "href": "https://comix.to/title/e9l8-our-guilds-idol",
+      "text": "Ch.714h agoOur Guild's Idol"
+    },
+    {
+      "href": "https://comix.to/title/vw2lq-i-only-need-the-dukes-child",
+      "text": "Ch.363d agoI Only Need the Duke's Child"
+    },
+    {
+      "href": "https://comix.to/title/mnkmd-return-of-the-first-generation-the-strongest-in-history-reincarnates-as-his-descendant-1000-years-later",
+      "text": "Ch.653d agoReturn of the First Generation: The Strongest in History Reincarnates"
+    },
+    {
+      "href": "https://comix.to/title/6exy0-a-regressors-tale-of-cultivation",
+      "text": "Ch.381d agoA Regressor's Tale of Cultivation"
+    },
+    {
+      "href": "https://comix.to/title/q3mrd-i-plan-to-end-this-possession",
+      "text": "Ch.206d agoI Plan to End This Possession"
+    },
+    {
+      "href": "https://comix.to/title/n93ny-the-crown-ill-claim",
+      "text": "Ch.564d agoThe Crown I'll Claim"
+    },
+    {
+      "href": "https://comix.to/title/6dk28-the-glutton-devourer-of-kings",
+      "text": "Ch.562h agoThe Glutton: Devourer of Kings"
+    },
+    {
+      "href": "https://comix.to/title/e1wlg-the-scandal-maker-has-returned",
+      "text": "Ch.392d agoThe Scandal Maker Has Returned"
+    },
+    {
+      "href": "https://comix.to/title/vy7n-supreme-curse-master",
+      "text": "Ch.931d agoSupreme Curse Master"
+    },
+    {
+      "href": "https://comix.to/title/55k2l-thats-the-guy",
+      "text": "Ch.751d agoThat's the Guy!"
+    },
+    {
+      "href": "https://comix.to/title/7n3xg-what-a-bountiful-harvest-demon-lord",
+      "text": "Ch.931d agoWhat a Bountiful Harvest, Demon Lord!"
+    },
+    {
+      "href": "https://comix.to/title/30jk2-undercover-butler-to-the-grand-duke",
+      "text": "Ch.261d agoUndercover Butler to the Grand Duke"
+    },
+    {
+      "href": "https://comix.to/title/mr3m0-the-forgotten-field",
+      "text": "Ch.413d agoThe Forgotten Field"
+    },
+    {
+      "href": "https://comix.to/title/166d-awakening-the-purple-thunder-at-the-beginning",
+      "text": "Ch.1014d agoAwakening the Purple Thunder at the Beginning"
+    },
+    {
+      "href": "https://comix.to/title/3rdr3-i-became-the-rogue-first-prince",
+      "text": "Ch.613d agoI Became The Rogue First Prince"
+    },
+    {
+      "href": "https://comix.to/title/j6x6m-only-i-have-an-ex-grade-summon",
+      "text": "Ch.461d agoOnly I Have an EX-Grade Summon"
+    },
+    {
+      "href": "https://comix.to/title/lgkg7-fog-land",
+      "text": "Ch.632d agoFog Land"
+    },
+    {
+      "href": "https://comix.to/title/3rq32-the-youngest-has-much-to-hide",
+      "text": "Ch.563d agoThe Youngest Has Much to Hide"
+    },
+    {
+      "href": "https://comix.to/title/02l05-after-a-meal",
+      "text": "Ch.322d agoAfter a Meal"
+    },
+    {
+      "href": "https://comix.to/title/6emnz-the-runaway-extra-and-the-obsessive-duke",
+      "text": "Ch.532d agoThe Runaway Extra and the Obsessive Duke"
+    },
+    {
+      "href": "https://comix.to/title/xydw7-colorist",
+      "text": "Ch.562d agoColorist"
+    },
+    {
+      "href": "https://comix.to/title/9j2l0-fate-reroll-toppler-of-kings",
+      "text": "Ch.205h agoFate Reroll: Toppler of Kings"
+    },
+    {
+      "href": "https://comix.to/title/dwj23-the-scarred-young-masters-maid",
+      "text": "Ch.153d agoThe Scarred Young Master's Maid"
+    },
+    {
+      "href": "https://comix.to/title/e1r28-copy-skills-with-affinity",
+      "text": "Ch.1412h agoCopy Skills With Affinity!"
+    },
+    {
+      "href": "https://comix.to/title/j19ee-love-algebra",
+      "text": "Ch.53d agoLove Algebra"
+    },
+    {
+      "href": "https://comix.to/title/e8zqm-please-look-forward-to-christine-senseis-next-work",
+      "text": "Ch.119h agoPlease Look Forward to Christine-Sensei's Next Work!"
+    },
+    {
+      "href": "https://comix.to/title/e8nje-all-round-farmer-with-slime-synthesis",
+      "text": "Ch.205d agoAll-Round Farmer With Slime Synthesis"
+    },
+    {
+      "href": "https://comix.to/title/k1zxz-heal-my-obsession",
+      "text": "Ch.115h agoHeal My Obsession"
+    },
+    {
+      "href": "https://comix.to/title/dwz10-lets-get-divorced-your-majesty",
+      "text": "Ch.185h agoLet's Get Divorced, Your Majesty"
+    },
+    {
+      "href": "https://comix.to/title/5lzlk-the-squirrel-will-raise-the-baby-tiger",
+      "text": "Ch.211d agoThe Squirrel Will Raise The Baby Tiger"
+    },
+    {
+      "href": "https://comix.to/title/mz5jz-listen-to-my-ladys-story-conquest-record-of-the-villainess-isabella",
+      "text": "Ch.11d agoListen to My Lady's Story: Conquest Record of the Villainess Isabella"
+    },
+    {
+      "href": "https://comix.to/title/j6n8e-damn-necromancer",
+      "text": "Ch.2411h agoDamn Necromancer"
+    },
+    {
+      "href": "https://comix.to/title/7lqq1-survivalism",
+      "text": "Ch.191d agoSurvivalism"
+    },
+    {
+      "href": "https://comix.to/title/9yx08-lord-blackwood-promised-me-death",
+      "text": "Ch.162d agoLord Blackwood Promised Me Death"
+    },
+    {
+      "href": "https://comix.to/title/gqlmk-would-you-still-love-a-lying-villainess",
+      "text": "Ch.1915h agoWould You Still Love a Lying Villainess?"
+    },
+    {
+      "href": "https://comix.to/title/11dvd-renai-fuyona-konin-no-hazudesuga-gunjin-koshaku-sama-ni-mainichi-amayakasarete-mo-yoroshii-nodeshou-ka",
+      "text": "Ch.11d agoRenai Fuyona Konin no Hazudesuga, Gunjin Koshaku-sama ni Mainichi Amay"
+    },
+    {
+      "href": "https://comix.to/title/30dk2-pick-up-a-grimoire-become-a-mage",
+      "text": "Ch.1206h agoPick Up a Grimoire, Become a Mage"
+    },
+    {
+      "href": "https://comix.to/title/1rkz9-the-atmosphere-of-the-novel-is-in-crisis",
+      "text": "Ch.501d agoThe Atmosphere of the Novel Is in Crisis"
+    },
+    {
+      "href": "https://comix.to/title/d8wg-life-of-a-quack-healer",
+      "text": "Ch.1712h agoLife of a Quack Healer"
+    },
+    {
+      "href": "https://comix.to/title/l0x7-chronicles-of-the-demon-faction",
+      "text": "Ch.1973h agoChronicles of the Demon Faction"
+    },
+    {
+      "href": "https://comix.to/title/9mn0-ultimate-shut-in",
+      "text": "Ch.1054h agoUltimate Shut-in"
+    },
+    {
+      "href": "https://comix.to/title/mwxzm-top-tier-providence-secretly-cultivate-for-a-thousand-years",
+      "text": "Ch.2864h agoTop Tier Providence: Secretly Cultivate for a Thousand Years"
+    },
+    {
+      "href": "https://comix.to/title/mwnyd-serena",
+      "text": "Ch.1516h agoSerena"
+    },
+    {
+      "href": "https://comix.to/title/l7d2-i-got-the-weakest-class-dragon-tamer",
+      "text": "Ch.3059h agoI Got The Weakest Class, Dragon Tamer!?"
+    },
+    {
+      "href": "https://comix.to/title/3j50-magic-emperor",
+      "text": "Ch.93510h agoMagic Emperor"
+    },
+    {
+      "href": "https://comix.to/title/d66k0-the-superhuman-era",
+      "text": "Ch.25912h agoThe Superhuman Era"
+    },
+    {
+      "href": "https://comix.to/title/vgl0-operation-true-love",
+      "text": "Ch.14913h agoOperation: True Love"
+    },
+    {
+      "href": "https://comix.to/title/0krel-the-siren-becoming-the-villains-family",
+      "text": "Ch.18613h agoThe Siren: Becoming the Villain's Family"
+    },
+    {
+      "href": "https://comix.to/title/9n7r8-phantom-whispers",
+      "text": "Ch.7514h agoPhantom Whispers"
+    },
+    {
+      "href": "https://comix.to/title/ed98-space-cheon-ma-3077",
+      "text": "Ch.11314h agoSpace Cheon-ma 3077"
+    },
+    {
+      "href": "https://comix.to/title/0klgv-the-moon-on-a-rainy-night",
+      "text": "Ch.52.314h agoThe Moon on a Rainy Night"
+    },
+    {
+      "href": "https://comix.to/title/5e9k-ive-fallen-for-the-empires-greatest-villainess",
+      "text": "Ch.12115h agoI've Fallen for the Empire's Greatest Villainess"
+    },
+    {
+      "href": "https://comix.to/title/5zdyg-astral-pet-store",
+      "text": "Ch.22815h agoAstral Pet Store"
+    },
+    {
+      "href": "https://comix.to/title/2vvd-gatekeeper-of-the-boundless-world",
+      "text": "Ch.21015h agoGatekeeper Of The Boundless World"
+    },
+    {
+      "href": "https://comix.to/title/65jz-cheating-men-must-die",
+      "text": "Ch.51616h agoCheating Men Must Die"
+    },
+    {
+      "href": "https://comix.to/title/nn7xe-my-disciples-are-all-big-villains",
+      "text": "Ch.58017h agoMy Disciples Are All Big Villains"
+    },
+    {
+      "href": "https://comix.to/title/yvk11-the-villainess-makes-amends",
+      "text": "Ch.6817h agoThe Villainess Makes Amends"
+    },
+    {
+      "href": "https://comix.to/title/2xnd-the-frozen-player-returns",
+      "text": "Ch.23418h agoThe Frozen Player Returns"
+    },
+    {
+      "href": "https://comix.to/collections",
+      "text": "View more →"
+    },
+    {
+      "href": "https://comix.to/collections/255026",
+      "text": "tungbest stuff I've read4 titles4m ago"
+    },
+    {
+      "href": "https://comix.to/collections/255018",
+      "text": "yuyuFinished6 titles16m ago"
+    },
+    {
+      "href": "https://comix.to/collections/255017",
+      "text": "HEHEHEHEHEToxic love32 titles17m ago"
+    },
+    {
+      "href": "https://comix.to/collections/255014",
+      "text": "yuyuMy favorites5 titles21m ago"
+    },
+    {
+      "href": "https://comix.to/collections/255012",
+      "text": "Ariel06Yuri18 titles22m ago"
+    },
+    {
+      "href": "https://comix.to/collections/255009",
+      "text": "yuyuBB romance12 titles24m ago"
+    },
+    {
+      "href": "https://comix.to/collections/255004",
+      "text": "lekimbalanmy reading list6 titles29m ago"
+    }
+  ],
+  "chapter_links": [],
+  "reader": {
+    "url": "https://comix.to/title/qqwrm-full-time-awakening/11705838-chapter-170",
+    "title": "Full-Time Awakening · Ch.170",
+    "viewport": {
+      "w": 1488,
+      "h": 758,
+      "dpr": 1
+    },
+    "bodyLen": 715,
+    "imgs": 3,
+    "pageImgs": 3,
+    "rpageClasses": [
+      "rpage-body",
+      "rpage",
+      "rpage--long-strip",
+      "rpage--ttb",
+      "rpage--pb-left",
+      "rpage-progress",
+      "rpage-progress--left",
+      "rpage-progress__seg",
+      "rpage-hoverzone",
+      "rpage-hoverzone--top",
+      "rpage-hoverzone--bottom",
+      "rpage-hoverzone--right",
+      "rpage-floatctl",
+      "rpage-floatctl__row",
+      "rpage-floatctl__btn",
+      "rpage-floatctl__chap",
+      "rpage-floatctl__chap-total",
+      "rpage-floatctl__col",
+      "rpage-floatctl__btn--fs",
+      "rpage-main",
+      "rpage-main--long-strip",
+      "rpage-main__inner",
+      "rpage-page",
+      "rpage-page__img",
+      "rpage-page__loader",
+      "rpage-page__loader-inner",
+      "rpage-page__spinner",
+      "rpage-page__counter",
+      "rpage-strip-comments",
+      "rpage-chap-ending",
+      "rpage-chap-ending__head",
+      "rpage-chap-ending__like",
+      "rpage-chap-ending__like-count",
+      "rpage-chap-ending__info",
+      "rpage-chap-ending__title",
+      "rpage-chap-ending__meta",
+      "rpage-chap-ending__sep",
+      "rpage-chap-ending__home",
+      "rpage-chap-ending__nav",
+      "rpage-chap-ending__nav-btn",
+      "rpage-chap-ending__placeholder",
+      "rpage-bottombar",
+      "rpage-bottombar__controls",
+      "rpage-bottombar__actions",
+      "rpage-bottombar__hide-mobile",
+      "rpage-iconbtn",
+      "rpage-bottombar__settings",
+      "rpage-zoom",
+      "rpage-zoom__btn",
+      "rpage-zoom__value",
+      "rpage-cmpanel",
+      "rpage-cmpanel__chapnav",
+      "rpage-cmpanel__like",
+      "rpage-cmpanel__like-attribution",
+      "rpage-cmpanel__follow",
+      "rpage-cmpanel__close",
+      "rpage-cmpanel__body"
+    ],
+    "scrollers": [
+      {
+        "tag": "MAIN",
+        "cls": "rpage-main rpage-main--long-strip",
+        "client": 758,
+        "sh": 99755,
+        "top": 0,
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 1488,
+          "h": 758
+        }
+      }
+    ],
+    "controls": [
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg is-active ",
+        "text": "",
+        "label": "Go to page 1",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 2",
+        "rect": {
+          "x": 0,
+          "y": 11,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 3",
+        "rect": {
+          "x": 0,
+          "y": 21,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 4",
+        "rect": {
+          "x": 0,
+          "y": 32,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 5",
+        "rect": {
+          "x": 0,
+          "y": 43,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 6",
+        "rect": {
+          "x": 0,
+          "y": 53,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 7",
+        "rect": {
+          "x": 0,
+          "y": 64,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 8",
+        "rect": {
+          "x": 0,
+          "y": 75,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 9",
+        "rect": {
+          "x": 0,
+          "y": 86,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 10",
+        "rect": {
+          "x": 0,
+          "y": 96,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 11",
+        "rect": {
+          "x": 0,
+          "y": 107,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 12",
+        "rect": {
+          "x": 0,
+          "y": 118,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 13",
+        "rect": {
+          "x": 0,
+          "y": 128,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 14",
+        "rect": {
+          "x": 0,
+          "y": 139,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 15",
+        "rect": {
+          "x": 0,
+          "y": 150,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 16",
+        "rect": {
+          "x": 0,
+          "y": 160,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 17",
+        "rect": {
+          "x": 0,
+          "y": 171,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 18",
+        "rect": {
+          "x": 0,
+          "y": 182,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 19",
+        "rect": {
+          "x": 0,
+          "y": 193,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 20",
+        "rect": {
+          "x": 0,
+          "y": 203,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 21",
+        "rect": {
+          "x": 0,
+          "y": 214,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 22",
+        "rect": {
+          "x": 0,
+          "y": 225,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 23",
+        "rect": {
+          "x": 0,
+          "y": 235,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 24",
+        "rect": {
+          "x": 0,
+          "y": 246,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 25",
+        "rect": {
+          "x": 0,
+          "y": 257,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 26",
+        "rect": {
+          "x": 0,
+          "y": 267,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 27",
+        "rect": {
+          "x": 0,
+          "y": 278,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 28",
+        "rect": {
+          "x": 0,
+          "y": 289,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 29",
+        "rect": {
+          "x": 0,
+          "y": 299,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 30",
+        "rect": {
+          "x": 0,
+          "y": 310,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 31",
+        "rect": {
+          "x": 0,
+          "y": 321,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 32",
+        "rect": {
+          "x": 0,
+          "y": 332,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 33",
+        "rect": {
+          "x": 0,
+          "y": 342,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 34",
+        "rect": {
+          "x": 0,
+          "y": 353,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 35",
+        "rect": {
+          "x": 0,
+          "y": 364,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 36",
+        "rect": {
+          "x": 0,
+          "y": 374,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 37",
+        "rect": {
+          "x": 0,
+          "y": 385,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 38",
+        "rect": {
+          "x": 0,
+          "y": 396,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 39",
+        "rect": {
+          "x": 0,
+          "y": 406,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 40",
+        "rect": {
+          "x": 0,
+          "y": 417,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 41",
+        "rect": {
+          "x": 0,
+          "y": 428,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 42",
+        "rect": {
+          "x": 0,
+          "y": 438,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 43",
+        "rect": {
+          "x": 0,
+          "y": 449,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 44",
+        "rect": {
+          "x": 0,
+          "y": 460,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 45",
+        "rect": {
+          "x": 0,
+          "y": 470,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 46",
+        "rect": {
+          "x": 0,
+          "y": 481,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 47",
+        "rect": {
+          "x": 0,
+          "y": 492,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 48",
+        "rect": {
+          "x": 0,
+          "y": 503,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 49",
+        "rect": {
+          "x": 0,
+          "y": 513,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 50",
+        "rect": {
+          "x": 0,
+          "y": 524,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 51",
+        "rect": {
+          "x": 0,
+          "y": 535,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 52",
+        "rect": {
+          "x": 0,
+          "y": 545,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 53",
+        "rect": {
+          "x": 0,
+          "y": 556,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 54",
+        "rect": {
+          "x": 0,
+          "y": 567,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 55",
+        "rect": {
+          "x": 0,
+          "y": 577,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 56",
+        "rect": {
+          "x": 0,
+          "y": 588,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 57",
+        "rect": {
+          "x": 0,
+          "y": 599,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 58",
+        "rect": {
+          "x": 0,
+          "y": 609,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 59",
+        "rect": {
+          "x": 0,
+          "y": 620,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  ",
+        "text": "",
+        "label": "Go to page 60",
+        "rect": {
+          "x": 0,
+          "y": 631,
+          "w": 3,
+          "h": 11
+        }
+      }
+    ],
+    "textSample": "Ch.170\n/ 170\n4 / 71\n5 / 71\n6 / 71\n7 / 71\n8 / 71\n9 / 71\n10 / 71\n11 / 71\n12 / 71\n13 / 71\n14 / 71\n15 / 71\n16 / 71\n17 / 71\n18 / 71\n19 / 71\n20 / 71\n21 / 71\n22 / 71\n23 / 71\n24 / 71\n25 / 71\n26 / 71\n27 / 71\n28 / 71\n29 / 71\n30 / 71\n31 / 71\n32 / 71\n33 / 71\n34 / 71\n35 / 71\n36 / 71\n37 / 71\n38 / 71\n39 / 71\n40 / 71\n41 / 71\n42 / 71\n43 / 71\n44 / 71\n45 / 71\n46 / 71\n47 / 71\n48 / 71\n49 / 71\n50 / 71\n51 / 71\n52 / 71\n53 / 71\n54 / 71\n55 / 71\n56 / 71\n57 / 71\n58 / 71\n59 / 71\n60 / 71\n61 / 71\n62 / 71\n63 / 71\n64 / 71\n65 / 71\n66 / 71\n67 / 71\n68 / 71\n69 / 71\n70 / 71\n71 / 71\n43\nFull-Time Awakening\nCh. 170\n·\nTranslated by Th"
+  },
+  "scroller_before_space": {
+    "tag": "MAIN",
+    "cls": "rpage-main rpage-main--long-strip",
+    "client": 758,
+    "sh": 99755,
+    "top": 0,
+    "viewportH": 758
+  },
+  "space_samples": [
+    [
+      16.9,
+      0
+    ],
+    [
+      32.5,
+      0
+    ],
+    [
+      48.7,
+      0
+    ],
+    [
+      65.3,
+      0
+    ],
+    [
+      82.9,
+      0
+    ],
+    [
+      99.3,
+      0
+    ],
+    [
+      115.7,
+      0
+    ],
+    [
+      132.9,
+      0
+    ],
+    [
+      148.5,
+      0
+    ],
+    [
+      165.8,
+      0
+    ],
+    [
+      182.7,
+      0
+    ],
+    [
+      199.1,
+      0
+    ],
+    [
+      215.7,
+      0
+    ],
+    [
+      231.8,
+      0
+    ],
+    [
+      249.6,
+      0
+    ],
+    [
+      265.9,
+      0
+    ],
+    [
+      282.2,
+      0
+    ],
+    [
+      299,
+      0
+    ],
+    [
+      316.1,
+      0
+    ],
+    [
+      332.6,
+      758
+    ],
+    [
+      349.1,
+      758
+    ],
+    [
+      366.3,
+      758
+    ],
+    [
+      382.8,
+      758
+    ],
+    [
+      399.4,
+      758
+    ],
+    [
+      415.9,
+      758
+    ],
+    [
+      432,
+      758
+    ],
+    [
+      449.1,
+      758
+    ],
+    [
+      465.6,
+      758
+    ],
+    [
+      482.3,
+      758
+    ],
+    [
+      498.3,
+      758
+    ],
+    [
+      515.7,
+      758
+    ],
+    [
+      532.6,
+      758
+    ],
+    [
+      549.5,
+      758
+    ],
+    [
+      565.7,
+      758
+    ],
+    [
+      582,
+      758
+    ],
+    [
+      598.3,
+      758
+    ],
+    [
+      616.1,
+      758
+    ],
+    [
+      632.8,
+      758
+    ],
+    [
+      649,
+      758
+    ],
+    [
+      665.7,
+      758
+    ],
+    [
+      682.8,
+      758
+    ],
+    [
+      699.7,
+      758
+    ],
+    [
+      715.9,
+      758
+    ],
+    [
+      732.4,
+      758
+    ],
+    [
+      748.5,
+      758
+    ],
+    [
+      764.9,
+      758
+    ],
+    [
+      782.9,
+      758
+    ],
+    [
+      799.7,
+      758
+    ],
+    [
+      815.5,
+      758
+    ],
+    [
+      832.9,
+      758
+    ],
+    [
+      849.3,
+      758
+    ],
+    [
+      866.8,
+      758
+    ],
+    [
+      882.8,
+      758
+    ],
+    [
+      899.3,
+      758
+    ],
+    [
+      916,
+      758
+    ],
+    [
+      932,
+      758
+    ],
+    [
+      948.4,
+      758
+    ],
+    [
+      966.4,
+      758
+    ],
+    [
+      982.9,
+      758
+    ],
+    [
+      1000,
+      758
+    ],
+    [
+      1015.4,
+      758
+    ],
+    [
+      1032.1,
+      758
+    ],
+    [
+      1048.6,
+      758
+    ],
+    [
+      1066,
+      758
+    ],
+    [
+      1082.4,
+      758
+    ],
+    [
+      1098.8,
+      758
+    ],
+    [
+      1115,
+      758
+    ],
+    [
+      1133,
+      758
+    ],
+    [
+      1148.3,
+      758
+    ],
+    [
+      1165.5,
+      758
+    ],
+    [
+      1183.2,
+      758
+    ],
+    [
+      1198.5,
+      758
+    ],
+    [
+      1216.6,
+      758
+    ],
+    [
+      1231.5,
+      758
+    ],
+    [
+      1249.6,
+      758
+    ],
+    [
+      1265.8,
+      758
+    ],
+    [
+      1282.7,
+      758
+    ],
+    [
+      1299,
+      758
+    ],
+    [
+      1316.1,
+      758
+    ],
+    [
+      1332.8,
+      758
+    ],
+    [
+      1349.5,
+      758
+    ],
+    [
+      1366,
+      758
+    ],
+    [
+      1382.1,
+      758
+    ],
+    [
+      1399.1,
+      758
+    ],
+    [
+      1415.6,
+      758
+    ],
+    [
+      1431.8,
+      758
+    ],
+    [
+      1449.1,
+      758
+    ],
+    [
+      1465.8,
+      758
+    ],
+    [
+      1482.4,
+      758
+    ],
+    [
+      1498.5,
+      758
+    ],
+    [
+      1515.9,
+      758
+    ],
+    [
+      1532.1,
+      758
+    ],
+    [
+      1549.1,
+      758
+    ],
+    [
+      1565.8,
+      758
+    ],
+    [
+      1582.6,
+      758
+    ],
+    [
+      1599.5,
+      758
+    ],
+    [
+      1616.7,
+      758
+    ],
+    [
+      1632.2,
+      758
+    ],
+    [
+      1648.2,
+      758
+    ],
+    [
+      1666.3,
+      758
+    ],
+    [
+      1682.1,
+      758
+    ],
+    [
+      1698.8,
+      758
+    ],
+    [
+      1715.3,
+      758
+    ],
+    [
+      1732.6,
+      758
+    ],
+    [
+      1749,
+      758
+    ],
+    [
+      1765.5,
+      758
+    ],
+    [
+      1781.6,
+      758
+    ],
+    [
+      1798.9,
+      758
+    ],
+    [
+      1815.3,
+      758
+    ],
+    [
+      1832.9,
+      758
+    ],
+    [
+      1848.7,
+      758
+    ],
+    [
+      1865.9,
+      758
+    ],
+    [
+      1882.9,
+      758
+    ],
+    [
+      1899.5,
+      758
+    ],
+    [
+      1915.6,
+      758
+    ],
+    [
+      1932.1,
+      758
+    ],
+    [
+      1949.1,
+      758
+    ],
+    [
+      1965.1,
+      758
+    ],
+    [
+      1982.1,
+      758
+    ],
+    [
+      2000.2,
+      758
+    ]
+  ],
+  "space_delta": 758,
+  "space_viewport_ratio": 1.0,
+  "space_motion_ms": 1983.3,
+  "scroll_end": {
+    "tag": "MAIN",
+    "top": 758,
+    "sh": 99755,
+    "client": 758
+  },
+  "end_summary": {
+    "url": "https://comix.to/title/qqwrm-full-time-awakening/11705838-chapter-170",
+    "title": "Full-Time Awakening · Ch.170",
+    "viewport": {
+      "w": 1488,
+      "h": 758,
+      "dpr": 1
+    },
+    "bodyLen": 781,
+    "imgs": 71,
+    "pageImgs": 71,
+    "rpageClasses": [
+      "rpage-body",
+      "rpage",
+      "rpage--long-strip",
+      "rpage--ttb",
+      "rpage--pb-left",
+      "rpage-progress",
+      "rpage-progress--left",
+      "rpage-progress__seg",
+      "rpage-hoverzone",
+      "rpage-hoverzone--top",
+      "rpage-hoverzone--bottom",
+      "rpage-hoverzone--right",
+      "rpage-floatctl",
+      "rpage-floatctl__row",
+      "rpage-floatctl__btn",
+      "rpage-floatctl__chap",
+      "rpage-floatctl__chap-total",
+      "rpage-floatctl__col",
+      "rpage-floatctl__btn--fs",
+      "rpage-main",
+      "rpage-main--long-strip",
+      "rpage-main__inner",
+      "rpage-page",
+      "rpage-page__img",
+      "rpage-page__loader",
+      "rpage-page__loader-inner",
+      "rpage-page__spinner",
+      "rpage-page__counter",
+      "rpage-strip-comments",
+      "rpage-chap-ending",
+      "rpage-chap-ending__head",
+      "rpage-chap-ending__like",
+      "rpage-chap-ending__like-count",
+      "rpage-chap-ending__info",
+      "rpage-chap-ending__title",
+      "rpage-chap-ending__meta",
+      "rpage-chap-ending__sep",
+      "rpage-chap-ending__home",
+      "rpage-chap-ending__nav",
+      "rpage-chap-ending__nav-btn",
+      "rpage-bottombar",
+      "rpage-bottombar__controls",
+      "rpage-bottombar__actions",
+      "rpage-bottombar__hide-mobile",
+      "rpage-iconbtn",
+      "rpage-bottombar__settings",
+      "rpage-zoom",
+      "rpage-zoom__btn",
+      "rpage-zoom__value",
+      "rpage-cmpanel",
+      "rpage-cmpanel__chapnav",
+      "rpage-cmpanel__like",
+      "rpage-cmpanel__like-attribution",
+      "rpage-cmpanel__follow",
+      "rpage-cmpanel__close",
+      "rpage-cmpanel__body"
+    ],
+    "scrollers": [
+      {
+        "tag": "MAIN",
+        "cls": "rpage-main rpage-main--long-strip",
+        "client": 758,
+        "sh": 100009,
+        "top": 97460,
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 1488,
+          "h": 758
+        }
+      }
+    ],
+    "controls": [
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 1",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 2",
+        "rect": {
+          "x": 0,
+          "y": 11,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 3",
+        "rect": {
+          "x": 0,
+          "y": 21,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 4",
+        "rect": {
+          "x": 0,
+          "y": 32,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 5",
+        "rect": {
+          "x": 0,
+          "y": 43,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 6",
+        "rect": {
+          "x": 0,
+          "y": 53,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 7",
+        "rect": {
+          "x": 0,
+          "y": 64,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 8",
+        "rect": {
+          "x": 0,
+          "y": 75,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 9",
+        "rect": {
+          "x": 0,
+          "y": 86,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 10",
+        "rect": {
+          "x": 0,
+          "y": 96,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 11",
+        "rect": {
+          "x": 0,
+          "y": 107,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 12",
+        "rect": {
+          "x": 0,
+          "y": 118,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 13",
+        "rect": {
+          "x": 0,
+          "y": 128,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 14",
+        "rect": {
+          "x": 0,
+          "y": 139,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 15",
+        "rect": {
+          "x": 0,
+          "y": 150,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 16",
+        "rect": {
+          "x": 0,
+          "y": 160,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 17",
+        "rect": {
+          "x": 0,
+          "y": 171,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 18",
+        "rect": {
+          "x": 0,
+          "y": 182,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 19",
+        "rect": {
+          "x": 0,
+          "y": 193,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 20",
+        "rect": {
+          "x": 0,
+          "y": 203,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 21",
+        "rect": {
+          "x": 0,
+          "y": 214,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 22",
+        "rect": {
+          "x": 0,
+          "y": 225,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 23",
+        "rect": {
+          "x": 0,
+          "y": 235,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 24",
+        "rect": {
+          "x": 0,
+          "y": 246,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 25",
+        "rect": {
+          "x": 0,
+          "y": 257,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 26",
+        "rect": {
+          "x": 0,
+          "y": 267,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 27",
+        "rect": {
+          "x": 0,
+          "y": 278,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 28",
+        "rect": {
+          "x": 0,
+          "y": 289,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 29",
+        "rect": {
+          "x": 0,
+          "y": 299,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 30",
+        "rect": {
+          "x": 0,
+          "y": 310,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 31",
+        "rect": {
+          "x": 0,
+          "y": 321,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 32",
+        "rect": {
+          "x": 0,
+          "y": 332,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 33",
+        "rect": {
+          "x": 0,
+          "y": 342,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 34",
+        "rect": {
+          "x": 0,
+          "y": 353,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 35",
+        "rect": {
+          "x": 0,
+          "y": 364,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 36",
+        "rect": {
+          "x": 0,
+          "y": 374,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 37",
+        "rect": {
+          "x": 0,
+          "y": 385,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 38",
+        "rect": {
+          "x": 0,
+          "y": 396,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 39",
+        "rect": {
+          "x": 0,
+          "y": 406,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 40",
+        "rect": {
+          "x": 0,
+          "y": 417,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 41",
+        "rect": {
+          "x": 0,
+          "y": 428,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 42",
+        "rect": {
+          "x": 0,
+          "y": 438,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 43",
+        "rect": {
+          "x": 0,
+          "y": 449,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 44",
+        "rect": {
+          "x": 0,
+          "y": 460,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 45",
+        "rect": {
+          "x": 0,
+          "y": 470,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 46",
+        "rect": {
+          "x": 0,
+          "y": 481,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 47",
+        "rect": {
+          "x": 0,
+          "y": 492,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 48",
+        "rect": {
+          "x": 0,
+          "y": 503,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 49",
+        "rect": {
+          "x": 0,
+          "y": 513,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 50",
+        "rect": {
+          "x": 0,
+          "y": 524,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 51",
+        "rect": {
+          "x": 0,
+          "y": 535,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 52",
+        "rect": {
+          "x": 0,
+          "y": 545,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 53",
+        "rect": {
+          "x": 0,
+          "y": 556,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 54",
+        "rect": {
+          "x": 0,
+          "y": 567,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 55",
+        "rect": {
+          "x": 0,
+          "y": 577,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 56",
+        "rect": {
+          "x": 0,
+          "y": 588,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 57",
+        "rect": {
+          "x": 0,
+          "y": 599,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 58",
+        "rect": {
+          "x": 0,
+          "y": 609,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 59",
+        "rect": {
+          "x": 0,
+          "y": 620,
+          "w": 3,
+          "h": 11
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "rpage-progress__seg  is-visited",
+        "text": "",
+        "label": "Go to page 60",
+        "rect": {
+          "x": 0,
+          "y": 631,
+          "w": 3,
+          "h": 11
+        }
+      }
+    ],
+    "textSample": "Ch.170\n/ 170\n4 / 71\n5 / 71\n6 / 71\n7 / 71\n8 / 71\n9 / 71\n10 / 71\n11 / 71\n12 / 71\n13 / 71\n14 / 71\n15 / 71\n16 / 71\n17 / 71\n18 / 71\n19 / 71\n20 / 71\n21 / 71\n22 / 71\n23 / 71\n24 / 71\n25 / 71\n26 / 71\n27 / 71\n28 / 71\n29 / 71\n30 / 71\n31 / 71\n32 / 71\n33 / 71\n34 / 71\n35 / 71\n36 / 71\n37 / 71\n38 / 71\n39 / 71\n40 / 71\n41 / 71\n42 / 71\n43 / 71\n44 / 71\n45 / 71\n46 / 71\n47 / 71\n48 / 71\n49 / 71\n50 / 71\n51 / 71\n52 / 71\n53 / 71\n54 / 71\n55 / 71\n56 / 71\n57 / 71\n58 / 71\n59 / 71\n60 / 71\n61 / 71\n62 / 71\n63 / 71\n64 / 71\n65 / 71\n66 / 71\n67 / 71\n68 / 71\n69 / 71\n70 / 71\n71 / 71\n43\nFull-Time Awakening\nCh. 170\n·\nTranslated by Th"
+  }
+}

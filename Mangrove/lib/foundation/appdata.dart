@@ -425,7 +425,7 @@ class Settings with ChangeNotifier {
     // One-shot upgrade flag: `color` -> `colorSchemePreset`. Device-local, so
     // it is also listed in [_disableSync].
     'colorSchemePresetMigrated': false,
-    'theme_mode': 'system', // light, dark, system
+    'theme_mode': 'light', // light, dark, sepia（护眼）
     'newFavoriteAddTo': 'end', // start, end
     'moveFavoriteAfterRead': 'none', // none, end, start
     'proxy': 'system', // direct, system, proxy string
@@ -575,6 +575,9 @@ class Settings with ChangeNotifier {
     'deviceId': '',
     'ignoreBadCertificate': false,
     'readerScrollSpeed': 1.0, // 0.5 - 3.0
+    // P56：桌面 / 移动端两套布局的模式设置。auto 按平台 + 窗宽推断，
+    // 桌面专属控件（右上胶囊、左缘页轨、右下缩放簇、桌面快捷键）都读它。
+    'readerLayoutMode': 'auto', // auto | desktop | mobile
     // 连续模式翻页后让目标页垂直居中（默认贴顶）。仅上下连续滑动生效。
     'readerCenterPageOnTurn': false,
     // 连续模式相邻图片之间的间隙（逻辑像素，0 = 紧贴）。

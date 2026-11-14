@@ -188,16 +188,12 @@ class _ReaderGestureDetectorState
       return;
     }
     if (context.reader.mode.key.startsWith('gallery')) {
+      // P56：滚轮越过首尾页只回弹，不自动跳章。换章出口统一为章末双卡、
+      // 右上胶囊与桌面 ←/→ 快捷键（用户显式触发）。
       if (forward) {
-        if (!context.reader.toNextPage() &&
-            !context.reader.isLastChapterOfGroup) {
-          context.reader.toNextChapter();
-        }
+        context.reader.toNextPage();
       } else {
-        if (!context.reader.toPrevPage() &&
-            !context.reader.isFirstChapterOfGroup) {
-          context.reader.toPrevChapter(toLastPage: true);
-        }
+        context.reader.toPrevPage();
       }
     }
   }
@@ -220,23 +216,12 @@ class _ReaderGestureDetectorState
     'enableDoubleTapToZoom',
   );
 
-  /// R4-4：顶/底栏显隐的触发手势。
-  ReaderChromeHideTrigger get _chromeHideTrigger =>
-      resolveReaderChromeHideTrigger(
-        appdata.settings.getReaderSetting(
-          reader.cid,
-          reader.type.sourceKey,
-          'readerChromeHideTrigger',
-        ),
-      );
-
   /// 双击检测是否要开着。
   ///
-  /// `doubleTap` 触发模式下，即便用户把"双击缩放"关了也必须继续检测双击 ——
-  /// 否则这个模式永远收不到它的触发手势（onTapUp 会直接走单击分支）。
-  bool get _detectDoubleTap =>
-      _enableDoubleTapToZoom ||
-      _chromeHideTrigger == ReaderChromeHideTrigger.doubleTap;
+  /// P57.x 顶/底工具栏删除后，双击不再承担「切换显隐」职责，只负责缩放/收藏，
+  /// 因此这里只看用户的双击缩放开关。旧设置 `readerChromeHideTrigger` 的
+  /// `doubleTap` 档不再延迟单击（那会让每次翻页多等 200ms）。
+  bool get _detectDoubleTap => _enableDoubleTapToZoom;
 
   void onTapUp(TapUpDetails event) {
     if (event.globalPosition == Offset.zero &&
@@ -276,147 +261,128 @@ class _ReaderGestureDetectorState
   }
 
   void onTap(Offset location) {
-    // R4-4：单击要不要负责切换显隐，由触发策略说了算。`doubleTap` 模式下这里
-    // 恒为 no-op，单击于是只剩下翻页一个职责。
-    void toggleChrome() {
-      if (readerSingleTapTogglesChrome(_chromeHideTrigger)) {
-        context.readerScaffold.openOrClose();
-      }
-    }
-
     if (reader._imageViewController!.handleOnTap(location)) {
       return;
-    } else if (context.readerScaffold.isOpen) {
-      toggleChrome();
-    } else {
-      // Don't open toolbar on chapter comments page
-      if (reader.isOnChapterCommentsPage) {
-        return;
+    }
+    // Don't turn pages on chapter comments page.
+    if (reader.isOnChapterCommentsPage) {
+      return;
+    }
+    // 顶/底工具栏已移除（P57.x）：单击只负责翻页，中心区不再切换显隐。
+    // 旧设置 `readerChromeHideTrigger` 的 `singleTapAnywhere` 档原本会独占单击，
+    // 工具栏没了之后那条分支等于「单击彻底无反应」，因此不再读取该设置。
+    if (appdata.settings.getReaderSetting(
+      reader.cid,
+      reader.type.sourceKey,
+      'enableTapToTurnPages',
+    )) {
+      bool isLeft = false, isRight = false, isTop = false, isBottom = false;
+      final width = context.width;
+      final height = context.height;
+      final x = location.dx;
+      final y = location.dy;
+      // The edge page rail owns the leftmost strip when it's enabled: the
+      // tap-to-turn layer must not claim it too, or a click meant to jump to
+      // a page would also turn the page. Both the default 30% zone and the
+      // custom zone path read `isLeft`, so the inset covers them together.
+      final railInset = context.readerScaffold.pageRailEnabled
+          ? kPageRailWidth
+          : 0.0;
+      if (x >= railInset && x < width * _kTapToTurnPagePercent) {
+        isLeft = true;
+      } else if (x > width * (1 - _kTapToTurnPagePercent)) {
+        isRight = true;
       }
-      // `singleTapAnywhere` 模式下单击被显隐独占，直接跳过整段热区判定 ——
-      // 否则"任意位置"会被"边缘区翻页"抢走一大半。
-      if (!readerSingleTapTurnsPage(_chromeHideTrigger)) {
-        toggleChrome();
-        return;
+      if (y < height * _kTapToTurnPagePercent) {
+        isTop = true;
+      } else if (y > height * (1 - _kTapToTurnPagePercent)) {
+        isBottom = true;
       }
-      if (appdata.settings.getReaderSetting(
+      bool isCenter = false;
+      var prev = () => context.reader.toPrevPage();
+      var next = () => context.reader.toNextPage();
+      final customZones = appdata.settings.getReaderSetting(
         reader.cid,
         reader.type.sourceKey,
-        'enableTapToTurnPages',
-      )) {
-        bool isLeft = false, isRight = false, isTop = false, isBottom = false;
-        final width = context.width;
-        final height = context.height;
-        final x = location.dx;
-        final y = location.dy;
-        // The edge page rail owns the leftmost strip when it's enabled: the
-        // tap-to-turn layer must not claim it too, or a click meant to jump to
-        // a page would also turn the page. Both the default 30% zone and the
-        // custom zone path read `isLeft`, so the inset covers them together.
-        final railInset = context.readerScaffold.pageRailEnabled
-            ? kPageRailWidth
-            : 0.0;
-        if (x >= railInset && x < width * _kTapToTurnPagePercent) {
-          isLeft = true;
-        } else if (x > width * (1 - _kTapToTurnPagePercent)) {
-          isRight = true;
-        }
-        if (y < height * _kTapToTurnPagePercent) {
-          isTop = true;
-        } else if (y > height * (1 - _kTapToTurnPagePercent)) {
-          isBottom = true;
-        }
-        bool isCenter = false;
-        var prev = () => context.reader.toPrevPage();
-        var next = () => context.reader.toNextPage();
-        final customZones = appdata.settings.getReaderSetting(
+        'enableCustomTapZones',
+      );
+      if (customZones == true) {
+        // 自定义翻页区域：由用户为四条边缘各自指定动作。角落同属两条边时
+        // 上下优先于左右；若命中边动作为 'none' 则回退到相邻边的非 none 动作。
+        String action = 'none';
+        String? zone(String key) => appdata.settings.getReaderSetting(
           reader.cid,
           reader.type.sourceKey,
-          'enableCustomTapZones',
+          key,
         );
-        if (customZones == true) {
-          // 自定义翻页区域：由用户为四条边缘各自指定动作。角落同属两条边时
-          // 上下优先于左右；若命中边动作为 'none' 则回退到相邻边的非 none 动作。
-          String action = 'none';
-          String? zone(String key) => appdata.settings.getReaderSetting(
-            reader.cid,
-            reader.type.sourceKey,
-            key,
-          );
-          for (final a in <String?>[
-            if (isTop) zone('tapZoneTop'),
-            if (isBottom) zone('tapZoneBottom'),
-            if (isLeft) zone('tapZoneLeft'),
-            if (isRight) zone('tapZoneRight'),
-          ]) {
-            if (a != null && a != 'none') {
-              action = a;
-              break;
-            }
-          }
-          if (action == 'prev') {
-            prev();
-            return;
-          } else if (action == 'next') {
-            next();
-            return;
-          }
-          // 'none' 或点在中心区域：落到打开/关闭工具栏
-          isCenter = true;
-        } else {
-          if (appdata.settings.getReaderSetting(
-            reader.cid,
-            reader.type.sourceKey,
-            'reverseTapToTurnPages',
-          )) {
-            prev = () => context.reader.toNextPage();
-            next = () => context.reader.toPrevPage();
-          }
-          switch (context.reader.mode) {
-            case ReaderMode.galleryLeftToRight:
-            case ReaderMode.continuousLeftToRight:
-              if (isLeft) {
-                prev();
-              } else if (isRight) {
-                next();
-              } else {
-                isCenter = true;
-              }
-            case ReaderMode.galleryRightToLeft:
-            case ReaderMode.continuousRightToLeft:
-              if (isLeft) {
-                next();
-              } else if (isRight) {
-                prev();
-              } else {
-                isCenter = true;
-              }
-            case ReaderMode.galleryTopToBottom:
-            case ReaderMode.continuousTopToBottom:
-              if (isTop) {
-                prev();
-              } else if (isBottom) {
-                next();
-              } else {
-                isCenter = true;
-              }
+        for (final a in <String?>[
+          if (isTop) zone('tapZoneTop'),
+          if (isBottom) zone('tapZoneBottom'),
+          if (isLeft) zone('tapZoneLeft'),
+          if (isRight) zone('tapZoneRight'),
+        ]) {
+          if (a != null && a != 'none') {
+            action = a;
+            break;
           }
         }
-        if (!isCenter) {
+        if (action == 'prev') {
+          prev();
+          return;
+        } else if (action == 'next') {
+          next();
           return;
         }
+        // 'none' 或点在中心区域：工具栏已移除，无动作。
+        isCenter = true;
+      } else {
+        if (appdata.settings.getReaderSetting(
+          reader.cid,
+          reader.type.sourceKey,
+          'reverseTapToTurnPages',
+        )) {
+          prev = () => context.reader.toNextPage();
+          next = () => context.reader.toPrevPage();
+        }
+        switch (context.reader.mode) {
+          case ReaderMode.galleryLeftToRight:
+          case ReaderMode.continuousLeftToRight:
+            if (isLeft) {
+              prev();
+            } else if (isRight) {
+              next();
+            } else {
+              isCenter = true;
+            }
+          case ReaderMode.galleryRightToLeft:
+          case ReaderMode.continuousRightToLeft:
+            if (isLeft) {
+              next();
+            } else if (isRight) {
+              prev();
+            } else {
+              isCenter = true;
+            }
+          case ReaderMode.galleryTopToBottom:
+          case ReaderMode.continuousTopToBottom:
+            if (isTop) {
+              prev();
+            } else if (isBottom) {
+              next();
+            } else {
+              isCenter = true;
+            }
+        }
       }
-      toggleChrome();
+      // 中心区：工具栏已移除，无需切换显隐。
+      if (isCenter) {
+        return;
+      }
     }
   }
 
   void onDoubleTap(Offset location) {
-    // R4-4：`doubleTap` 触发模式下双击被显隐独占，不再缩放/收藏 —— 二者共用
-    // 同一个手势，只能二选一（设置项副标题里写明了这点）。
-    if (readerDoubleTapTogglesChrome(_chromeHideTrigger)) {
-      context.readerScaffold.openOrClose();
-      return;
-    }
+    // 工具栏已移除（P57.x）：双击不再切换显隐，只负责缩放/收藏。
     context.reader._imageViewController?.handleDoubleTap(location);
   }
 

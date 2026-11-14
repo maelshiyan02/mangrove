@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangrove/foundation/appdata.dart';
+import 'package:mangrove/foundation/reader_ux_policy.dart';
 import 'package:mangrove/pages/reader/reader.dart';
 import 'package:mangrove/utils/sync_skip.dart';
 
 /// Guards the P47 R4 setting batch.
 ///
-/// 这一阶段的五个键全部走"纯逻辑层 + 一处消费点"的形状，所以断言主要打在
-/// `reader_filters.dart` 上：默认值、边界钳制、枚举回落、以及三种显隐策略
-/// 各自该放行/该拦下的手势组合。再补一条 appdata 默认值表，防止有人只改了
-/// 设置页却忘了给新键落默认。
+/// 这一阶段的键全部走"纯逻辑层 + 一处消费点"的形状，所以断言主要打在
+/// `reader_filters.dart` 上：默认值、边界钳制、以及 appdata 默认值表，
+/// 防止有人只改了设置页却忘了给新键落默认。
+/// P57.x 起顶/底工具栏删除，"显隐触发"整组策略已退役，对应断言随功能一起移除；
+/// 作为补充，这里新增缩放百分比读数的断言（标签与输入框预填必须同源）。
 void main() {
   group('chapter capsule', () {
     test('defaults off, and only a literal true turns it on', () {
@@ -68,52 +70,35 @@ void main() {
     });
   });
 
-  group('chrome hide trigger', () {
-    test('unknown values fall back to tapCenter (the current behaviour)', () {
-      expect(resolveReaderChromeHideTrigger(null), ReaderChromeHideTrigger.tapCenter);
-      expect(
-        resolveReaderChromeHideTrigger('nonsense'),
-        ReaderChromeHideTrigger.tapCenter,
-      );
-      expect(
-        resolveReaderChromeHideTrigger('singleTapAnywhere'),
-        ReaderChromeHideTrigger.singleTapAnywhere,
-      );
-      expect(
-        resolveReaderChromeHideTrigger('doubleTap'),
-        ReaderChromeHideTrigger.doubleTap,
-      );
+  // 「chrome hide trigger」整组已随顶/底工具栏退役（P57.x）删除：
+  // 工具栏不存在了，三个档位没有可切换的对象。对应的纯函数一并从
+  // `reader_filters.dart` 移除；`readerChromeHideTrigger` 这个设置键仍保留在
+  // appdata 默认值里（见下方 settings-defaults 组），只为兼容旧配置。
+
+  group('zoom percentage', () {
+    test('is measured against the fit scale, not the absolute scale', () {
+      // gallery 满屏时绝对 scale 只有 0.42，读数必须仍是 100%。
+      expect(zoomPercentOf(0.42, 0.42), 100);
+      expect(zoomPercentOf(0.63, 0.42), 150);
+      // 连续模式 base = 1.0，两者一致。
+      expect(zoomPercentOf(2.5, 1.0), 250);
+      // 尚未拿到 controller 时按 1x 报数，不能显示 0%。
+      expect(zoomPercentOf(null, 0.42), 100);
+      expect(zoomPercentOf(1.0, null), 100);
+      // 坏值不许抛 / 不许给出 0。
+      expect(zoomPercentOf(double.nan, 1.0), 100);
+      expect(zoomPercentOf(1.0, 0.0), 100);
     });
 
-    test('tapCenter: single tap toggles the bars and still turns pages', () {
-      const t = ReaderChromeHideTrigger.tapCenter;
-      expect(readerSingleTapTogglesChrome(t), isTrue);
-      expect(readerSingleTapTurnsPage(t), isTrue);
-      expect(readerDoubleTapTogglesChrome(t), isFalse);
-    });
-
-    test('singleTapAnywhere: single tap owns the toggle, so it stops turning', () {
-      const t = ReaderChromeHideTrigger.singleTapAnywhere;
-      expect(readerSingleTapTogglesChrome(t), isTrue);
-      // The whole point of the mode: page turning moves to swipe/wheel/keys.
-      expect(readerSingleTapTurnsPage(t), isFalse);
-      expect(readerDoubleTapTogglesChrome(t), isFalse);
-    });
-
-    test('doubleTap: single tap is demoted, double tap takes over', () {
-      const t = ReaderChromeHideTrigger.doubleTap;
-      expect(readerSingleTapTogglesChrome(t), isFalse);
-      expect(readerSingleTapTurnsPage(t), isTrue);
-      expect(readerDoubleTapTogglesChrome(t), isTrue);
-    });
-
-    test('every trigger leaves exactly one way to toggle the bars', () {
-      for (final t in ReaderChromeHideTrigger.values) {
-        expect(
-          readerSingleTapTogglesChrome(t) || readerDoubleTapTogglesChrome(t),
-          isTrue,
-          reason: '$t leaves no gesture that can bring the bars back',
-        );
+    test('the label and the input box prefill share one formula', () {
+      // 这条是回归线：预填值曾经直接用绝对 scale×100，gallery 满屏填成 42。
+      for (final base in <double>[0.42, 0.75, 1.0]) {
+        for (final scale in <double>[base, base * 1.5, base * 2.5]) {
+          expect(
+            formatZoomLabel(scale, base, true),
+            '${zoomPercentOf(scale, base)}%',
+          );
+        }
       }
     });
   });

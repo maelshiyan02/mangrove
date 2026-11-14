@@ -40,16 +40,53 @@ class _AppSettingsState extends State<AppSettings> {
           icon: Icons.color_lens,
           title: "Appearance".tl,
           children: [
-            SelectSetting(
-              title: "Theme Mode".tl,
-              settingKey: "theme_mode",
-              optionTranslation: {
-                "system": "System".tl,
-                "light": "Light".tl,
-                "dark": "Dark".tl,
-              },
-              onChanged: () async {
-                App.forceRebuild();
+            // 全局三档外观：白天 / 夜间 / 护眼（参考 Scrollforge 三档界面风格）。
+            Builder(
+              builder: (context) {
+                final raw = appdata.settings['theme_mode'] as String?;
+                final mode =
+                    raw == 'dark' || raw == 'sepia' ? raw! : 'light';
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "Theme Mode".tl,
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      SegmentedButton<String>(
+                        selected: <String>{mode},
+                        showSelectedIcon: false,
+                        onSelectionChanged: (selected) {
+                          final v = selected.first;
+                          appdata.settings['theme_mode'] = v;
+                          appdata.saveData();
+                          App.forceRebuild();
+                          setState(() {});
+                        },
+                        segments: const [
+                          ButtonSegment<String>(
+                            value: 'light',
+                            icon: Icon(Icons.wb_sunny_outlined),
+                            label: Text('白天'),
+                          ),
+                          ButtonSegment<String>(
+                            value: 'dark',
+                            icon: Icon(Icons.nightlight_round),
+                            label: Text('夜间'),
+                          ),
+                          ButtonSegment<String>(
+                            value: 'sepia',
+                            icon: Icon(Icons.visibility_outlined),
+                            label: Text('护眼'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
               },
             ),
             ListTile(

@@ -1,0 +1,12 @@
+=== wrapper start 2026/11/14 ÖÜÁù 18:11:33.67 
+=== flutter pub get ===
+rc pubget = 0
+=== flutter analyze ===
+rc analyze = 0
+=== flutter build windows --release --no-pub ===
+rc build = 0
+=== cmake --install ===
+rc install = 0
+=== BUILD_OK ===
+=== BUILD_OK === 
+=== wrapper end rc=0 2026/11/14 ÖÜÁù 18:12:48.61 

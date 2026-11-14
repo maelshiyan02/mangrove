@@ -145,7 +145,7 @@ mixin _ChapterSelectionMixin<T extends StatefulWidget> on State<T> {
               ),
             ),
             if (compact)
-              PopupMenuButton<String>(
+              MangrovePopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert_rounded),
                 onSelected: (value) {
                   switch (value) {
@@ -163,21 +163,21 @@ mixin _ChapterSelectionMixin<T extends StatefulWidget> on State<T> {
                       break;
                   }
                 },
-                itemBuilder: (context) => [
-                  PopupMenuItem(value: 'all', child: Text("Select All".tl)),
-                  PopupMenuItem(
+                items: [
+                  MangrovePopupItem(value: 'all', label: "Select All".tl),
+                  MangrovePopupItem(
                     value: 'invert',
-                    child: Text("Invert Selection".tl),
+                    label: "Invert Selection".tl,
                   ),
-                  PopupMenuItem(
+                  MangrovePopupItem(
                     value: 'read',
                     enabled: selected.isNotEmpty,
-                    child: Text("Mark as read".tl),
+                    label: "Mark as read".tl,
                   ),
-                  PopupMenuItem(
+                  MangrovePopupItem(
                     value: 'unread',
                     enabled: selected.isNotEmpty,
-                    child: Text("Mark as unread".tl),
+                    label: "Mark as unread".tl,
                   ),
                 ],
               )

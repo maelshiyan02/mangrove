@@ -1,5 +1,10 @@
 {
   "zh_CN": {
+    "Reader layout": "阅读器布局",
+    "Desktop layout": "桌面端布局",
+    "Mobile layout": "移动端布局",
+    "Scroll down half a viewport": "向下滚动半屏",
+    "Chapter list": "章节列表",
     "Project language": "工程语言",
     "Ellipse": "椭圆",
     "Ellipse (circle / oval)": "椭圆（正圆 / 椭圆）",
@@ -1990,6 +1995,11 @@
     "This comic has no page image yet. The new project will start empty.": "This comic has no page image yet. The new project will start empty."
   },
   "zh_TW": {
+    "Reader layout": "閱讀器佈局",
+    "Desktop layout": "桌面端佈局",
+    "Mobile layout": "行動端佈局",
+    "Scroll down half a viewport": "向下捲動半螢幕",
+    "Chapter list": "章節列表",
     "Project language": "工程語言",
     "Ellipse": "橢圓",
     "Ellipse (circle / oval)": "橢圓（正圓 / 橢圓）",

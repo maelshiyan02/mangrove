@@ -300,31 +300,31 @@ class _ComicCollectionsPageState extends State<ComicCollectionsPage>
       }
     }
 
-    final batchMenu = PopupMenuButton<String>(
+    final batchMenu = MangrovePopupMenuButton<String>(
       tooltip: 'Batch manage'.tl,
       icon: const Icon(Icons.more_vert),
       onSelected: handleBatchAction,
-      itemBuilder: (context) => [
-        PopupMenuItem(value: 'selectAll', child: Text('Select All'.tl)),
-        PopupMenuItem(value: 'deselect', child: Text('Deselect'.tl)),
-        PopupMenuItem(value: 'invert', child: Text('Invert Selection'.tl)),
-        PopupMenuItem(
+      items: [
+        MangrovePopupItem(value: 'selectAll', label: 'Select All'.tl),
+        MangrovePopupItem(value: 'deselect', label: 'Deselect'.tl),
+        MangrovePopupItem(value: 'invert', label: 'Invert Selection'.tl),
+        MangrovePopupItem(
           value: 'delete',
           enabled: selectedItems.isNotEmpty,
-          child: Text('Delete'.tl),
+          label: 'Delete'.tl,
         ),
-        PopupMenuItem(
+        MangrovePopupItem(
           value: 'favorite',
           enabled: selectedItems.isNotEmpty,
-          child: Text('Add to favorites'.tl),
+          label: 'Add to favorites'.tl,
         ),
-        PopupMenuItem(
+        MangrovePopupItem(
           value: 'readLater',
           enabled: selectedItems.isNotEmpty,
-          child: Text('Read later'.tl),
+          label: 'Read later'.tl,
         ),
         if (selectedItems.length == 1)
-          PopupMenuItem(value: 'edit', child: Text('Edit'.tl)),
+          MangrovePopupItem(value: 'edit', label: 'Edit'.tl),
       ],
     );
     final selectActions = context.width < 520
@@ -377,14 +377,14 @@ class _ComicCollectionsPageState extends State<ComicCollectionsPage>
                     ? null
                     : () => setState(() => multiSelectMode = true),
               ),
-              PopupMenuButton<String>(
+              MangrovePopupMenuButton<String>(
                 tooltip: 'Sort'.tl,
                 icon: const Icon(Icons.sort),
                 initialValue: sortMode,
                 onSelected: (value) => setState(() => sortMode = value),
-                itemBuilder: (context) => [
+                items: [
                   for (final value in ['manual', 'name', 'count', 'created'])
-                    PopupMenuItem(value: value, child: Text(_sortLabel(value))),
+                    MangrovePopupItem(value: value, label: _sortLabel(value)),
                 ],
               ),
               Tooltip(

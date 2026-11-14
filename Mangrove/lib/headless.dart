@@ -65,6 +65,7 @@ import 'package:mangrove/headless_p12_checks.dart';
 import 'package:mangrove/headless_p13_checks.dart';
 import 'package:mangrove/headless_p14_checks.dart';
 import 'package:mangrove/headless_p15_checks.dart';
+import 'package:mangrove/headless_p56_checks.dart';
 import 'package:mangrove/headless_p53_create_check.dart';
 import 'package:mangrove/headless_p53_layout_check.dart';
 import 'package:mangrove/headless_local_comic_make.dart';
@@ -3106,6 +3107,72 @@ Future<void> runGlossaryUiCheck(List<String> args, int commandIndex) async {
   exit(passed ? 0 : 1);
 }
 
+/// `mangrove.exe --headless reader-ux-check [--json out.json]`
+///
+/// P56：阅读器翻页步长、桌面快捷键表、隐式跳章守卫、章末双卡可达性、
+/// `readerLayoutMode` 推断与源码接线。全部是纯 Dart + 源码扫描，
+/// 在 `init()` **之前**跑，不依赖渲染表面（A01 §3）。
+///
+/// 每条断言自带「故障实现喂同一判据」的反向对照；收口时还要做一次
+/// 真实源码故障注入（改常量 / 加回跳章调用）确认只红目标断言。
+Future<void> runReaderUxCheck(List<String> args, int commandIndex) async {
+  final jsonIndex = args.indexOf('--json');
+  final outPath = jsonIndex != -1 && jsonIndex + 1 < args.length
+      ? args[jsonIndex + 1]
+      : '${Directory.current.path}/reader_ux_check.json';
+
+  final checks = <Map<String, Object?>>[];
+  void check(String name, bool passed, String detail) =>
+      checks.add({'name': name, 'passed': passed, 'detail': detail});
+
+  Future<void> finish(bool passed, String message) async {
+    final report = {
+      'version': 1,
+      'command': 'reader-ux-check',
+      'passed': passed,
+      'checks': checks,
+    };
+    final output = File(outPath);
+    if (!output.parent.existsSync()) {
+      await output.parent.create(recursive: true);
+    }
+    await output.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(report),
+      encoding: utf8,
+    );
+    for (final entry in checks) {
+      cliPrint({'status': 'running', 'message': 'Check', 'data': entry});
+    }
+    cliPrint({
+      'status': passed ? 'success' : 'error',
+      'message': message,
+      'data': {'report': output.path},
+    });
+  }
+
+  var passed = false;
+  try {
+    final packageRoot = _packageRoot();
+    if (packageRoot == null) {
+      check('reader.package_root', false, 'pubspec.yaml + lib/ not found');
+      await finish(false, 'Reader UX check FAIL (no package root)');
+      exit(1);
+    }
+    runP56Checks(check, packageRoot: packageRoot);
+    // 空断言集必须判 FAIL（A02 §7 第 1 条）。
+    passed = checks.isNotEmpty && checks.every((c) => c['passed'] == true);
+    await finish(
+      passed,
+      'Reader UX check ${passed ? 'PASS' : 'FAIL'} (${checks.length} checks)',
+    );
+  } catch (e, s) {
+    Log.error('ReaderUxCheck', 'reader-ux-check failed: $e\n$s');
+    check('exception', false, e.toString());
+    await finish(false, 'Reader UX check threw: $e');
+  }
+  exit(passed ? 0 : 1);
+}
+
 /// `mangrove.exe --headless block-ops-check [--json out.json]`
 ///
 /// Verifies S-N1 (the reusable 【识别】/【翻译】 buttons) and S-N3 (mask
@@ -3996,6 +4063,12 @@ Future<void> runHeadlessMode(List<String> args) async {
   // 术语表 UI 入口的解耦 / 接线 / 文案登记（S-N2 之后的 C）。
   if (command == 'glossary-ui-check') {
     await runGlossaryUiCheck(args, commandIndex);
+    return;
+  }
+
+  // P56 阅读器策略层：纯 Dart + 源码扫描，同样不启动 App。
+  if (command == 'reader-ux-check') {
+    await runReaderUxCheck(args, commandIndex);
     return;
   }
 

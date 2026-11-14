@@ -61,6 +61,7 @@ part 'search_field.dart';
 part 'select.dart';
 part 'selection.dart';
 part 'side_bar.dart';
+part 'mangrove_popup.dart';
 part 'comic.dart';
 part 'add_to_collection.dart';
 part 'swipe_action.dart';

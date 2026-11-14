@@ -1,13 +1,15 @@
 part of 'reader.dart';
 
-/// Width of the edge page rail's hit area (desktop only).
+/// Width of the edge page rail when expanded (desktop only).
 ///
-/// Wide enough to aim at without precision, narrow enough to stay out of the
-/// page. Mirrors comix's `.rpage-progress--left`.
-const double kPageRailWidth = 24.0;
+/// The rail is an overlay pinned to the left edge; it grows from the edge
+/// rightward when hovered, carrying a translucent surface panel. Mirrors
+/// comix's `.rpage-progress--left` but raised above the canvas as a floating
+/// control rather than a reserved column.
+const double kPageRailWidth = 28.0;
 
-/// Segment width while the rail is idle.
-const double kPageRailCollapsedSegWidth = 3.0;
+/// Segment width while the rail is idle (a thin strip at the very left edge).
+const double kPageRailCollapsedSegWidth = 4.0;
 
 /// Gap between segments. It is a real transparent gap, not a drawn line, so
 /// whatever the reader background is (white / gray / black / sepia / green)
@@ -216,13 +218,33 @@ class _ReaderPageRailState extends State<ReaderPageRail> {
           }
 
           final column = Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
+            // 自左缘向右展开：段从 x=0 起向右生长，而非贴右对齐的占位线。
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: children,
           );
 
           return Stack(
             clipBehavior: Clip.none,
             children: [
+              // 展开时浮现的半透明面板底，使页轨读作浮动控件而非占位。
+              AnimatedOpacity(
+                opacity: _expanded ? 1 : 0,
+                duration: _kPageRailExpandDuration,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHighest
+                        .withValues(alpha: 0.9),
+                    borderRadius: const BorderRadius.only(
+                      topRight: Radius.circular(8),
+                      bottomRight: Radius.circular(8),
+                    ),
+                    border: Border.all(
+                      color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                      width: 0.5,
+                    ),
+                  ),
+                ),
+              ),
               Positioned.fill(
                 child: metrics.scrollable
                     ? SingleChildScrollView(

@@ -113,6 +113,7 @@ const syncSkipCategories = <SyncSkipCategory>[
       "readerAutoPlayMode",
       "autoScrollSpeed",
       "readerSideToolbar",
+      "readerLayoutMode",
       "comicSpecificSettings",
       "deviceSpecificSettings",
     ],

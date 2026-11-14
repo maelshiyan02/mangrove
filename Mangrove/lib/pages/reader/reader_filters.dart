@@ -54,48 +54,17 @@ double readerDimStrength(dynamic raw) {
 }
 
 // ---------------------------------------------------------------------------
-// R4-4 控件显隐触发策略
+// R4-4 控件显隐触发策略（P57.x 已整体退役）
 // ---------------------------------------------------------------------------
-
-/// 顶/底栏（chrome）显示与隐藏的触发手势。
-enum ReaderChromeHideTrigger {
-  /// 现状：单击非翻页区（中心区）切换显隐，单击边缘区仍然翻页。
-  tapCenter('tapCenter'),
-
-  /// 单击任意位置都切换显隐；单击**不再翻页**（翻页交给滑动/滚轮/键盘/页轨）。
-  singleTapAnywhere('singleTapAnywhere'),
-
-  /// 单击永不切换显隐（只翻页）；双击切换显隐。
-  /// 🔴 与双击缩放互斥：选中后双击不再缩放/收藏，见
-  /// [_ReaderGestureDetectorState.onDoubleTap]。
-  doubleTap('doubleTap');
-
-  final String key;
-
-  const ReaderChromeHideTrigger(this.key);
-
-  static ReaderChromeHideTrigger fromKey(String? key) {
-    for (final value in values) {
-      if (value.key == key) return value;
-    }
-    return tapCenter;
-  }
-}
-
-ReaderChromeHideTrigger resolveReaderChromeHideTrigger(dynamic raw) =>
-    ReaderChromeHideTrigger.fromKey(raw is String ? raw : null);
-
-/// 单击是否用于切换显隐。`doubleTap` 模式下单击彻底退出这条职责。
-bool readerSingleTapTogglesChrome(ReaderChromeHideTrigger trigger) =>
-    trigger != ReaderChromeHideTrigger.doubleTap;
-
-/// 单击是否用于翻页。`singleTapAnywhere` 模式下单击被显隐独占，不再翻页。
-bool readerSingleTapTurnsPage(ReaderChromeHideTrigger trigger) =>
-    trigger != ReaderChromeHideTrigger.singleTapAnywhere;
-
-/// 双击是否用于切换显隐。只有 `doubleTap` 模式下成立。
-bool readerDoubleTapTogglesChrome(ReaderChromeHideTrigger trigger) =>
-    trigger == ReaderChromeHideTrigger.doubleTap;
+//
+// 顶/底工具栏在 P57.x 被彻底删除后，「单击/双击切换栏显隐」不再存在，
+// `readerChromeHideTrigger` 的三个档位全部失去语义：
+//   * `singleTapAnywhere` 原本「独占单击、不翻页」——工具栏没了之后等于让
+//     单击彻底无反应；
+//   * `doubleTap` 原本「双击切显隐」——现在只会把每次单击翻页拖慢 200ms。
+// 因此手势层不再读取该设置（见 `gesture.dart` 的 `onTap` / `_detectDoubleTap`），
+// 设置界面也移除了这个开关。`appdata` 里保留旧的默认值只为兼容已落盘的配置，
+// 不再参与任何判定。
 
 // ---------------------------------------------------------------------------
 // R4-5 自动播放：按页计时 / 匀速滚动

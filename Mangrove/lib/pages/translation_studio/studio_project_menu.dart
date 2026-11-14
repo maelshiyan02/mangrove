@@ -46,6 +46,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import 'package:mangrove/components/components.dart';
 import 'package:mangrove/foundation/app.dart';
 import 'package:mangrove/foundation/bt_project/bt_project_manager.dart';
 import 'package:mangrove/foundation/comic_card_kind.dart';
@@ -85,7 +86,7 @@ class StudioProjectMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return PopupMenuButton<String>(
+    return MangrovePopupMenuButton<String>(
       tooltip: 'Translation project'.tl,
       icon: const Icon(Icons.more_vert),
       onSelected: (value) {
@@ -93,8 +94,8 @@ class StudioProjectMenu extends StatelessWidget {
           unawaited(createStudioProject(context, presetComicId: presetComicId));
         }
       },
-      itemBuilder: (context) => [
-        PopupMenuItem<String>(
+      items: [
+        MangrovePopupItem<String>(
           value: _createAction,
           child: ListTile(
             dense: true,
