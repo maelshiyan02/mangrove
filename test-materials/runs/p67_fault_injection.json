@@ -1,0 +1,63 @@
+{
+  "baseline_checks": 78,
+  "baseline_green": true,
+  "cases": [
+    {
+      "case": "comments_subid_wiring_dropped",
+      "verdict": "PASS",
+      "why": "本地视图不给 subId：拷贝评论再次打出 comic_id=null",
+      "expect_red": [
+        "local.comments_subid_from_online"
+      ],
+      "actual_red": [
+        "local.comments_subid_from_online"
+      ],
+      "restored": true,
+      "sha256": "38868154137dec7fe44e10f7911bf354886bd5996258363f025b43ce3f49bf6d",
+      "rebuilt": false
+    },
+    {
+      "case": "cache_enrich_call_dropped",
+      "verdict": "PASS",
+      "why": "缓存 68 话不再回填本地 63 话，本地模式仍是旧列表",
+      "expect_red": [
+        "local.cache_chapter_enrich"
+      ],
+      "actual_red": [
+        "local.cache_chapter_enrich"
+      ],
+      "restored": true,
+      "sha256": "38868154137dec7fe44e10f7911bf354886bd5996258363f025b43ce3f49bf6d",
+      "rebuilt": false
+    },
+    {
+      "case": "cached_view_wiring_dropped",
+      "verdict": "PASS",
+      "why": "首帧不再用缓存视图，63 话 + null subId 重新成为终态",
+      "expect_red": [
+        "local.cached_view_first_frame"
+      ],
+      "actual_red": [
+        "local.cached_view_first_frame"
+      ],
+      "restored": true,
+      "sha256": "38868154137dec7fe44e10f7911bf354886bd5996258363f025b43ce3f49bf6d",
+      "rebuilt": false
+    },
+    {
+      "case": "policy_subid_always_null",
+      "verdict": "PASS",
+      "why": "策略本身永远返回 null：证明纯函数判据不是装饰品",
+      "expect_red": [
+        "local.comments_subid_from_online"
+      ],
+      "actual_red": [
+        "local.comments_subid_from_online"
+      ],
+      "restored": true,
+      "sha256": "50b86bdae74cdd3435dab086a65aee5f22ac119fb5af4e5d5879a9745009a2c0",
+      "rebuilt": true
+    }
+  ],
+  "overall": "PASS"
+}

@@ -1,0 +1,98 @@
+{
+  "baseline_checks": 84,
+  "baseline_green": true,
+  "cases": [
+    {
+      "case": "source_maxpage_overestimate",
+      "verdict": "PASS",
+      "why": "源站重新高估一页：40 条算出 3 页，尾页 offset=40 必空",
+      "files": [
+        "comic_source/copy_manga(5).js",
+        "data/comic_source/copy_manga(5).js"
+      ],
+      "expect_red": [
+        "comments.maxpage_no_overestimate"
+      ],
+      "actual_red": [
+        "comments.maxpage_no_overestimate"
+      ],
+      "restored": true,
+      "sha256": "269a906bca05e815fff3ed8ef6b6b72cbb25e878920d121c7c544ae16709bab3",
+      "rebuilt": false,
+      "checks": 84
+    },
+    {
+      "case": "order_list_fixed_length",
+      "verdict": "PASS",
+      "why": "P65 原样：第二页 addAll 抛 fixed-length，异常在 setState 里 → 无限请求",
+      "files": [
+        "Mangrove/lib/foundation/comment_order_policy.dart"
+      ],
+      "expect_red": [
+        "comments.order_list_growable"
+      ],
+      "actual_red": [
+        "comments.order_list_growable"
+      ],
+      "restored": true,
+      "sha256": "62ea7a5d2f762b7ae83bdccc8d83878c87b96a766ba00c2e9ea224b90621db14",
+      "rebuilt": true,
+      "checks": 84
+    },
+    {
+      "case": "fallback_never_steps_back",
+      "verdict": "PASS",
+      "why": "尾页空了也不回退 → 首屏停在空列表 + 转圈（本次用户看到的症状）",
+      "files": [
+        "Mangrove/lib/foundation/comment_order_policy.dart"
+      ],
+      "expect_red": [
+        "comments.first_page_fallback"
+      ],
+      "actual_red": [
+        "comments.first_page_fallback"
+      ],
+      "restored": true,
+      "sha256": "62ea7a5d2f762b7ae83bdccc8d83878c87b96a766ba00c2e9ea224b90621db14",
+      "rebuilt": true,
+      "checks": 84
+    },
+    {
+      "case": "exhausted_flag_ignored",
+      "verdict": "PASS",
+      "why": "确认到头后仍继续请求：空 maxPage 场景会无限翻页",
+      "files": [
+        "Mangrove/lib/foundation/comment_order_policy.dart"
+      ],
+      "expect_red": [
+        "comments.exhausted_stops_paging"
+      ],
+      "actual_red": [
+        "comments.exhausted_stops_paging"
+      ],
+      "restored": true,
+      "sha256": "62ea7a5d2f762b7ae83bdccc8d83878c87b96a766ba00c2e9ea224b90621db14",
+      "rebuilt": true,
+      "checks": 84
+    },
+    {
+      "case": "embedded_page_fallback_dropped",
+      "verdict": "PASS",
+      "why": "只摘内嵌页（同文件独立页完好），证明逐类体判定不会假绿",
+      "files": [
+        "Mangrove/lib/pages/reader/chapter_comments.dart"
+      ],
+      "expect_red": [
+        "comments.paging_wired_in_all_pages"
+      ],
+      "actual_red": [
+        "comments.paging_wired_in_all_pages"
+      ],
+      "restored": true,
+      "sha256": "33431282827790cb2ef00eefd88ef73d51b65678bde8ba3339927f3ad2c7604b",
+      "rebuilt": false,
+      "checks": 84
+    }
+  ],
+  "overall": "PASS"
+}

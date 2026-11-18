@@ -1,0 +1,397 @@
+{
+  "version": 1,
+  "command": "reader-ux-check",
+  "passed": false,
+  "checks": [
+    {
+      "name": "reader.turn_fraction",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | P56 方案 A：0.5 视口；故障值 0.25 必须被判据拒绝"
+    },
+    {
+      "name": "reader.turn_duration_ms",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 200ms Curves.ease；故障值 0ms 必须被拒绝"
+    },
+    {
+      "name": "reader.turn_delta_forward",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 空格/↓ 在 758 视口下位移 +379"
+    },
+    {
+      "name": "reader.turn_delta_backward",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | ↑ 在 758 视口下位移 -379"
+    },
+    {
+      "name": "reader.turn_delta_inert",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 切章动作不产生滚动位移；坏实现若滚了半屏必须被拒绝"
+    },
+    {
+      "name": "reader.turn_delta_invalid_extent",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 视口为 0 / NaN 时不得产生 NaN 位移"
+    },
+    {
+      "name": "reader.key_space",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | space → ReaderKeyAction.turnForward (shift=false)"
+    },
+    {
+      "name": "reader.key_arrow_down",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | arrowDown → ReaderKeyAction.turnForward (shift=false)"
+    },
+    {
+      "name": "reader.key_arrow_up",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | arrowUp → ReaderKeyAction.turnBackward (shift=false)"
+    },
+    {
+      "name": "reader.key_w",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | w → ReaderKeyAction.turnBackward (shift=false)"
+    },
+    {
+      "name": "reader.key_s",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | s → ReaderKeyAction.turnForward (shift=false)"
+    },
+    {
+      "name": "reader.key_arrow_left",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | arrowLeft → ReaderKeyAction.prevChapter (shift=false)"
+    },
+    {
+      "name": "reader.key_arrow_right",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | arrowRight → ReaderKeyAction.nextChapter (shift=false)"
+    },
+    {
+      "name": "reader.key_a",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | a → ReaderKeyAction.prevChapter (shift=false)"
+    },
+    {
+      "name": "reader.key_d",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | d → ReaderKeyAction.nextChapter (shift=false)"
+    },
+    {
+      "name": "reader.key_shift_left",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | arrowLeft → ReaderKeyAction.prevChapter (shift=true)"
+    },
+    {
+      "name": "reader.key_shift_right",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | arrowRight → ReaderKeyAction.nextChapter (shift=true)"
+    },
+    {
+      "name": "reader.key_shift_other_inert",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | Shift+↓ 不接管，交回原映射"
+    },
+    {
+      "name": "reader.key_mobile_falls_back",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 移动端布局返回 none，由原阅读方向映射接管"
+    },
+    {
+      "name": "reader.key_unknown_inert",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 未登记按键不接管"
+    },
+    {
+      "name": "reader.help_documented_keys_supported",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 帮助声明的 11 个按键逐个喂真映射；混入未接管键必须被拒绝"
+    },
+    {
+      "name": "reader.jump_implicit_denied",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | gallery 哨兵页 / 连续过拉 / 自动滚动到底 三处一律不自动跳章"
+    },
+    {
+      "name": "reader.jump_explicit_allowed",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 章末双卡 / 右上胶囊 / 章节列表 点击才换章"
+    },
+    {
+      "name": "reader.chapter_end_always_reachable",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 图片 0/1/17 页 × 已加载/未加载 共 6 组，真实现必须全 true；依赖加载态的故障实现必须至少一组 false"
+    },
+    {
+      "name": "reader.chapter_end_switch_off",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 设置关掉后不插入卡片"
+    },
+    {
+      "name": "reader.chapter_end_no_chapters",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 单话漫画没有章节列表时不插入卡片"
+    },
+    {
+      "name": "reader.chapter_end_seamless_off",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 无缝跨章模式不打断内容流（出口由右上胶囊提供）"
+    },
+    {
+      "name": "reader.chapter_end_independent_of_image_state",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | base={enabled: true, hasChapters: true, seamless: false, imageCount: 3, imagesLoaded: true}；结果必须与图片数/加载态无关"
+    },
+    {
+      "name": "reader.layout_parse",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | desktop/mobile/auto/未知值 → auto"
+    },
+    {
+      "name": "reader.layout_auto_desktop",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | auto + Windows 桌面 + 1488 宽 → 桌面布局"
+    },
+    {
+      "name": "reader.layout_auto_narrow",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | auto + 600 宽 → 移动布局（避免窄窗控件互挤）"
+    },
+    {
+      "name": "reader.layout_auto_mobile_platform",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | auto + 非桌面平台 → 移动布局"
+    },
+    {
+      "name": "reader.layout_force_desktop",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 显式 desktop 不受平台/窗宽覆盖"
+    },
+    {
+      "name": "reader.layout_force_mobile",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 显式 mobile 不受平台/窗宽覆盖"
+    },
+    {
+      "name": "reader.layout_platform_hardcode_rejected",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 故障实现「只看 App.isDesktop」必须被判据拒绝"
+    },
+    {
+      "name": "reader.zoom_percent_relative_to_fit",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 缩放读数必须相对 1x：0.42/0.42→100%、0.63/0.42→150%；用绝对 scale 的写法在 gallery 满屏时只报 42%"
+    },
+    {
+      "name": "reader.wiring_sources_present",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 9 份源文件必须真实读到且非空；缺一份的故障副本必须被拒绝"
+    },
+    {
+      "name": "reader.wiring_key_policy_used",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 纯策略层必须被键盘总入口与连续模式真实调用，不能是摆设"
+    },
+    {
+      "name": "reader.wiring_space_explicit",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 空格必须显式接管（P56 前 lib/ 全库零命中）"
+    },
+    {
+      "name": "reader.wiring_no_implicit_jump",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | gallery 哨兵页 / 连续过拉 / 自动滚动到底 / 滚轮越界 四处隐式跳章调用必须清零；注入一行即须变红"
+    },
+    {
+      "name": "reader.wiring_no_floating_button",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 右下 58×58 浮动箭头按钮与其驱动状态必须删除"
+    },
+    {
+      "name": "reader.wiring_chapter_end_flow",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 连续模式章末双卡必须是内容流条目（Sliver），不是 Overlay/浮层"
+    },
+    {
+      "name": "reader.wiring_desktop_controls",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 右上胶囊 / 右下缩放簇 / 居中模态章节列表都挂到桌面布局开关上"
+    },
+    {
+      "name": "reader.wiring_help_aligned",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 帮助与实现逐条对齐；P47 的 A D / W S 虚标必须清掉"
+    },
+    {
+      "name": "reader.i18n_keys_registered",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 5 条新文案必须在 zh_CN + zh_TW 双语登记；删掉任一条的故障副本必须被拒绝"
+    },
+    {
+      "name": "reader.setting_default_registered",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | appdata 默认值 auto（不硬绑平台）"
+    },
+    {
+      "name": "reader.setting_sync_skip",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 新 key 进 sync_skip 白名单（reading 分类）"
+    },
+    {
+      "name": "reader.setting_ui_entry",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 阅读设置界面有可切换的三值下拉"
+    },
+    {
+      "name": "reader.hold_zero_within_tap_window",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 阈值前推 0px（单击仍是\"一次半屏缓动\"，不是\"按住 1px 也算长按\"）"
+    },
+    {
+      "name": "reader.hold_speed_monotonic",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 2s 内单调不减 + 至少一处真增 + 起步 > 0；恒定速度必须被拒"
+    },
+    {
+      "name": "reader.hold_speed_capped",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 满速 = 3.0 视口/秒，且严格快于起步 1.1"
+    },
+    {
+      "name": "reader.hold_faster_than_taps",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 1s 长按推进 1602px > 2 次单击 1000px"
+    },
+    {
+      "name": "reader.hold_scales_with_viewport",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 2000 视口的位移恰为 1000 视口的两倍（步长按视口比例给，不写死像素）"
+    },
+    {
+      "name": "reader.hold_keydown_keyup_split",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | KeyDown 只起算（_beginHold），KeyUp 才判定单击/长按（_endHold），推进由 16ms ticker 负责"
+    },
+    {
+      "name": "reader.hold_ignores_os_repeat",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 旧的\"KeyDown/KeyRepeat 直接翻页\"必须删净：系统重复与自己的 ticker 叠加会忽快忽慢"
+    },
+    {
+      "name": "reader.hold_self_brake_on_focus_loss",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 焦点被抢走 / 超过安全上限时自己刹车，避免 KeyUp 丢失后页面一路滚到底"
+    },
+    {
+      "name": "reader.focus_self_heal_wired",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 弹层关闭后焦点落空必须自动归还：FocusManager 监听 + 指针按下两处都接上"
+    },
+    {
+      "name": "reader.focus_guard_truth_table",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 只在「路由当前 + 自己没焦点 + 不是输入框 + primary 是裸 Scope」时补；其余四种一律不动（少一个条件就是抢焦点）"
+    },
+    {
+      "name": "reader.focus_guard_wired",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | ensureReaderFocus 必须走这个纯函数，不能在 widget 里另写一套条件"
+    },
+    {
+      "name": "reader.comments_toolbar_wired",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 评论按钮接 openChapterComments，占位提示必须消失"
+    },
+    {
+      "name": "reader.comments_uses_current_chapter",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 进门就取当前话的 epId（不是作品 id，也不是第 1 话）"
+    },
+    {
+      "name": "detail.comments_hub_has_two_tabs",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 作品评论 / 章节评论两个分栏，章节分栏把 epId 透给同一套列表渲染"
+    },
+    {
+      "name": "detail.comments_hub_chapter_picker",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 章节选择器可搜索（上百话时纯下拉不可用）"
+    },
+    {
+      "name": "detail.comments_page_supports_ep",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 同一套列表既能独立成页、也能嵌进分栏；发送按钮按模式选 sendChapterCommentFunc"
+    },
+    {
+      "name": "copy.chapter_comments_app_api",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 章节留言函数体里只有 App 端 roasts（网页端评论区是关的，只有手机 App 能看）"
+    },
+    {
+      "name": "copy.runtime_copy_in_sync",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | data/comic_source 是运行时真正加载的副本，必须与源文件逐字节一致"
+    },
+    {
+      "name": "reader.chapter_caption_tracks_number",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 章号 162→163 时胶囊文案必须不同（故障=写死章号）"
+    },
+    {
+      "name": "reader.chapter_revision_subscription",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 章号 setter 推进 revision、dispose 回收、胶囊订阅；故障=任一环节断开"
+    },
+    {
+      "name": "comments.time_key_formats",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | ISO/秒/毫秒都要能比较，空串与非时间判未知; iso=1794373548000000 sec=1762851948000000 ms=1700000000123000 empty=null bad=null"
+    },
+    {
+      "name": "comments.order_oldest_and_newest",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 三条真时间必须给出旧→新 [1,2,0] 与新→旧 [0,2,1]（故障=原序不动）"
+    },
+    {
+      "name": "comments.order_stable_when_unknown",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 同秒保原序、未知时间沉底；故障=原样返回 [0,1,2]"
+    },
+    {
+      "name": "comments.first_page_from_oldest",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 旧→新首屏从服务端最后一页开始（故障=永远 offset 0）"
+    },
+    {
+      "name": "comments.next_page_direction",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 旧→新往回翻页、新→旧往前翻页；故障=永远无下一页"
+    },
+    {
+      "name": "comments.both_pages_use_order_policy",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 作品/独立章节/章末内嵌三处评论页都接排序条与反向分页、默认旧→新（故障=空源码）; bodies=10694,10094,9947"
+    },
+    {
+      "name": "comments.order_labels_localized",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 排序条两条文案必须进 translation.json（故障=缺键时界面露英文）; trLen=201318"
+    },
+    {
+      "name": "local.comments_subid_from_online",
+      "passed": false,
+      "detail": "green=false broken_would_pass=true | 本地视图评论须带源站 subId（拷贝 comic_id），纯本地恒 null；故障=永远 null 或没接进 _localDetails"
+    },
+    {
+      "name": "local.cache_chapter_enrich",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 缓存比本地多才回填（63→68）；少则绝不覆盖本地；故障=永远不回填/反向覆盖/没接进 loadData"
+    },
+    {
+      "name": "local.cached_view_first_frame",
+      "passed": true,
+      "detail": "green=true broken_would_pass=false | 缓存存在时首帧就给网络视图（否则 63 话+null subId 成终态）；纯本地不走；故障=缓存存在也拒绝/没接进 _composeDetails"
+    }
+  ]
+}

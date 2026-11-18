@@ -1998,7 +1998,9 @@ class CopyManga extends ComicSource {
                         id: e.id,
                     }
                 }),
-                maxPage: (total - (total % 20)) / 20 + 1,
+                // P68：旧式 (total - total%20)/20 + 1 在总数恰好整除 20 时会多算
+                // 一页（40 条算成 3 页，实际 2 页），调用方按尾页请求就拿回空列表。
+                maxPage: Math.max(1, Math.ceil(total / 20)),
             }
         },
         sendComment: async (comicId, subId, content, replyTo) => {
@@ -2056,7 +2058,8 @@ class CopyManga extends ComicSource {
                         id: null,
                     }
                 }),
-                maxPage: (total - (total % 20)) / 20 + 1,
+                // P68：同 loadComments，ceil 才不会高估尾页。
+                maxPage: Math.max(1, Math.ceil(total / 20)),
             }
         },
         sendChapterComment: async (comicId, epId, content, replyTo) => {

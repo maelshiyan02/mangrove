@@ -48,9 +48,14 @@ List<int> orderedCommentIndices(List<String?> times, CommentOrder order) {
 }
 
 /// 按 [order] 重排评论。返回新列表，不改入参。
+///
+/// ⚠️ 返回的**必须是可增长列表**：调用方（`loadMore`）会在尾部追加下一页。
+/// P65 曾写成 `toList(growable: false)`，翻第二页必抛
+/// `Cannot add to a fixed-length list`；更糟的是异常发生在 `setState` 回调里，
+/// 页码不推进 → 尾部加载指示器每次重建都再触发一次 → 无限请求 + 永久转圈。
 List<T> orderComments<T>(List<T> comments, CommentOrder order, String? Function(T) timeOf) {
   final indices = orderedCommentIndices(comments.map(timeOf).toList(), order);
-  return indices.map((i) => comments[i]).toList(growable: false);
+  return indices.map((i) => comments[i]).toList();
 }
 
 /// 首屏展示哪一页。
@@ -64,6 +69,33 @@ int commentFirstPage({required int? maxPage, required CommentOrder order}) {
   return 1;
 }
 
+/// 首屏目标页是空页时，最多往回退几页。
+///
+/// 拷贝源的 `maxPage` 历史上按 `(total - total % 20) / 20 + 1` 计算，总数恰好
+/// 整除页大小时会**高估一页**（40 条 → 算出 3 页，实际只有 2 页），拿尾页去
+/// 请求必然空列表。留几格预算够跨过这类高估，又不至于把首屏拖成几十个请求。
+const int kCommentPageFallbackLimit = 3;
+
+/// 首屏目标页返回空列表时的回退页；null = 放弃回退（已到第 1 页或预算用完）。
+int? commentFallbackPage({required int page, required int attempts}) {
+  if (attempts >= kCommentPageFallbackLimit) return null;
+  return page > 1 ? page - 1 : null;
+}
+
+/// 拿到一页原始数据后，是否已确认这个方向没有更多页。
+///
+/// 旧→新方向是从尾页往第 1 页退，中途的空页只说明「源站 maxPage 高估」，
+/// 还得继续往下退；只有退到第 1 页仍为空，才说明整话确实没有评论。
+/// 新→旧方向只有一条路，空页即到头。
+bool commentPagingExhausted({
+  required int page,
+  required CommentOrder order,
+  required int rawCount,
+}) {
+  if (rawCount > 0) return false;
+  return order == CommentOrder.oldestFirst ? page <= 1 : true;
+}
+
 /// 再加载一页时的页码；null 表示已经到头。
 ///
 /// 旧→新：从最大的页往 1 递减（内容越来越新，追加到列表尾部）。
@@ -72,7 +104,9 @@ int? commentNextPage({
   required int page,
   required int? maxPage,
   required CommentOrder order,
+  bool exhausted = false,
 }) {
+  if (exhausted) return null;
   if (order == CommentOrder.oldestFirst) {
     return page > 1 ? page - 1 : null;
   }

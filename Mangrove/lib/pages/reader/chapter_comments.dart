@@ -52,6 +52,9 @@ class _ChapterCommentsPageState extends State<ChapterCommentsPage> {
   /// the same page.
   bool _requestInFlight = false;
 
+  /// P68：某个方向已确认没有更多页（拿回空页），别再反复请求。
+  bool _exhausted = false;
+
   @override
   void dispose() {
     controller.dispose();
@@ -72,9 +75,18 @@ class _ChapterCommentsPageState extends State<ChapterCommentsPage> {
     _requestInFlight = true;
     var res = await _load(1);
     final serverMaxPage = res.error ? null : res.subData;
-    final target = commentFirstPage(maxPage: serverMaxPage, order: _order);
+    var target = commentFirstPage(maxPage: serverMaxPage, order: _order);
     if (!res.error && target != 1) {
       res = await _load(target);
+      // P68：尾页可能空（源站 maxPage 高估一页）→ 逐页回退，别停在空列表。
+      var attempts = 0;
+      while (!res.error && res.data.isEmpty && target > 1) {
+        final back = commentFallbackPage(page: target, attempts: attempts);
+        if (back == null) break;
+        target = back;
+        attempts++;
+        res = await _load(target);
+      }
     }
     _requestInFlight = false;
     if (!mounted) return;
@@ -93,12 +105,22 @@ class _ChapterCommentsPageState extends State<ChapterCommentsPage> {
         _page = target;
         _loading = false;
         maxPage = serverMaxPage;
+        _exhausted = commentPagingExhausted(
+          page: target,
+          order: _order,
+          rawCount: res.data.length,
+        );
       });
     }
   }
 
   void loadMore() async {
-    final next = commentNextPage(page: _page, maxPage: maxPage, order: _order);
+    final next = commentNextPage(
+      page: _page,
+      maxPage: maxPage,
+      order: _order,
+      exhausted: _exhausted,
+    );
     if (next == null || _requestInFlight) return;
     _requestInFlight = true;
     var res = await _load(next);
@@ -112,11 +134,18 @@ class _ChapterCommentsPageState extends State<ChapterCommentsPage> {
           .toList();
       filteredComments = orderComments(filteredComments, _order, (c) => c.time);
       setState(() {
-        _comments!.addAll(filteredComments);
+        // P68：整体替换而不是往 _comments 里 addAll —— 排序产物是新建列表，
+        // 依赖它可增长曾经在 setState 里抛异常，页码不推进 → 无限请求。
+        _comments = [...?_comments, ...filteredComments];
         _page = next;
         if (maxPage == null && res.data.isEmpty) {
           maxPage = _order == CommentOrder.oldestFirst ? 1 : _page;
         }
+        _exhausted = commentPagingExhausted(
+          page: next,
+          order: _order,
+          rawCount: res.data.length,
+        );
       });
     }
   }
@@ -705,6 +734,9 @@ class _EmbeddedChapterCommentsPageState
   /// the same page.
   bool _requestInFlight = false;
 
+  /// P68：某个方向已确认没有更多页（拿回空页），别再反复请求。
+  bool _exhausted = false;
+
   @override
   void dispose() {
     textController.dispose();
@@ -727,9 +759,18 @@ class _EmbeddedChapterCommentsPageState
     var res = await _load(1);
     // 与独立评论页一致：第一趟只为拿 maxPage，旧→新要从最后一页开始显示。
     final serverMaxPage = res.error ? null : res.subData;
-    final target = commentFirstPage(maxPage: serverMaxPage, order: _order);
+    var target = commentFirstPage(maxPage: serverMaxPage, order: _order);
     if (!res.error && target != 1) {
       res = await _load(target);
+      // P68：尾页可能空（源站 maxPage 高估一页）→ 逐页回退，别停在空列表。
+      var attempts = 0;
+      while (!res.error && res.data.isEmpty && target > 1) {
+        final back = commentFallbackPage(page: target, attempts: attempts);
+        if (back == null) break;
+        target = back;
+        attempts++;
+        res = await _load(target);
+      }
     }
     _requestInFlight = false;
     if (!mounted) return;
@@ -748,12 +789,22 @@ class _EmbeddedChapterCommentsPageState
         _page = target;
         _loading = false;
         maxPage = serverMaxPage;
+        _exhausted = commentPagingExhausted(
+          page: target,
+          order: _order,
+          rawCount: res.data.length,
+        );
       });
     }
   }
 
   void loadMore() async {
-    final next = commentNextPage(page: _page, maxPage: maxPage, order: _order);
+    final next = commentNextPage(
+      page: _page,
+      maxPage: maxPage,
+      order: _order,
+      exhausted: _exhausted,
+    );
     if (next == null || _requestInFlight) return;
     _requestInFlight = true;
     var res = await _load(next);
@@ -767,11 +818,18 @@ class _EmbeddedChapterCommentsPageState
           .toList();
       filteredComments = orderComments(filteredComments, _order, (c) => c.time);
       setState(() {
-        _comments!.addAll(filteredComments);
+        // P68：整体替换而不是往 _comments 里 addAll —— 排序产物是新建列表，
+        // 依赖它可增长曾经在 setState 里抛异常，页码不推进 → 无限请求。
+        _comments = [...?_comments, ...filteredComments];
         _page = next;
         if (maxPage == null && res.data.isEmpty) {
           maxPage = _order == CommentOrder.oldestFirst ? 1 : _page;
         }
+        _exhausted = commentPagingExhausted(
+          page: next,
+          order: _order,
+          rawCount: res.data.length,
+        );
       });
     }
   }

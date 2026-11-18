@@ -65,6 +65,9 @@ class _CommentsPageState extends State<CommentsPage> {
   /// the same page.
   bool _requestInFlight = false;
 
+  /// P68：某个方向已确认没有更多页（拿回空页），别再反复请求。
+  bool _exhausted = false;
+
   /// 统一的取数入口：章节模式走 `chapterCommentsLoader`，作品模式走
   /// `commentsLoader`。两处调用（首屏 / 加载更多）共用它，避免分叉出两套分页语义。
   Future<Res<List<Comment>>> _load(int page) {
@@ -89,9 +92,20 @@ class _CommentsPageState extends State<CommentsPage> {
     var res = await _load(1);
     // 第一趟只为了拿服务端的 maxPage；旧→新要从最后一页开始显示。
     final serverMaxPage = res.error ? null : res.subData;
-    final target = commentFirstPage(maxPage: serverMaxPage, order: _order);
+    var target = commentFirstPage(maxPage: serverMaxPage, order: _order);
     if (!res.error && target != 1) {
       res = await _load(target);
+      // P68：源的 maxPage 可能高估一页（总数恰好整除页大小时历史算法就是这么
+      // 算的），拿尾页请求会得到空列表 → 界面上只剩排序条 + 转圈。逐页回退到
+      // 有数据为止，避免"看起来一直在加载"。
+      var attempts = 0;
+      while (!res.error && res.data.isEmpty && target > 1) {
+        final back = commentFallbackPage(page: target, attempts: attempts);
+        if (back == null) break;
+        target = back;
+        attempts++;
+        res = await _load(target);
+      }
     }
     _requestInFlight = false;
     if (res.error) {
@@ -107,12 +121,22 @@ class _CommentsPageState extends State<CommentsPage> {
         _page = target;
         _loading = false;
         maxPage = serverMaxPage;
+        _exhausted = commentPagingExhausted(
+          page: target,
+          order: _order,
+          rawCount: res.data.length,
+        );
       });
     }
   }
 
   void loadMore() async {
-    final next = commentNextPage(page: _page, maxPage: maxPage, order: _order);
+    final next = commentNextPage(
+      page: _page,
+      maxPage: maxPage,
+      order: _order,
+      exhausted: _exhausted,
+    );
     if (next == null) return;
     if (_requestInFlight) return;
     _requestInFlight = true;
@@ -124,11 +148,18 @@ class _CommentsPageState extends State<CommentsPage> {
       var filteredComments = res.data.where((c) => !_shouldBlockComment(c)).toList();
       filteredComments = orderComments(filteredComments, _order, (c) => c.time);
       setState(() {
-        _comments!.addAll(filteredComments);
+        // P68：整体替换而不是往 _comments 里 addAll —— 排序产物是新建列表，
+        // 依赖它可增长曾经在 setState 里抛异常，页码不推进 → 无限请求。
+        _comments = [...?_comments, ...filteredComments];
         _page = next;
         if (maxPage == null && res.data.isEmpty) {
           maxPage = _order == CommentOrder.oldestFirst ? 1 : _page;
         }
+        _exhausted = commentPagingExhausted(
+          page: next,
+          order: _order,
+          rawCount: res.data.length,
+        );
       });
     }
   }

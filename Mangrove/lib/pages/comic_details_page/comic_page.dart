@@ -21,6 +21,7 @@ import 'package:mangrove/foundation/comic_details_cache.dart';
 import 'package:mangrove/foundation/comic_override_store.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/comment_order_policy.dart';
+import 'package:mangrove/foundation/local_details_policy.dart';
 import 'package:mangrove/foundation/comic_state_repository.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/download_manager_store.dart';
@@ -240,6 +241,10 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
 
   final ComicStateRepository _comicStateRepository =
       const ComicStateRepository();
+
+  /// P67：本次打开读到的缓存详情，只查一次。ComicDetailsCache.find() 每次
+  /// 都会顺手写一次 time，不能在 _composeDetails（每次 setState 都走）里调。
+  ComicDetails? _cachedOnlineDetails;
 
   List<DomainComicSourceLink> _relatedSourceLinks = const [];
   bool _relatedSourcesLoaded = false;
@@ -694,6 +699,20 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       // 章节目录（半截下载、修复补完）并回 `downloadedChapters`，否则会出现
       // "磁盘里有这一话、下载页却显示未下载"（见 LocalManager.reconcileDiskState）。
       scheduleMicrotask(() => _reconcileDiskState(localComic));
+      // P67：缓存里已有更新的章节矩阵（实测 dycgb 本地 63 话 / 缓存 68 话）
+      // 时不能干等自动刷新（默认关）——首帧就用缓存合成网络视图，并把多出
+      // 来的话回填本地记录（只增不减），否则旧的 63 话会一直是终态。
+      final cachedForLocal = ComicDetailsCache().find(widget.sourceKey, widget.id);
+      _cachedOnlineDetails = cachedForLocal;
+      if (shouldUseCachedOnlineView(
+        sourceKey: widget.sourceKey,
+        hasCachedDetails: cachedForLocal != null,
+      )) {
+        _onlineDetails ??= cachedForLocal;
+        scheduleMicrotask(
+          () => _enrichFromCache(cachedForLocal!, localComic),
+        );
+      }
       var comicSource = ComicSource.find(widget.sourceKey);
       // 漫画信息自动更新（P-DL6 简化）：不再区分网络/本地打开来源，总开关
       // 开即自动联网采集/刷新；刷新结果统一回写本地记录（章节矩阵 +
@@ -736,6 +755,7 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     // 判据取 `cached == null` 而不是"是不是合集"：任何**首次打开且无缓存**的
     // 网络漫画都踩同一个坑，只是合集必然会踩到。
     final cached = ComicDetailsCache().find(widget.sourceKey, widget.id);
+    _cachedOnlineDetails = cached;
     final needsFirstLoad =
         cached == null ||
         ComicCollectionStore.isCollectionSourceKey(widget.sourceKey);
@@ -779,7 +799,11 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     return tagsMap;
   }
 
-  ComicDetails _localDetails(LocalComic localComic, ComicState state) {
+  ComicDetails _localDetails(
+    LocalComic localComic,
+    ComicState state, {
+    String? commentsSubId,
+  }) {
     return ComicDetails.fromJson({
       'title': localComic.title,
       'subtitle': localComic.subtitle,
@@ -798,7 +822,13 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       'thumbnails': null,
       'recommend': null,
       'isFavorite': state.isLocalFavorite,
-      'subId': null,
+      // P67：下载自源站的漫画在**本地模式**下也要能看评论。拷贝漫画用
+      // subId 当 comic_id，这里给 null 会直接打出 comic_id=null → 500。
+      'subId': commentsSubIdForLocalDetails(
+        sourceKey: widget.sourceKey,
+        pureLocal: localComic.comicType == ComicType.local,
+        onlineSubId: commentsSubId,
+      ),
       'likesCount': null,
       'isLiked': null,
       'commentCount': null,
@@ -1011,11 +1041,26 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     final local = _localComic;
     final state = _comicStateRepository.load(widget.sourceKey, widget.id);
     if (local == null) return online ?? _onlineDetails ?? data!;
-    if (displayMode == ComicDisplayMode.local) return _localView(local, state);
-    final source = _onlineDetails ?? online;
+    // P67：缓存存在但自动刷新关时，首帧不能只给本地视图 —— 那会让旧章节
+    // 列表（63 话）与 null subId 成为终态。用同 key 的缓存补一份在线视图。
+    final cached = _cachedOnlineDetails;
+    final effectiveOnline = online ??
+        _onlineDetails ??
+        (shouldUseCachedOnlineView(
+          sourceKey: widget.sourceKey,
+          hasCachedDetails: cached != null,
+        )
+            ? cached
+            : null);
+    if (displayMode == ComicDisplayMode.local) {
+      return _localView(local, state, commentsSubId: effectiveOnline?.subId);
+    }
+    final source = effectiveOnline;
     // 还没拿到过网络响应（离线 / 源不可用）→ 只能显示本地版本，但这是
     // 降级而不是"覆盖"：下次刷新成功会切回站点原文。
-    if (source == null) return _localView(local, state);
+    if (source == null) {
+      return _localView(local, state, commentsSubId: null);
+    }
     return _networkView(source, local);
   }
 
@@ -1024,8 +1069,14 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
   /// 覆盖层之所以还要叠：网络漫画的"编辑本地信息"写的是
   /// `comic_field_overrides`，而 `LocalComic.title` 是下载时的源标题，
   /// 两份都算本地编辑，漏掉任何一份都会让用户觉得"我改的不见了"。
-  ComicDetails _localView(LocalComic local, ComicState state) =>
-      overlayLocalOverrides(_localDetails(local, state));
+  ComicDetails _localView(
+    LocalComic local,
+    ComicState state, {
+    String? commentsSubId,
+  }) =>
+      overlayLocalOverrides(
+        _localDetails(local, state, commentsSubId: commentsSubId),
+      );
 
   /// 网络模式：站点原文为底，只把章节矩阵换成**并集**。
   ///
@@ -1093,6 +1144,27 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     if (!mounted || generation != _detailsRefreshGeneration) return false;
     detailsLoadError = lastError;
     return false;
+  }
+
+  /// P67：用**已有缓存**自愈本地章节矩阵（不联网、不删任何下载）。
+  ///
+  /// 用户关掉「打开时自动更新」时，缓存里已有的新章节原先永远不会回填：
+  /// 首帧本地视图 63 话就成了终态，尽管 details_cache 里已经有 68 话。
+  /// 只在缓存**更多**时调用 [_persistEnrichedChapters]（只增不减），
+  /// 没有变化时它本身不会产生写入。
+  Future<void> _enrichFromCache(ComicDetails cached, LocalComic local) async {
+    if (!mounted ||
+        widget.sourceKey == 'local' ||
+        local.comicType == ComicType.local) {
+      return;
+    }
+    if (!shouldEnrichFromCachedDetails(
+      localChapterCount: local.effectiveChapters?.ids.length ?? 0,
+      cachedChapterCount: cached.chapters?.ids.length ?? 0,
+    )) {
+      return;
+    }
+    await _persistEnrichedChapters(cached, online: cached);
   }
 
   /// 把刷新到的完整章节矩阵与最新更新时间**并回**本地库记录（只增不减），

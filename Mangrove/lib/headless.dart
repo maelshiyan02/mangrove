@@ -3164,6 +3164,10 @@ Future<void> runReaderUxCheck(List<String> args, int commandIndex) async {
     runP64Checks(check, packageRoot: packageRoot);
     // P65：章号胶囊实时刷新 + 评论时间升序/反向分页。
     runP65Checks(check, packageRoot: packageRoot);
+    // P67：本地库漫画的缓存首帧视图、章节只增回填与评论 subId。
+    runP67Checks(check, packageRoot: packageRoot);
+    // P68：评论尾页高估（总数整除页大小）导致的首屏空列表 + 分页死循环。
+    runP68Checks(check, packageRoot: packageRoot);
     // 空断言集必须判 FAIL（A02 §7 第 1 条）。
     passed = checks.isNotEmpty && checks.every((c) => c['passed'] == true);
     await finish(

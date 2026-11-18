@@ -16,6 +16,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:mangrove/foundation/comment_order_policy.dart';
+import 'package:mangrove/foundation/local_details_policy.dart';
 import 'package:mangrove/foundation/reader_ux_policy.dart';
 
 // 私有别名：headless.dart 同时 import 了 headless_p1_checks.dart，
@@ -1173,5 +1174,254 @@ void runP65Checks(_CheckSink check, {required Directory packageRoot}) {
         tr.contains('"从新到旧"'),
     !tr.contains('"Oldest first"'),
     '排序条两条文案必须进 translation.json（故障=缺键时界面露英文）; trLen=${tr.length}',
+  );
+}
+
+/// P67 · 本地库漫画的旧章节列表与评论 500 修复（2026-11-18）。
+///
+/// 三条判据各自都是「纯策略真值 + 故障输入被拒」，并额外扫源码确认策略
+/// 真的接到了详情页（防止只定义不调用）。故障注入只改策略函数体时，
+/// 必须只红对应的一条，其余两条保持绿。
+void runP67Checks(_CheckSink check, {required Directory packageRoot}) {
+  const realSubId = '43415875-7d6d-11f0-9acf-fa163e4baef8';
+  final detailSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/comic_details_page/comic_page.dart'),
+  );
+
+  // ① 本地模式评论参数：下载自源站的漫画必须带上在线 subId；纯本地不给。
+  bool subIdWired(String src) =>
+      src.contains("'subId': commentsSubIdForLocalDetails(");
+  _pair(
+    check,
+    'local.comments_subid_from_online',
+    commentsSubIdForLocalDetails(
+          sourceKey: 'copy_manga',
+          pureLocal: false,
+          onlineSubId: realSubId,
+        ) ==
+        realSubId &&
+        commentsSubIdForLocalDetails(
+              sourceKey: 'copy_manga',
+              pureLocal: false,
+              onlineSubId: '  $realSubId  ',
+            ) ==
+            realSubId &&
+        subIdWired(detailSrc),
+    commentsSubIdForLocalDetails(
+          sourceKey: 'copy_manga',
+          pureLocal: true,
+          onlineSubId: realSubId,
+        ) ==
+        realSubId ||
+        commentsSubIdForLocalDetails(
+              sourceKey: 'local',
+              pureLocal: false,
+              onlineSubId: realSubId,
+            ) ==
+            realSubId ||
+        !subIdWired(detailSrc),
+    '本地视图评论须带源站 subId（拷贝 comic_id），纯本地恒 null；'
+    '故障=永远 null 或没接进 _localDetails',
+  );
+
+  // ② 缓存章节只增不减：本地 63 / 缓存 68 → 回填；反向不得覆盖。
+  bool enrichWired(String src) =>
+      'enrichFromCache'.allMatches(src).length >= 2;
+  _pair(
+    check,
+    'local.cache_chapter_enrich',
+    shouldEnrichFromCachedDetails(
+          localChapterCount: 63,
+          cachedChapterCount: 68,
+        ) &&
+        !shouldEnrichFromCachedDetails(
+          localChapterCount: 68,
+          cachedChapterCount: 63,
+        ) &&
+        enrichWired(detailSrc),
+    !shouldEnrichFromCachedDetails(
+          localChapterCount: 63,
+          cachedChapterCount: 68,
+        ) ||
+        shouldEnrichFromCachedDetails(
+          localChapterCount: 68,
+          cachedChapterCount: 63,
+        ) ||
+        !enrichWired(detailSrc),
+    '缓存比本地多才回填（63→68）；少则绝不覆盖本地；'
+    '故障=永远不回填/反向覆盖/没接进 loadData',
+  );
+
+  // ③ 首帧缓存视图：缓存存在且非纯本地时用它合成网络视图。
+  bool cachedViewWired(String src) =>
+      'shouldUseCachedOnlineView'.allMatches(src).length >= 2;
+  _pair(
+    check,
+    'local.cached_view_first_frame',
+    shouldUseCachedOnlineView(
+          sourceKey: 'copy_manga',
+          hasCachedDetails: true,
+        ) &&
+        !shouldUseCachedOnlineView(
+          sourceKey: 'local',
+          hasCachedDetails: true,
+        ) &&
+        cachedViewWired(detailSrc),
+    !shouldUseCachedOnlineView(
+          sourceKey: 'copy_manga',
+          hasCachedDetails: true,
+        ) ||
+        shouldUseCachedOnlineView(
+          sourceKey: 'local',
+          hasCachedDetails: true,
+        ) ||
+        !cachedViewWired(detailSrc),
+    '缓存存在时首帧就给网络视图（否则 63 话+null subId 成终态）；'
+    '纯本地不走；故障=缓存存在也拒绝/没接进 _composeDetails',
+  );
+}
+
+/// P68：章节评论区「一直转圈」的根因（第 182 话：40 条吐槽 = 页大小的整数倍）。
+///
+/// 症状是三件事叠加出来的，少一条都不成立：
+///   ① 源站 maxPage 用 `(total - total % 20) / 20 + 1`，总数整除 20 时**多算一页**
+///      （40 条 → 3 页，实际只有 2 页）；
+///   ② 旧→新首屏按 maxPage 请求尾页 → `offset=40` → 服务端返回空列表；
+///   ③ 空列表让尾部加载指示器成为唯一可见项，它触发 loadMore，而 orderComments
+///      当时返回定长列表，`addAll` 在 setState 回调里抛异常 → 页码不推进 →
+///      每次重建再触发一次 → 无限请求 + 永久转圈。
+///
+/// 相邻章节（17/4/16 条）maxPage 都是 1，走不到②③，所以"只有这一话坏"。
+void runP68Checks(_CheckSink check, {required Directory packageRoot}) {
+  // ① 源脚本不得再用高估公式。
+  final copyJs = _read(packageRoot, '../comic_source/copy_manga(5).js');
+  final ceilHits = 'Math.ceil(total / 20)'.allMatches(copyJs).length;
+  final staleFormula = copyJs.contains('(total - (total % 20)) / 20 + 1');
+  _pair(
+    check,
+    'comments.maxpage_no_overestimate',
+    copyJs.isNotEmpty && ceilHits >= 2 && !staleFormula,
+    ceilHits == 0 || staleFormula,
+    '作品评论与章节吐槽的 maxPage 都必须 ceil(total/20)；旧式 …/20 + 1 在 '
+    'total%20==0 时多算一页（40→3 而实际 2），尾页请求必空。'
+    'ceil=$ceilHits stale=$staleFormula',
+  );
+
+  // ② 排序产物必须可增长（loadMore 往尾部追加）。
+  bool canAppend(List<String> list) {
+    try {
+      list.add('x');
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  final orderedSample = orderComments(
+    <String>['newer', 'older'],
+    CommentOrder.oldestFirst,
+    (s) => s == 'older' ? '2026-01-01 00:00:00' : '2026-01-02 00:00:00',
+  );
+  _pair(
+    check,
+    'comments.order_list_growable',
+    canAppend(orderedSample) &&
+        orderedSample.length == 3 &&
+        orderedSample.first == 'older',
+    canAppend(<String>['a'].toList(growable: false)),
+    'orderComments 的产物必须可增长；定长列表会让第二页 addAll 抛 '
+    'fixed-length，异常发生在 setState 里 → 页码不推进 → 无限请求',
+  );
+
+  // ③ 尾页空时逐页回退。
+  bool fallbackOk(int? Function(int, int) f) =>
+      f(3, 0) == 2 &&
+      f(2, 0) == 1 &&
+      f(1, 0) == null &&
+      f(9, kCommentPageFallbackLimit) == null;
+  _pair(
+    check,
+    'comments.first_page_fallback',
+    fallbackOk(
+      (page, attempts) =>
+          commentFallbackPage(page: page, attempts: attempts),
+    ),
+    fallbackOk((page, attempts) => null),
+    '尾页拿回空列表时逐页回退（3→2→1），到第 1 页或超出预算即停；'
+    '故障=永不回退（停在空列表+转圈）或无视预算一路退',
+  );
+
+  // ④ 空页之后必须停止再翻。
+  bool nextPageOk(int? Function(int, int?, CommentOrder, bool) f) =>
+      f(2, 5, CommentOrder.oldestFirst, true) == null &&
+      f(2, 5, CommentOrder.oldestFirst, false) == 1 &&
+      f(3, 3, CommentOrder.newestFirst, false) == null &&
+      f(3, 5, CommentOrder.newestFirst, false) == 4;
+  _pair(
+    check,
+    'comments.exhausted_stops_paging',
+    nextPageOk(
+      (page, maxPage, order, exhausted) => commentNextPage(
+        page: page,
+        maxPage: maxPage,
+        order: order,
+        exhausted: exhausted,
+      ),
+    ),
+    nextPageOk(
+      (page, maxPage, order, exhausted) =>
+          commentNextPage(page: page, maxPage: maxPage, order: order),
+    ),
+    '确认到头之后 commentNextPage 必须返回 null；故障=忽略 exhausted 继续请求',
+  );
+
+  // ⑤ 到头的判据：旧→新只有退到第 1 页仍空才算到头。
+  bool endOk(bool Function(int, CommentOrder, int) f) =>
+      !f(3, CommentOrder.oldestFirst, 20) &&
+      f(1, CommentOrder.oldestFirst, 0) &&
+      !f(3, CommentOrder.oldestFirst, 0) &&
+      f(4, CommentOrder.newestFirst, 0);
+  _pair(
+    check,
+    'comments.paging_end_detection',
+    endOk(
+      (page, order, rawCount) => commentPagingExhausted(
+        page: page,
+        order: order,
+        rawCount: rawCount,
+      ),
+    ),
+    endOk((page, order, rawCount) => rawCount == 0),
+    '旧→新中途的空页只是 maxPage 高估（还要继续往下退），退到第 1 页仍空才算'
+    '整话没评论；新→旧空页即到头；故障=见空就停会丢掉前面所有页',
+  );
+
+  // ⑥ 三个评论区（详情页 / 独立章节页 / 章末内嵌页）都要接上。
+  final detailCommentsSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/comic_details_page/comments_page.dart'),
+  );
+  final readerCommentsSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/reader/chapter_comments.dart'),
+  );
+  bool pagingWired(String body) =>
+      body.contains('commentFallbackPage(') &&
+      body.contains('commentPagingExhausted(') &&
+      body.contains('exhausted: _exhausted') &&
+      !body.contains('_comments!.addAll(');
+  final bodies = [
+    _topLevelClassBody(detailCommentsSrc, '_CommentsPageState'),
+    _topLevelClassBody(readerCommentsSrc, '_ChapterCommentsPageState'),
+    _topLevelClassBody(
+      readerCommentsSrc,
+      '_EmbeddedChapterCommentsPageState',
+    ),
+  ];
+  _pair(
+    check,
+    'comments.paging_wired_in_all_pages',
+    bodies.every((b) => b.isNotEmpty && pagingWired(b)),
+    pagingWired('class Fake {}'),
+    '三处评论列表都要：首屏空页回退 + 到头停翻 + 不再对排序产物 addAll；'
+    '故障=任一页漏接（bodyLens=${bodies.map((b) => b.length).join(",")}）',
   );
 }
