@@ -20,6 +20,7 @@ import 'package:mangrove/foundation/comic_collection_store.dart';
 import 'package:mangrove/foundation/comic_details_cache.dart';
 import 'package:mangrove/foundation/comic_override_store.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
+import 'package:mangrove/foundation/comment_order_policy.dart';
 import 'package:mangrove/foundation/comic_state_repository.dart';
 import 'package:mangrove/foundation/comic_type.dart';
 import 'package:mangrove/foundation/download_manager_store.dart';
@@ -65,6 +66,8 @@ import 'package:mangrove/utils/translations.dart';
 import 'dart:math' as math;
 
 part 'comments_page.dart';
+
+part 'comments_hub.dart';
 
 part 'chapters.dart';
 

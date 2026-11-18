@@ -2635,7 +2635,13 @@ class ComicListState extends State<ComicList> {
   }
 
   void storeState() {
-    if (enablePageStorage) {
+    // `PageStorage.of(context)` walks up the element tree, so calling it after
+    // the widget was disposed throws "Null check operator used on a null value".
+    // `_loadPage`'s `finally` block is the exact path that hits this: the user
+    // navigates away while a page request is still in flight, the future
+    // completes, and the cleanup runs on a dead context. Guarding here keeps
+    // every caller safe instead of forcing each one to remember.
+    if (enablePageStorage && mounted) {
       PageStorage.of(context).writeState(context, state);
     }
   }

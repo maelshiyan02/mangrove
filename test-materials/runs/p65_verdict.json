@@ -1,0 +1,167 @@
+{
+  "round": "P65",
+  "date": "2026-11-17",
+  "built_at": "2026-11-17T17:20:39",
+  "build_verdict": {
+    "wrapper": "=== BUILD_OK ===",
+    "rc_analyze": 0,
+    "rc_build": 0,
+    "rc_install": 0
+  },
+  "selfcheck": {
+    "command": "reader-ux-check",
+    "total": 75,
+    "failed": 0,
+    "passed": true,
+    "split": {
+      "P56": 48,
+      "P64": 18,
+      "P65": 9
+    },
+    "p65_names": [
+      "reader.chapter_end_always_reachable",
+      "reader.chapter_end_switch_off",
+      "reader.chapter_end_no_chapters",
+      "reader.chapter_end_seamless_off",
+      "reader.chapter_end_independent_of_image_state",
+      "reader.chapter_caption_tracks_number",
+      "reader.chapter_revision_subscription",
+      "comments.time_key_formats",
+      "comments.order_oldest_and_newest",
+      "comments.order_stable_when_unknown",
+      "comments.first_page_from_oldest",
+      "comments.next_page_direction",
+      "comments.both_pages_use_order_policy",
+      "comments.order_labels_localized"
+    ]
+  },
+  "fault_injection": {
+    "overall": "PASS",
+    "baseline_green": true,
+    "cases": [
+      {
+        "case": "chapter_setter_no_notify",
+        "verdict": "PASS",
+        "expected_red": [
+          "reader.chapter_revision_subscription"
+        ],
+        "actual_red": [
+          "reader.chapter_revision_subscription"
+        ],
+        "restored": true
+      },
+      {
+        "case": "capsule_no_subscription",
+        "verdict": "PASS",
+        "expected_red": [
+          "reader.chapter_revision_subscription"
+        ],
+        "actual_red": [
+          "reader.chapter_revision_subscription"
+        ],
+        "restored": true
+      },
+      {
+        "case": "comments_default_newest",
+        "verdict": "PASS",
+        "expected_red": [
+          "comments.both_pages_use_order_policy"
+        ],
+        "actual_red": [
+          "comments.both_pages_use_order_policy"
+        ],
+        "restored": true
+      },
+      {
+        "case": "comments_order_label_missing",
+        "verdict": "PASS",
+        "expected_red": [
+          "comments.order_labels_localized"
+        ],
+        "actual_red": [
+          "comments.order_labels_localized"
+        ],
+        "restored": true
+      }
+    ]
+  },
+  "requirements": [
+    {
+      "id": 1,
+      "ask": "右上角章节跳转后章节数字实时更新",
+      "verdict": "PASS",
+      "root_cause": "ChapterCapsule 以 const 挂载、用 findAncestorStateOfType 读章号（无依赖注册）；无缝跳章只 setState readerScaffold，const 子 widget 被复用不 rebuild。左下角属连续模式滚动状态、自己 update 了，故两处对比鲜明",
+      "fix": "chapter 改 getter/setter，每次真实变化推进 ValueNotifier chapterRevision；胶囊 ValueListenableBuilder 订阅；文案抽纯函数 readerChapterCaption",
+      "evidence": {
+        "before_fix": [
+          "p65_a03_continue_after.png: Ch.162/229 vs 第162话",
+          "p65_a06_next_after.png: Ch.162/229 vs 第163话"
+        ],
+        "after_fix": [
+          "p65_b03_reader.png: Ch.163/229 + 第163话",
+          "p65_b04_after_next.png: Ch.164/229 + 第164话·1/139",
+          "p65_b05_after_prev.png: Ch.163/229 + 第163话·137/137"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "ask": "作品/章节评论按时间从旧到新，可切升序降序",
+      "verdict": "PASS",
+      "fix": "纯策略层 comment_order_policy.dart（时间键/稳定排序/反向分页页码）；两个评论页共用；默认旧→新；⇅ 切换只重排已加载页；补 4 条 i18n",
+      "evidence": {
+        "comic_comments": {
+          "oldest_first": [
+            "2022-05-25 22:15:05",
+            "2022-08-24 09:58:58",
+            "2023-06-28 13:48:54",
+            "2023-08-26 10:19:27",
+            "2024-06-25 11:05:46",
+            "2025-01-29 12:08:05"
+          ],
+          "newest_first": [
+            "2025-01-29 12:08:36",
+            "2024-06-25 11:05:46",
+            "2023-08-26 10:19:27"
+          ],
+          "frames": [
+            "p65_b07_comments.png",
+            "p65_b08_toggled.png"
+          ],
+          "note": "P64 帧首条为 2026-11-16，反向分页后首条为 2022-05-25"
+        },
+        "chapter_comments": {
+          "chapter": "第163话",
+          "oldest_first": [
+            "2024-10-06 02:39:13",
+            "2024-10-07 06:32:27",
+            "2024-10-07 06:37:37",
+            "2024-10-11 01:18:24"
+          ],
+          "frames": [
+            "p65_b09_chapter_comments.png",
+            "p65_b09_times_zoom.png（4 倍放大逐字核对）"
+          ]
+        }
+      }
+    }
+  ],
+  "changed_files": [
+    "Mangrove/lib/foundation/comment_order_policy.dart (新增)",
+    "Mangrove/lib/pages/reader/reader.dart",
+    "Mangrove/lib/pages/reader/chapter_capsule.dart",
+    "Mangrove/lib/pages/comic_details_page/comments_page.dart",
+    "Mangrove/lib/pages/reader/chapter_comments.dart",
+    "Mangrove/lib/pages/comic_details_page/comic_page.dart",
+    "Mangrove/lib/headless_p56_checks.dart",
+    "Mangrove/lib/headless.dart",
+    "Mangrove/assets/translation.json",
+    "tools/_p65_inject.py (新增)"
+  ],
+  "committed": false,
+  "open_issues": [
+    "反向分页首屏多一次请求（拿 maxPage）",
+    "回复串按 Comment.time 排序会离开父评论（模型无 parent 字段）",
+    "未做真机发评论验证"
+  ]
+}

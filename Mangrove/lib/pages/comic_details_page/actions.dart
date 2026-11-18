@@ -861,7 +861,9 @@ abstract mixin class _ComicPageActions {
   void showComments() {
     final source = comicSource;
     if (source == null) return;
-    showSideBar(App.rootContext, CommentsPage(data: comic, source: source));
+    // P64：评论中心把「作品评价」与「单话留言」并列，后者带章节选择器 ——
+    // 看某一话的留言不再需要打开那一话、读到章末。
+    showSideBar(App.rootContext, CommentsHubPage(data: comic, source: source));
   }
 
   void starRating() {

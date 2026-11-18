@@ -36,6 +36,9 @@ class ChapterCommentsPage extends StatefulWidget {
 }
 
 class _ChapterCommentsPageState extends State<ChapterCommentsPage> {
+  /// P65：默认把拷贝 App 的「最新在前」翻成「从旧到新」。
+  CommentOrder _order = CommentOrder.oldestFirst;
+
   bool _loading = true;
   List<Comment>? _comments;
   String? _error;
@@ -55,15 +58,24 @@ class _ChapterCommentsPageState extends State<ChapterCommentsPage> {
     super.dispose();
   }
 
+  Future<Res<List<Comment>>> _load(int page) {
+    return widget.source.chapterCommentsLoader!(
+      widget.comicId,
+      widget.epId,
+      page,
+      widget.replyComment?.id,
+    );
+  }
+
   void firstLoad() async {
     if (_requestInFlight) return;
     _requestInFlight = true;
-    var res = await widget.source.chapterCommentsLoader!(
-      widget.comicId,
-      widget.epId,
-      1,
-      widget.replyComment?.id,
-    );
+    var res = await _load(1);
+    final serverMaxPage = res.error ? null : res.subData;
+    final target = commentFirstPage(maxPage: serverMaxPage, order: _order);
+    if (!res.error && target != 1) {
+      res = await _load(target);
+    }
     _requestInFlight = false;
     if (!mounted) return;
     if (res.error) {
@@ -75,23 +87,21 @@ class _ChapterCommentsPageState extends State<ChapterCommentsPage> {
       var filteredComments = res.data
           .where((c) => !_shouldBlockComment(c))
           .toList();
+      filteredComments = orderComments(filteredComments, _order, (c) => c.time);
       setState(() {
         _comments = filteredComments;
+        _page = target;
         _loading = false;
-        maxPage = res.subData;
+        maxPage = serverMaxPage;
       });
     }
   }
 
   void loadMore() async {
-    if (_requestInFlight) return;
+    final next = commentNextPage(page: _page, maxPage: maxPage, order: _order);
+    if (next == null || _requestInFlight) return;
     _requestInFlight = true;
-    var res = await widget.source.chapterCommentsLoader!(
-      widget.comicId,
-      widget.epId,
-      _page + 1,
-      widget.replyComment?.id,
-    );
+    var res = await _load(next);
     _requestInFlight = false;
     if (!mounted) return;
     if (res.error) {
@@ -100,14 +110,54 @@ class _ChapterCommentsPageState extends State<ChapterCommentsPage> {
       var filteredComments = res.data
           .where((c) => !_shouldBlockComment(c))
           .toList();
+      filteredComments = orderComments(filteredComments, _order, (c) => c.time);
       setState(() {
         _comments!.addAll(filteredComments);
-        _page++;
+        _page = next;
         if (maxPage == null && res.data.isEmpty) {
-          maxPage = _page;
+          maxPage = _order == CommentOrder.oldestFirst ? 1 : _page;
         }
       });
     }
+  }
+
+  void toggleCommentOrder() {
+    setState(() {
+      _order = _order == CommentOrder.oldestFirst
+          ? CommentOrder.newestFirst
+          : CommentOrder.oldestFirst;
+      if (_comments != null) {
+        _comments = orderComments(_comments!, _order, (c) => c.time);
+      }
+    });
+  }
+
+  Widget buildOrderBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: InkWell(
+          onTap: toggleCommentOrder,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.swap_vert, size: 15, color: context.colorScheme.primary),
+                const SizedBox(width: 4),
+                Text(
+                  _order == CommentOrder.oldestFirst
+                      ? "Oldest first".tl
+                      : "Newest first".tl,
+                  style: ts.s12.copyWith(color: context.colorScheme.primary),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -151,6 +201,7 @@ class _ChapterCommentsPageState extends State<ChapterCommentsPage> {
           (widget.replyComment?.avatar != null);
       return Column(
         children: [
+          buildOrderBar(),
           Expanded(
             child: SmoothScrollProvider(
               builder: (context, controller, physics) {
@@ -196,7 +247,12 @@ class _ChapterCommentsPageState extends State<ChapterCommentsPage> {
                     index--;
 
                     if (index == _comments!.length) {
-                      if (_page < (maxPage ?? _page + 1)) {
+                      if (commentNextPage(
+                            page: _page,
+                            maxPage: maxPage,
+                            order: _order,
+                          ) !=
+                          null) {
                         loadMore();
                         return const ListLoadingIndicator();
                       } else {
@@ -632,6 +688,9 @@ class _EmbeddedChapterCommentsPage extends StatefulWidget {
 
 class _EmbeddedChapterCommentsPageState
     extends State<_EmbeddedChapterCommentsPage> {
+  /// P65：与独立章节评论页共用同一套默认顺序（旧→新）。
+  CommentOrder _order = CommentOrder.oldestFirst; // P65-embedded
+
   bool _loading = true;
   List<Comment>? _comments;
   String? _error;
@@ -653,61 +712,111 @@ class _EmbeddedChapterCommentsPageState
     super.dispose();
   }
 
+  Future<Res<List<Comment>>> _load(int page) {
+    return widget.source.chapterCommentsLoader!(
+      widget.comicId,
+      widget.epId,
+      page,
+      null,
+    );
+  }
+
   void firstLoad() async {
     if (_requestInFlight) return;
     _requestInFlight = true;
-    var res = await widget.source.chapterCommentsLoader!(
-      widget.comicId,
-      widget.epId,
-      1,
-      null,
-    );
+    var res = await _load(1);
+    // 与独立评论页一致：第一趟只为拿 maxPage，旧→新要从最后一页开始显示。
+    final serverMaxPage = res.error ? null : res.subData;
+    final target = commentFirstPage(maxPage: serverMaxPage, order: _order);
+    if (!res.error && target != 1) {
+      res = await _load(target);
+    }
     _requestInFlight = false;
+    if (!mounted) return;
     if (res.error) {
-      if (mounted) {
-        setState(() {
-          _error = res.errorMessage;
-          _loading = false;
-        });
-      }
-    } else if (mounted) {
+      setState(() {
+        _error = res.errorMessage;
+        _loading = false;
+      });
+    } else {
       var filteredComments = res.data
           .where((c) => !_shouldBlockComment(c))
           .toList();
+      filteredComments = orderComments(filteredComments, _order, (c) => c.time);
       setState(() {
         _comments = filteredComments;
+        _page = target;
         _loading = false;
-        maxPage = res.subData;
+        maxPage = serverMaxPage;
       });
     }
   }
 
   void loadMore() async {
-    if (_requestInFlight) return;
+    final next = commentNextPage(page: _page, maxPage: maxPage, order: _order);
+    if (next == null || _requestInFlight) return;
     _requestInFlight = true;
-    var res = await widget.source.chapterCommentsLoader!(
-      widget.comicId,
-      widget.epId,
-      _page + 1,
-      null,
-    );
+    var res = await _load(next);
     _requestInFlight = false;
+    if (!mounted) return;
     if (res.error) {
-      if (mounted) {
-        context.showMessage(message: res.errorMessage ?? "Unknown Error");
-      }
-    } else if (mounted) {
+      context.showMessage(message: res.errorMessage ?? "Unknown Error");
+    } else {
       var filteredComments = res.data
           .where((c) => !_shouldBlockComment(c))
           .toList();
+      filteredComments = orderComments(filteredComments, _order, (c) => c.time);
       setState(() {
         _comments!.addAll(filteredComments);
-        _page++;
+        _page = next;
         if (maxPage == null && res.data.isEmpty) {
-          maxPage = _page;
+          maxPage = _order == CommentOrder.oldestFirst ? 1 : _page;
         }
       });
     }
+  }
+
+  void toggleCommentOrder() {
+    setState(() {
+      _order = _order == CommentOrder.oldestFirst
+          ? CommentOrder.newestFirst
+          : CommentOrder.oldestFirst;
+      if (_comments != null) {
+        _comments = orderComments(_comments!, _order, (c) => c.time);
+      }
+    });
+  }
+
+  Widget buildOrderBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: InkWell(
+          onTap: toggleCommentOrder,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.swap_vert,
+                  size: 15,
+                  color: context.colorScheme.primary,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _order == CommentOrder.oldestFirst
+                      ? "Oldest first".tl
+                      : "Newest first".tl,
+                  style: ts.s12.copyWith(color: context.colorScheme.primary),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -718,6 +827,7 @@ class _EmbeddedChapterCommentsPageState
         child: Column(
           children: [
             _buildHeader(),
+            buildOrderBar(),
             Expanded(child: _buildBody()),
             _buildBottom(),
             // Only this spacer may depend on the keyboard inset: reading it at
@@ -813,7 +923,12 @@ class _EmbeddedChapterCommentsPageState
           itemCount: _comments!.length + 1,
           itemBuilder: (context, index) {
             if (index == _comments!.length) {
-              if (_page < (maxPage ?? _page + 1)) {
+              if (commentNextPage(
+                    page: _page,
+                    maxPage: maxPage,
+                    order: _order,
+                  ) !=
+                  null) {
                 loadMore();
                 return const ListLoadingIndicator();
               } else {

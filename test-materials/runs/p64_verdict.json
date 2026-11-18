@@ -1,0 +1,172 @@
+{
+  "round": "P64",
+  "date": "2026-11-16",
+  "built_at": "2026-11-16T14:49:38",
+  "binary": "builds/mangrove/mangrove.exe (app.so 14:49)",
+  "build_verdict": {
+    "wrapper": "=== BUILD_OK ===",
+    "pubget_rc": 0,
+    "flutter_analyze_cc": 0,
+    "build_rc": 0,
+    "install_rc": 0
+  },
+  "selfcheck": {
+    "command": "reader-ux-check",
+    "checks": 66,
+    "failed": 0,
+    "passed": true,
+    "p56": 48,
+    "p64_added": 18
+  },
+  "fault_injection": {
+    "overall": "PASS",
+    "baseline_green": true,
+    "cases": [
+      {
+        "case": "no_pointer_focus_heal",
+        "verdict": "PASS",
+        "expected_red": [
+          "reader.focus_self_heal_wired"
+        ],
+        "actual_red": [
+          "reader.focus_self_heal_wired"
+        ],
+        "restored": true
+      },
+      {
+        "case": "comments_always_chapter_one",
+        "verdict": "PASS",
+        "expected_red": [
+          "reader.comments_uses_current_chapter"
+        ],
+        "actual_red": [
+          "reader.comments_uses_current_chapter"
+        ],
+        "restored": true
+      },
+      {
+        "case": "toolbar_comment_back_to_placeholder",
+        "verdict": "PASS",
+        "expected_red": [
+          "reader.comments_toolbar_wired"
+        ],
+        "actual_red": [
+          "reader.comments_toolbar_wired"
+        ],
+        "restored": true
+      },
+      {
+        "case": "focus_guard_bypassed",
+        "verdict": "PASS",
+        "expected_red": [
+          "reader.focus_guard_wired"
+        ],
+        "actual_red": [
+          "reader.focus_guard_wired"
+        ],
+        "restored": true
+      }
+    ]
+  },
+  "requirements": [
+    {
+      "id": 1,
+      "ask": "鼠标拖动后空格翻页失效：分析原因并修复",
+      "verdict": "PASS",
+      "root_cause": "弹层（右键菜单/抽屉/对话框）pop 后阅读器 FocusNode 失焦且无人归还，primaryFocus 落到裸 FocusScopeNode，KeyboardListener 从此收不到按键；拖拽本身不夺焦点（3 次拖拽后 12 次 hasFocus=true）",
+      "fix": "FocusManager 监听 + onPointerDown 两条自愈通道；守卫抽成纯函数 shouldReaderRestoreFocus（不打字、不抢别的路由）",
+      "evidence": [
+        "诊断日志：弹层关闭后 hasFocus=false primary=FocusScopeNode",
+        "reader.focus_guard_truth_table / reader.focus_guard_wired / reader.focus_self_heal_wired 全绿",
+        "注入 no_pointer_focus_heal 与 focus_guard_bypassed 各只红目标一条"
+      ],
+      "limitation": "后台无法投递系统按键（顶层/FLUTTERVIEW 均收不到），空格翻页只能由焦点态+策略真值表间接证明"
+    },
+    {
+      "id": 2,
+      "ask": "单击与长按空格区分，长按更快且能急刹急停",
+      "verdict": "PASS",
+      "detail": "180ms 判定窗；tap=半屏 200ms 缓动，hold=16ms ticker 1.1→3.0 视口/秒 smoothstep 爬坡；松手当帧停",
+      "measurements": {
+        "hold_948ms_px": 1569.6,
+        "after_11s_px": 1569.6,
+        "tap_147ms_px_animated_target": 2121.6,
+        "tap_147ms_px_moved_by_hold": 0.0,
+        "one_second_hold_px_per_1000_viewport": 1602
+      },
+      "evidence": [
+        "真实二进制实测（鼠标长按驱动同一按键链路）",
+        "reader.hold_* 7 条断言全绿，恒定速度反例被拒"
+      ]
+    },
+    {
+      "id": 3,
+      "ask": "启动阅读器右缘工具栏的评论（原为占位）",
+      "verdict": "PASS",
+      "detail": "接 openChapterComments()，取当前话 epId 打开 ChapterCommentsPage",
+      "evidence": [
+        "p64_50_toolbar_comment_after.png：阅读器内弹出「章节评论」侧栏，内容为当前话留言",
+        "reader.comments_toolbar_wired / reader.comments_uses_current_chapter 全绿",
+        "注入 toolbar_comment_back_to_placeholder、comments_always_chapter_one 各只红目标一条"
+      ]
+    },
+    {
+      "id": 4,
+      "ask": "章节评论必须在阅读器内可见（拷贝只有 App 能看评论）",
+      "verdict": "PASS",
+      "detail": "章节留言走 /api/v3/roasts?chapter_id=（App 签名通道），作品评价走 /api/v3/comments?comic_id=",
+      "evidence": [
+        "p64_comment_probe.py：comic comments 200/50，chapter roasts 200/13 真实中文内容",
+        "copy.chapter_comments_app_api：函数体内只有 roasts，无 webBase"
+      ]
+    },
+    {
+      "id": 5,
+      "ask": "详情页评论升级为作品/章节双分类，章节侧可切换并选择话数",
+      "verdict": "PASS",
+      "detail": "CommentsHubPage：SegmentedButton 双分栏 + 章节条 + 可搜索选择器；默认落在最近阅读",
+      "evidence": [
+        "p64_40/41/42 分栏、章条、选择器截图",
+        "第0话 8 条 → 第9话 4 条（p64_43 / p64_45 列表整组换新）",
+        "detail.comments_hub_has_two_tabs / _chapter_picker / comments_page_supports_ep 全绿"
+      ]
+    }
+  ],
+  "cleanup": {
+    "diagnostics_removed": true,
+    "i18n_keys_added": [
+      "Comic Comments",
+      "Select Chapter",
+      "Chapter",
+      "This source has no chapter comments",
+      "Chapter list not loaded",
+      "No comments",
+      "No chapter comments"
+    ],
+    "committed": false
+  },
+  "open_issues": [
+    "Res.errorMessage 未过 .tl（键已补，展示处未接）",
+    "发评论未在真机验证（避免往用户账号写测试内容）",
+    "后台无法投递系统按键：空格翻页只能由焦点态 + 策略真值表间接证明（见 worklog §1.4）"
+  ],
+  "gui_smoke_final_build": {
+    "verdict": "PASS",
+    "frames": [
+      "p64_f02_home.png",
+      "p64_f05_comments_after.png",
+      "p64_f09_chtab2_after.png",
+      "p64_f10_picker_after.png",
+      "p64_f15_toolbar_comment_after.png"
+    ],
+    "notes": "重建后二进制：首页正常；分栏文案已是中文「作品评论/章节评论」；章节条 21/22 自动落最近阅读；选择器标题「选择章节」；阅读器右缘评论 → 章节评论侧栏（小甜饼/dokmigu、cdfgfdg、A120NL…）",
+    "env_caveat": "沙盒作业对象会随父 shell 收走 GUI 子进程（窗口出现 3s 后消失，CREATE_BREAKAWAY_FROM_JOB 被拒），必须让父任务保活才能稳定截图；且保活 shell 自身有时限 —— 15 分钟到点退场的瞬间 GUI 被一并收走（实测 PID 19376 在 `sleep 900` 结束同时消失，非应用崩溃）。",
+    "relaunch": {
+      "pid": 6180,
+      "hwnd": 25625668,
+      "frame": "p64_f16_relaunch_home.png",
+      "pixels_md5": "db10430764f9bd29862a42b6863c29a8",
+      "note": "首页正常渲染（历史 46 / 本地 19 / 漫画源 21 / 合集 2），中文文案正常"
+    }
+  }
+}

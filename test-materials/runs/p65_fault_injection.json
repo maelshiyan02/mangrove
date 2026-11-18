@@ -1,0 +1,59 @@
+{
+  "baseline_checks": 75,
+  "baseline_green": true,
+  "cases": [
+    {
+      "case": "chapter_setter_no_notify",
+      "verdict": "PASS",
+      "why": "章号 setter 不再推进 revision —— 复现原来的右上角数字卡住",
+      "expect_red": [
+        "reader.chapter_revision_subscription"
+      ],
+      "actual_red": [
+        "reader.chapter_revision_subscription"
+      ],
+      "restored": true,
+      "sha256": "95ad3786affa0cb32873f2c411873c18e50684dcea0b922dbfd9dcba1cdbf2e3"
+    },
+    {
+      "case": "capsule_no_subscription",
+      "verdict": "PASS",
+      "why": "胶囊退回「只靠父级 rebuild 碰运气」的写法",
+      "expect_red": [
+        "reader.chapter_revision_subscription"
+      ],
+      "actual_red": [
+        "reader.chapter_revision_subscription"
+      ],
+      "restored": true,
+      "sha256": "601cf9656d53a59274a8f4cbaa8fd9a92e86942b3b46824f02f0770ca737f5e2"
+    },
+    {
+      "case": "comments_default_newest",
+      "verdict": "PASS",
+      "why": "作品评论退回拷贝默认的「最新在前」",
+      "expect_red": [
+        "comments.both_pages_use_order_policy"
+      ],
+      "actual_red": [
+        "comments.both_pages_use_order_policy"
+      ],
+      "restored": true,
+      "sha256": "e686e6c7f36382860d5257060aec98be8bd19bc0e4913eb5c9c1207075d10fa7"
+    },
+    {
+      "case": "comments_order_label_missing",
+      "verdict": "PASS",
+      "why": "缺翻译键时排序条会把英文原样露给用户",
+      "expect_red": [
+        "comments.order_labels_localized"
+      ],
+      "actual_red": [
+        "comments.order_labels_localized"
+      ],
+      "restored": true,
+      "sha256": "1722a6ef39c0cb7645755bdc74008cdade863334322acad118e1dec9fe83c167"
+    }
+  ],
+  "overall": "PASS"
+}

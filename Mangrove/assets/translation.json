@@ -1992,7 +1992,16 @@
     "Only downloaded comics are listed. A project covers the whole comic and links to the original images instead of copying them.": "Only downloaded comics are listed. A project covers the whole comic and links to the original images instead of copying them.",
     "A project covers every chapter of this comic, so the reader opens the same project from any chapter.": "A project covers every chapter of this comic, so the reader opens the same project from any chapter.",
     "This comic already has a project. Creating will open the existing one instead.": "This comic already has a project. Creating will open the existing one instead.",
-    "This comic has no page image yet. The new project will start empty.": "This comic has no page image yet. The new project will start empty."
+    "This comic has no page image yet. The new project will start empty.": "This comic has no page image yet. The new project will start empty.",
+    "Comic Comments": "作品评论",
+    "Select Chapter": "选择章节",
+    "Chapter": "章节",
+    "This source has no chapter comments": "该来源没有章节评论",
+    "Chapter list not loaded": "章节列表未加载",
+    "No comments": "暂无评论",
+    "No chapter comments": "暂无章节评论",
+    "Oldest first": "从旧到新",
+    "Newest first": "从新到旧"
   },
   "zh_TW": {
     "Reader layout": "閱讀器佈局",
@@ -3987,6 +3996,15 @@
     "Only downloaded comics are listed. A project covers the whole comic and links to the original images instead of copying them.": "只列出已下載的漫畫。工程涵蓋整本漫畫，並以連結指向原圖，不再複製。",
     "A project covers every chapter of this comic, so the reader opens the same project from any chapter.": "工程涵蓋這本漫畫的所有章節，閱讀器從任何一章都會開啟同一個工程。",
     "This comic already has a project. Creating will open the existing one instead.": "這本漫畫已經有工程，建立時會直接開啟既有的那一個。",
-    "This comic has no page image yet. The new project will start empty.": "這本漫畫還沒有頁圖，新工程會是空的。"
+    "This comic has no page image yet. The new project will start empty.": "這本漫畫還沒有頁圖，新工程會是空的。",
+    "Comic Comments": "作品評論",
+    "Select Chapter": "選擇章節",
+    "Chapter": "章節",
+    "This source has no chapter comments": "該來源沒有章節評論",
+    "Chapter list not loaded": "章節列表未載入",
+    "No comments": "暫無評論",
+    "No chapter comments": "暫無章節評論",
+    "Oldest first": "從舊到新",
+    "Newest first": "從新到舊"
   }
 }

@@ -3159,6 +3159,11 @@ Future<void> runReaderUxCheck(List<String> args, int commandIndex) async {
       exit(1);
     }
     runP56Checks(check, packageRoot: packageRoot);
+    // P64：单击/长按空格、焦点自愈、评论接线。与 P56 共用同一命令，避免再造
+    // 一个"只在有人手动跑时才存在"的入口。
+    runP64Checks(check, packageRoot: packageRoot);
+    // P65：章号胶囊实时刷新 + 评论时间升序/反向分页。
+    runP65Checks(check, packageRoot: packageRoot);
     // 空断言集必须判 FAIL（A02 §7 第 1 条）。
     passed = checks.isNotEmpty && checks.every((c) => c['passed'] == true);
     await finish(

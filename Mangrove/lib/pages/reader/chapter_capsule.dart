@@ -14,6 +14,15 @@ class ChapterCapsule extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // P65：胶囊自己订阅章号变更，不再依赖父级碰巧 rebuild。
+    // 无缝跳章 / 滚动跨章走的是 reader.chapter 的 setter，这里必然收到通知。
+    return ValueListenableBuilder<int>(
+      valueListenable: context.reader.chapterRevision,
+      builder: (context, _, __) => _buildCapsule(context),
+    );
+  }
+
+  Widget _buildCapsule(BuildContext context) {
     final reader = context.reader;
     final chapters = reader.widget.chapters;
     if (chapters == null) return const SizedBox();
@@ -63,7 +72,7 @@ class ChapterCapsule extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Text(
-                  "Ch.$current / $total",
+                  readerChapterCaption(current, total),
                   maxLines: 1,
                   style: ts.s14.copyWith(color: colorScheme.onSurface),
                 ),

@@ -158,7 +158,12 @@ var CopyAES = (function () {
 class CopyManga extends ComicSource {
     name = "拷贝漫画"
     key = "copy_manga"
-    version = "1.8.0"
+    // v1.9.1 (P63): 修「搜索空白 + 正文卡死」双缺陷
+    //   - ensureChannel 探针改 search/comic(不再用恒空的 homeIndex.recComics 判活),
+    //     探活成功即清 _app_dead_until, 通道自愈
+    //   - webSearch 空列表显式报错, 不再静默返回空数组
+    //   - 详情/章节软风控改为按接口分流直降网页端, 退避 6→3 次、单次封顶 8s
+    version = "1.9.1"
     minAppVersion = "1.6.0"
     url = "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/copy_manga.js"
 
@@ -222,18 +227,121 @@ class CopyManga extends ComicSource {
     }
     //====结束修改====
 
+    //============================================================
+    //====修改(v1.9.0 / P60)==== A 方案: 借鉴 Scrapling spiders/throttle.py
+    //   的自适应退避, 把散落在 210/软风控各处的"固定阶梯等待"收敛成一个策略。
+    //   纯函数, 无引擎依赖, 可离线单测(copy_p60_check.cjs)。
+    //   关键克制(对齐 Scrapling): 封禁永不加速(max(翻倍,Retry-After,current)),
+    //   clamp 到 [floor,maxDelay]; 成功后缓慢衰减但不低于 floor。
+    //============================================================
+    static backoffFloor = 600;      // 与旧 throttle 的最小间隔一致
+    static backoffMax = 60000;      // Scrapling 默认 max_delay=60s
+    //====修复(v1.9.1)====
+    // throttleBase: 普通请求的拟人化节流基准(毫秒)。**不再**读自适应退避值 ——
+    //   退避值是一次风控后的"封禁等待量", 会涨到 38s/60s 并持久化; 拿它当每一跳的
+    //   节流间隔, 会让所有请求排队几十秒。实测 data/comic_source/copy_manga.data
+    //   残留 _adaptive_delay=38400, 一次章节列表要 2–3 跳 ⇒ 80–120 秒"卡死"。
+    // backoffMaxSession: 会话内退避上限。历史残留的超大值在首次读取时收敛到它,
+    //   否则下次启动仍从 38s 起跳, 用户体感就是"一直很卡"。
+    static throttleBase = 800;
+    static backoffMaxSession = 8000;
+    static relaxFactor = 0.85;      // 成功一次把 delay 乘该系数(缓慢恢复)
+    static blockFactor = 2.0;       // 封禁翻倍(Scrapling current_delay × 2.0)
+
+    /** 封禁退避: newDelay = clamp(max(cur×blockFactor, retryAfterMs, cur), floor, maxDelay)。
+     *  retryAfterMs 由 parseRetryAfter 从响应给出(无则 0)。纯函数。 */
+    static adaptiveBackoff(currentDelay, opts) {
+        const o = opts || {};
+        const floor = o.floor != null ? o.floor : CopyManga.backoffFloor;
+        const max = o.maxDelay != null ? o.maxDelay : CopyManga.backoffMax;
+        const factor = o.factor != null ? o.factor : CopyManga.blockFactor;
+        const cur = Math.max(0, Number(currentDelay) || 0);
+        const ra = Math.max(0, Number(o.retryAfterMs) || 0);
+        // 封禁永不加速: 三个候选取最大
+        const grown = Math.max(cur * factor, ra, cur);
+        const bounded = Math.min(Math.max(grown, floor), max);
+        return Math.round(bounded);
+    }
+
+    /** 成功后衰减: clamp(cur×relaxFactor, floor, max)。纯函数。 */
+    static adaptiveRelax(currentDelay, opts) {
+        const o = opts || {};
+        const floor = o.floor != null ? o.floor : CopyManga.backoffFloor;
+        const max = o.maxDelay != null ? o.maxDelay : CopyManga.backoffMax;
+        const factor = o.factor != null ? o.factor : CopyManga.relaxFactor;
+        const cur = Math.max(0, Number(currentDelay) || 0);
+        return Math.round(Math.min(Math.max(cur * factor, floor), max));
+    }
+
+    /** 从 210 响应 message(如 "Expected available in 12 seconds") 解析出毫秒。
+     *  无匹配返回 0(由调用方回退到翻倍)。纯函数。 */
+    static parseRetryAfter(message) {
+        const s = String(message == null ? "" : message);
+        const m = s.match(/(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds|秒)/i);
+        if (m) return Math.round(parseFloat(m[1]) * 1000);
+        const mm = s.match(/(\d+)\s*(?:min|minutes?|分钟)/i);
+        if (mm) return Math.round(parseInt(mm[1], 10) * 60000);
+        return 0;
+    }
+
+    /** 读取当前域名的自适应 delay(持久化, 跨请求/会话保持)。 */
+    _getBackoffDelay() {
+        const v = parseInt(this.loadData("_adaptive_delay"), 10);
+        if (!Number.isFinite(v) || v < CopyManga.backoffFloor) {
+            return CopyManga.backoffFloor;
+        }
+        //====修复(v1.9.1)====残留的超大退避值收敛
+        // 历史 210/软风控能把该值推到 38400/60000 并持久化, 下次启动仍从那里起跳。
+        // 会话内首次读到超出 backoffMaxSession 的值时收敛, 避免"一直很卡"。
+        if (v > CopyManga.backoffMaxSession) {
+            this._setBackoffDelay(CopyManga.backoffMaxSession);
+            return CopyManga.backoffMaxSession;
+        }
+        return v;
+    }
+    _setBackoffDelay(ms) {
+        try {
+            this.saveData("_adaptive_delay", String(Math.round(ms)));
+        } catch (e) { }
+    }
+
     // 高级节流与随机抖动控制（模拟真人阅读防范应用层风控）
+    // A 方案: 目标间隔改为自适应 delay + 抖动, 不再固定 600-1200ms。
     async throttle() {
         let lastReq = this.loadData("_last_req_time") || 0;
         let now = Date.now();
         let diff = now - parseInt(lastReq);
-        // 动态随机延迟 600ms - 1200ms，避开固定频率特征检测
-        let targetDelay = 600 + Math.floor(Math.random() * 600);
+        //====修复(v1.9.1)====节流间隔与封禁等待解耦
+        // 旧实现把 _adaptive_delay(风控退避, 可到 38s/60s)当每一跳的节流间隔,
+        // 于是"风控过一次"之后所有请求都排队几十秒 —— 实测残留 38400ms 时, 一次
+        // 章节列表(2–3 跳)要 80–120 秒, 这才是"卡顿超级严重"的主因。
+        // 拟人化只需要稳定的短间隔; 真要等风控, 由 _backoffOnBlock 自己 sleep。
+        const base = CopyManga.throttleBase;
+        // 抖动保留(这是 Scrapling 的短板, 我们做得更好): ±25% 随机
+        const jitter = 0.75 + Math.random() * 0.5;
+        const targetDelay = Math.max(200, Math.round(base * jitter));
         if (diff < targetDelay) {
             let wait = targetDelay - diff;
             await new Promise((resolve) => setTimeout(resolve, wait));
         }
         this.saveData("_last_req_time", Date.now().toString());
+    }
+
+    /** 统一风控退避: 记被封指纹 → 重置 → 按 Retry-After/翻倍提高 delay → 等待。
+     *  loadInfo/loadEp 的 210 与软风控共用它, 避免各写一套阶梯。
+     *  maxDelay: 单次等待上限。章节/详情这类**用户正在盯着屏幕等**的调用要传一个
+     *  小值(见 loadEp), 否则翻倍到 38s/60s 就是「卡死」。 */
+    async _backoffOnBlock(progress, retryAfterMs, label, maxDelay) {
+        this.markDeviceBlocked();
+        this.autoResetDeviceFingerprint();
+        const cur = this._getBackoffDelay();
+        const next = CopyManga.adaptiveBackoff(cur, {
+            retryAfterMs: retryAfterMs || 0,
+            maxDelay: maxDelay != null ? maxDelay : CopyManga.backoffMax,
+        });
+        this._setBackoffDelay(next);
+        console.log(`${label} 触发风控, 自适应退避 ${cur}→${next}ms 后重试 (${progress})`);
+        await new Promise((resolve) => setTimeout(resolve, next));
     }
     // 获取动态广告 request_id 绕过校验
     async getReqID() {
@@ -790,6 +898,13 @@ class CopyManga extends ComicSource {
                 if (!d.results || !Array.isArray(d.results.list)) {
                     throw new Error("网页端搜索返回异常")
                 }
+                //====修复(v1.9.1)====空结果必须显式报错, 不许静默返回空数组
+                // 该接口目前对任何关键词都回 results.list=[] / total=0。静默返回
+                // 空列表会让界面显示「无错误的空白」, 用户分不清「真没搜到」和
+                // 「通道已失效」。显式抛出后, viaChannel 会回退到 App 通道。
+                if (d.results.list.length === 0) {
+                    throw new Error("网页端搜索无结果(接口返回空列表, 可能已失效)")
+                }
                 list = d.results.list
                 total = d.results.total || 0
             }
@@ -956,26 +1071,36 @@ class CopyManga extends ComicSource {
         this._channelChecked = true
         try { this.saveData("_app_dead_until", String(Date.now() + 12 * 3600 * 1000)) } catch (e) { }
     }
+    clearAppDead() {
+        this._appDead = false
+        this._channelChecked = true
+        try { this.deleteData("_app_dead_until") } catch (e) { }
+    }
     async ensureChannel() {
         const mode = this.loadSetting('channel_mode') || 'auto'
         if (mode !== 'auto' || this._channelChecked) return
-        const until = parseInt(this.loadData("_app_dead_until") || "0")
-        if (until && Date.now() < until) {
-            this._appDead = true
-            this._channelChecked = true
-            return
-        }
         this._channelChecked = true
+        //====修复(v1.9.1)====探针改用搜索接口, 探活成功即清历史锁
+        // 旧探针读 homeIndex.results.recComics: 该推荐位在 region=0 下对匿名用户
+        // 恒为空(topics/topicsList/recComics 三者 total 都是 0), 于是**正常通道被
+        // 误判成「App 已死」**, 写入 12 小时持久锁, 之后搜索全部降级到网页端 ——
+        // 而网页端搜索 JSON 接口对任何关键词都返回 results.list=[], 且不抛错,
+        // 界面于是变成「无错误的空白结果」。实测搜索接口本身完全可用(HTTP 200 +
+        // 真实条目), 所以探针直接用它: 它才是搜索/列表真正依赖的那个接口。
+        // 同时不再信任持久化的 _app_dead_until —— 站点几小时内就会恢复, 硬锁 12
+        // 小时只会让搜索长时间静默失效; 探活成功即清锁, 让通道自愈。
         try {
-            const r = await Network.get(`${this.apiUrl}/api/v3/h5/homeIndex`, this.headers)
+            const r = await Network.get(
+                `${this.apiUrl}/api/v3/search/comic?limit=1&offset=0&q=a&q_type=`,
+                this.headers)
             if (r.status === 210) { this.markAppDead(); return }
             if (r.status !== 200) { this.markAppDead(); return }
             const d = JSON.parse(r.body)
-            if (!d || !d.results ||
-                !(d.results.recComics && d.results.recComics.list &&
-                    d.results.recComics.list.length)) {
+            if (!d || !d.results || !Array.isArray(d.results.list)) {
                 this.markAppDead()
+                return
             }
+            this.clearAppDead()
         } catch (e) {
             //网络问题不算 App 死亡, 让各入口自行故障转移
             this._channelChecked = false
@@ -1141,11 +1266,12 @@ class CopyManga extends ComicSource {
                         throw `Invalid status code: ${dataStr.status}`
                     }
                     data = JSON.parse(dataStr.body)
-                    if (data && data.results) break;
-                    this.autoResetDeviceFingerprint();
-                    let waitTime = 10000;
-                    console.log(`首页返回空数据(软风控)，等待 ${waitTime / 1000}s 后重试`);
-                    await new Promise((resolve) => setTimeout(resolve, waitTime));
+                    if (data && data.results) {
+                        this._setBackoffDelay(CopyManga.adaptiveRelax(this._getBackoffDelay()));
+                        break;
+                    }
+                    // 首页软风控: 统一自适应退避
+                    await this._backoffOnBlock("首页", 0, "首页软风控");
                 }
                 if (!data || !data.results) {
                     throw "首页返回空数据(软风控)，请稍后重试或点击设置里的“重置设备指纹池”";
@@ -1662,12 +1788,11 @@ class CopyManga extends ComicSource {
                     getFavoriteStatus.bind(this)(id)
                 ])
                 if (results[0].status === 210) {
-                    // 硬风控: 记录被封指纹 + 重置 + 阶梯退避
-                    this.markDeviceBlocked();
-                    this.autoResetDeviceFingerprint();
-                    let waitTime = 10000 + attempt * 10000;
-                    console.log(`详情触发210风控，等待 ${waitTime / 1000}s 后重试 (${attempt + 1}/3)`);
-                    await new Promise((resolve) => setTimeout(resolve, waitTime));
+                    // 硬风控: 统一走自适应退避(记被封指纹+重置+Retry-After/翻倍+clamp)
+                    const ra = CopyManga.parseRetryAfter(
+                        (() => { try { return JSON.parse(results[0].body).message } catch (e) { return "" } })()
+                    );
+                    await this._backoffOnBlock(`${attempt + 1}/3`, ra, "详情210");
                     continue;
                 }
                 if (results[0].status !== 200) {
@@ -1675,17 +1800,22 @@ class CopyManga extends ComicSource {
                 }
                 data = JSON.parse(results[0].body).results;
                 if (!data || !data.comic) {
-                    // 软风控(200+results:null): 重置指纹 + 退避重试, 不再报TypeError
-                    this.autoResetDeviceFingerprint();
-                    let waitTime = 10000 + attempt * 10000;
-                    console.log(`详情返回空数据(软风控)，等待 ${waitTime / 1000}s 后重试 (${attempt + 1}/3)`);
-                    await new Promise((resolve) => setTimeout(resolve, waitTime));
-                    continue;
+                    //====修复(v1.9.1)====软风控(200+results:null) → 直接降级网页端
+                    // 站点对匿名 App 指纹回 200 + results 空。原地退避重试既慢
+                    // (4.8→9.6s)又必然失败, 而最终抛出的 "210..." 会被 viaChannel
+                    // 捕获并 markAppDead() —— 那个 12 小时全局锁会把**搜索**也拖到
+                    // 已失效的网页搜索接口上(空列表 → 界面空白)。这里改为按接口能力
+                    // 分流: 详情走网页端 SSR, 搜索继续用 App 通道, 互不牵连。
+                    return await this.webLoadInfo(id);
                 }
+                // 成功: 自适应 delay 缓慢衰减(不立即回到 floor, 避免下一章又撞墙)
+                this._setBackoffDelay(CopyManga.adaptiveRelax(this._getBackoffDelay()));
                 break;
             }
             if (!data || !data.comic) {
-                throw "210：漫画详情访问过于频繁，已被官方风控限制。请稍后重试或点击设置里的“重置设备指纹池”";
+                // 210 硬风控把 3 轮退避走完仍无数据时, 同样降级网页端 —— 网页端是
+                // 独立的 HTML 通道, 不受 App 指纹风控影响, 不该让用户卡在退避里。
+                return await this.webLoadInfo(id);
             }
             let comicData = data.comic;
             //====结束修改====
@@ -1730,7 +1860,12 @@ class CopyManga extends ComicSource {
             //====结束修改====
 
             let attempt = 0;
-            const maxAttempts = 6;
+            //====修复(v1.9.1)====6 → 3, 且单次等待封顶 8s
+            // 6 次翻倍(4.8→9.6→19.2→38.4→60s)累计两分钟, 与 P62 现场观测到的
+            // 「点阅读到出图两分钟、中间画面完全静止」完全吻合。章节是用户盯着屏幕
+            // 等的操作, 宁可快速失败/降级, 也不能把界面挂在那儿。
+            const maxAttempts = 3;
+            const chapterBackoffCap = 8000;
             let res;
             let data;
             while (attempt < maxAttempts) {
@@ -1744,31 +1879,16 @@ class CopyManga extends ComicSource {
                         }
                     );
                     if (res.status === 210) {
-                        //====修改====捕获210风控，自动重置指纹再重试
-                        this.markDeviceBlocked();
-                        console.log(`检测到210风控，执行自动重置设备指纹`);
-                        this.autoResetDeviceFingerprint();
-                        //====结束修改====
-
-                        let waitTime = 10000 + attempt * 5000; // 阶梯退避重试
-                        try {
-                            let responseBody = JSON.parse(res.body);
-                            if (
-                                responseBody.message &&
-                                responseBody.message.includes("Expected available in")
-                            ) {
-                                let match = responseBody.message.match(/(\d+)\s*seconds/);
-                                if (match && match[1]) {
-                                    waitTime = parseInt(match[1]) * 1000;
-                                }
-                            }
-                        } catch (e) {
-                        }
-                        console.log(`Chapter ${epId} 触发风控(210)，等待 ${waitTime / 1000}s 后重试 (${attempt + 1}/${maxAttempts})`);
-                        await new Promise((resolve) => setTimeout(resolve, waitTime));
+                        // 210 硬风控: 统一自适应退避(解析 Retry-After/翻倍/clamp)
+                        const ra = CopyManga.parseRetryAfter(
+                            (() => { try { return JSON.parse(res.body).message } catch (e) { return "" } })()
+                        );
+                        await this._backoffOnBlock(`${attempt + 1}/${maxAttempts}`, ra,
+                            `章节${epId}-210`, chapterBackoffCap);
                         attempt++;
                         if (attempt >= maxAttempts) {
-                            throw "210：章节内容加载频繁，已被官方风控限制。请尝试切换【海外线路】或点击设置里的“重置设备指纹池”。";
+                            // 退避走到顶仍被拦 → 走网页端(SSR + AES), 不再抛错
+                            return await this.webLoadEp(comicId, epId);
                         }
                         continue;
                     }
@@ -1777,19 +1897,17 @@ class CopyManga extends ComicSource {
                     }
                     data = JSON.parse(res.body);
                     if (!data.results || !data.results.chapter || !Array.isArray(data.results.chapter.contents)) {
-                        //====修改====软风控(200+空章节数据): 重置指纹+退避重试, 与210同样处理
-                        console.log(`检测到软风控(章节空数据)，执行自动重置设备指纹`);
-                        this.autoResetDeviceFingerprint();
-                        let waitTime = 10000 + attempt * 5000;
-                        console.log(`Chapter ${epId} 触发软风控，等待 ${waitTime / 1000}s 后重试 (${attempt + 1}/${maxAttempts})`);
-                        await new Promise((resolve) => setTimeout(resolve, waitTime));
-                        attempt++;
-                        if (attempt >= maxAttempts) {
-                            throw "210：章节内容加载频繁，已被官方风控限制。请尝试切换【海外线路】或点击设置里的“重置设备指纹池”。";
-                        }
-                        continue;
-                        //====结束修改====
+                        //====修复(v1.9.1)====软风控(200+空章节) → 立即降级网页端
+                        // 实测本站对匿名 App 指纹稳定返回 200 + results 空; 原地退避
+                        // 6 次(70+ 秒)仍拿不到内容, 只会让阅读器长时间转圈后报
+                        // Network error。网页端 SSR + AES 通道实测可解出完整图片列表
+                        // (同一章 13 张), 所以一次到位地降级 —— 零等待。
+                        // 不调 markAppDead(): 同域名的搜索接口仍可用, 全局锁会把搜索
+                        // 一起拖到已失效的网页搜索接口上(空列表 → 界面空白)。
+                        return await this.webLoadEp(comicId, epId);
                     }
+                    // 成功取到章节: 自适应 delay 缓慢衰减
+                    this._setBackoffDelay(CopyManga.adaptiveRelax(this._getBackoffDelay()));
                     let imagesUrls = data.results.chapter.contents.map((e) => e.url);
                     let orders = data.results.chapter.words;
                     let hdImagesUrls = imagesUrls.map((url) => {

@@ -19,6 +19,9 @@ class CommentsPage extends StatefulWidget {
     required this.data,
     required this.source,
     this.replyComment,
+    this.epId,
+    this.chapterTitle,
+    this.embedded = false,
   });
 
   final ComicDetails data;
@@ -27,11 +30,28 @@ class CommentsPage extends StatefulWidget {
 
   final Comment? replyComment;
 
+  /// P64：非空时改为加载**该章节**的留言。
+  ///
+  /// 拷贝漫画把评论拆成两层：作品评价（`/api/v3/comments?comic_id=`）与单话留言
+  /// （`/api/v3/roasts?chapter_id=`）。网页端把两者都关了，只有手机 App 能看，
+  /// 所以这里必须走 App 签名通道（`chapterCommentsLoader`），不能退回网页端。
+  final String? epId;
+
+  /// 章节名，仅用于副标题。
+  final String? chapterTitle;
+
+  /// 作为分栏内容嵌入（评论中心）时不要自己的 Scaffold。
+  final bool embedded;
+
   @override
   State<CommentsPage> createState() => _CommentsPageState();
 }
 
 class _CommentsPageState extends State<CommentsPage> {
+  /// P65：拷贝接口默认「最新在前」，这里默认翻成「从旧到新」。
+  /// 切换只重排已加载的页，不重新取数（避免丢掉用户的滚动位置）。
+  CommentOrder _order = CommentOrder.oldestFirst;
+
   bool _loading = true;
   List<Comment>? _comments;
   String? _error;
@@ -45,11 +65,34 @@ class _CommentsPageState extends State<CommentsPage> {
   /// the same page.
   bool _requestInFlight = false;
 
+  /// 统一的取数入口：章节模式走 `chapterCommentsLoader`，作品模式走
+  /// `commentsLoader`。两处调用（首屏 / 加载更多）共用它，避免分叉出两套分页语义。
+  Future<Res<List<Comment>>> _load(int page) {
+    final epId = widget.epId;
+    if (epId != null) {
+      final loader = widget.source.chapterCommentsLoader;
+      if (loader == null) {
+        return Future.value(const Res<List<Comment>>.error("No chapter comments"));
+      }
+      return loader(widget.data.comicId, epId, page, widget.replyComment?.id);
+    }
+    final loader = widget.source.commentsLoader;
+    if (loader == null) {
+      return Future.value(const Res<List<Comment>>.error("No comments"));
+    }
+    return loader(widget.data.comicId, widget.data.subId, page, widget.replyComment?.id);
+  }
+
   void firstLoad() async {
     if (_requestInFlight) return;
     _requestInFlight = true;
-    var res = await widget.source.commentsLoader!(
-        widget.data.comicId, widget.data.subId, 1, widget.replyComment?.id);
+    var res = await _load(1);
+    // 第一趟只为了拿服务端的 maxPage；旧→新要从最后一页开始显示。
+    final serverMaxPage = res.error ? null : res.subData;
+    final target = commentFirstPage(maxPage: serverMaxPage, order: _order);
+    if (!res.error && target != 1) {
+      res = await _load(target);
+    }
     _requestInFlight = false;
     if (res.error) {
       setState(() {
@@ -58,47 +101,88 @@ class _CommentsPageState extends State<CommentsPage> {
       });
     } else if (mounted) {
       var filteredComments = res.data.where((c) => !_shouldBlockComment(c)).toList();
+      filteredComments = orderComments(filteredComments, _order, (c) => c.time);
       setState(() {
         _comments = filteredComments;
+        _page = target;
         _loading = false;
-        maxPage = res.subData;
+        maxPage = serverMaxPage;
       });
     }
   }
 
   void loadMore() async {
+    final next = commentNextPage(page: _page, maxPage: maxPage, order: _order);
+    if (next == null) return;
     if (_requestInFlight) return;
     _requestInFlight = true;
-    var res = await widget.source.commentsLoader!(
-      widget.data.comicId,
-      widget.data.subId,
-      _page + 1,
-      widget.replyComment?.id,
-    );
+    var res = await _load(next);
     _requestInFlight = false;
     if (res.error) {
       context.showMessage(message: res.errorMessage ?? "Unknown Error");
-    } else {
+    } else if (mounted) {
       var filteredComments = res.data.where((c) => !_shouldBlockComment(c)).toList();
+      filteredComments = orderComments(filteredComments, _order, (c) => c.time);
       setState(() {
         _comments!.addAll(filteredComments);
-        _page++;
+        _page = next;
         if (maxPage == null && res.data.isEmpty) {
-          maxPage = _page;
+          maxPage = _order == CommentOrder.oldestFirst ? 1 : _page;
         }
       });
     }
   }
 
+  void toggleCommentOrder() {
+    setState(() {
+      _order = _order == CommentOrder.oldestFirst
+          ? CommentOrder.newestFirst
+          : CommentOrder.oldestFirst;
+      if (_comments != null) {
+        _comments = orderComments(_comments!, _order, (c) => c.time);
+      }
+    });
+  }
+
+  Widget buildOrderBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: InkWell(
+          onTap: toggleCommentOrder,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.swap_vert, size: 15, color: context.colorScheme.primary),
+                const SizedBox(width: 4),
+                Text(
+                  _order == CommentOrder.oldestFirst
+                      ? "Oldest first".tl
+                      : "Newest first".tl,
+                  style: ts.s12.copyWith(color: context.colorScheme.primary),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final body = buildBody(context);
+    if (widget.embedded) return body;
     return Scaffold(
       resizeToAvoidBottomInset: false,
       appBar: Appbar(
         title: Text("Comments".tl),
         style: AppbarStyle.shadow,
       ),
-      body: buildBody(context),
+      body: body,
     );
   }
 
@@ -126,6 +210,7 @@ class _CommentsPageState extends State<CommentsPage> {
           (widget.replyComment?.avatar != null);
       return Column(
         children: [
+          buildOrderBar(),
           Expanded(
             child: SmoothScrollProvider(
               builder: (context, controller, physics) {
@@ -173,7 +258,12 @@ class _CommentsPageState extends State<CommentsPage> {
                     index--;
 
                     if (index == _comments!.length) {
-                      if (_page < (maxPage ?? _page + 1)) {
+                      if (commentNextPage(
+                            page: _page,
+                            maxPage: maxPage,
+                            order: _order,
+                          ) !=
+                          null) {
                         loadMore();
                         return const ListLoadingIndicator();
                       } else {
@@ -199,10 +289,12 @@ class _CommentsPageState extends State<CommentsPage> {
   }
 
   Widget buildBottom(BuildContext context) {
-    if (widget.source.sendCommentFunc == null) {
-      return const SizedBox(
-        height: 0,
-      );
+    final epId = widget.epId;
+    final canSend = epId != null
+        ? widget.source.sendChapterCommentFunc != null
+        : widget.source.sendCommentFunc != null;
+    if (!canSend) {
+      return const SizedBox(height: 0);
     }
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
@@ -251,11 +343,19 @@ class _CommentsPageState extends State<CommentsPage> {
                   setState(() {
                     sending = true;
                   });
-                  var b = await widget.source.sendCommentFunc!(
-                      widget.data.comicId,
-                      widget.data.subId,
-                      controller.text,
-                      widget.replyComment?.id);
+                  var b = epId != null
+                      ? await widget.source.sendChapterCommentFunc!(
+                          widget.data.comicId,
+                          epId,
+                          controller.text,
+                          widget.replyComment?.id,
+                        )
+                      : await widget.source.sendCommentFunc!(
+                          widget.data.comicId,
+                          widget.data.subId,
+                          controller.text,
+                          widget.replyComment?.id,
+                        );
                   if (!b.error) {
                     controller.text = "";
                     setState(() {

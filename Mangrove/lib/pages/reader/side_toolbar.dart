@@ -3,11 +3,11 @@ part of 'reader.dart';
 /// R5 可选右缘竖工具栏。
 ///
 /// 默认关闭（`readerSideToolbar` == false）。开启后从右缘滑入一列图标钮：
-/// 章节列表 / 评论（预留，未接线）/ 全屏 / 自动播放 / 设置 / 帮助。
+/// 章节列表 / 评论 / 全屏 / 自动播放 / 设置 / 帮助。
 /// 与顶/底栏功能重复但并存，纯布局偏好。
 ///
-/// 收纳项里「评论」按本轮约定只预留 UI 位置，点击给占位提示，不接评论抽屉
-/// （评论抽屉属 R6 / P2，未排期）。
+/// 「评论」自 P64 起接当前章节的留言区（拷贝漫画 App 端 `roasts` 接口）；
+/// 来源不支持时给明确提示，不再只弹「敬请期待」。
 class ReaderSideToolbar extends StatelessWidget {
   const ReaderSideToolbar({super.key});
 
@@ -22,11 +22,11 @@ class ReaderSideToolbar extends StatelessWidget {
         "Chapters".tl,
         scaffold.openChapterDrawer,
       ),
-      // 评论：预留位置，未接线（R6 / P2）。
+      // P64：评论不再占位 —— 直接打开**当前章节**的留言区（拷贝 App 端 roasts）。
       _SideToolItem(
         Icons.comment_outlined,
         "Comments".tl,
-        () => context.showMessage(message: "Comments coming soon".tl),
+        reader.openChapterComments,
       ),
       _SideToolItem(Icons.fullscreen, "Fullscreen".tl, reader.fullscreen),
       _SideToolItem(

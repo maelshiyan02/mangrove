@@ -42,6 +42,7 @@ import 'package:mangrove/foundation/missing_pages.dart';
 import 'package:mangrove/network/repair_download.dart';
 import 'package:mangrove/foundation/read_later.dart';
 import 'package:mangrove/foundation/reading_statistics.dart';
+import 'package:mangrove/foundation/comment_order_policy.dart';
 import 'package:mangrove/foundation/reader_ux_policy.dart';
 import 'package:mangrove/foundation/res.dart';
 import 'package:mangrove/network/download.dart';
@@ -272,6 +273,162 @@ class _ReaderState extends State<Reader>
 
   var focusNode = FocusNode();
 
+  /// 键盘焦点自愈。
+  ///
+  /// P64 实测（诊断日志）：阅读器的 `KeyboardListener` 焦点一旦被夺走就**再也
+  /// 回不来** —— 弹一次右键菜单/设置/章节抽屉之后 `focusNode.hasFocus` 从 true
+  /// 变 false，`primaryFocus` 落到裸 `FocusScopeNode`，此后空格、↑↓ 全部石沉
+  /// 大海，只能退出阅读器重进。用户感知到的「用一会儿之后空格就失效」就是它。
+  ///
+  /// 两条恢复通道：指针一落到页面上就还焦点（手指/鼠标在哪，键盘就该跟到哪）；
+  /// 焦点管理器报告「焦点落空」时补一次（弹层 pop 之后）。两条都刻意避开
+  /// 「有输入框正持有焦点」的情形，否则评论区打字会被抢走。
+  void ensureReaderFocus() {
+    if (!mounted) return;
+    final route = ModalRoute.of(context);
+    final primary = FocusManager.instance.primaryFocus;
+    if (!shouldReaderRestoreFocus(
+      routeIsCurrent: route == null || route.isCurrent,
+      hasFocus: focusNode.hasFocus,
+      editableFocused: _isEditableFocused(),
+      primaryIsBareScope: primary == null || primary is FocusScopeNode,
+    )) {
+      return;
+    }
+    focusNode.requestFocus();
+  }
+
+  bool _isEditableFocused() {
+    final context = FocusManager.instance.primaryFocus?.context;
+    if (context == null) return false;
+    if (context.widget is EditableText) return true;
+    var editable = false;
+    context.visitAncestorElements((element) {
+      if (element.widget is EditableText) {
+        editable = true;
+        return false;
+      }
+      return true;
+    });
+    return editable;
+  }
+
+  /// P64：打开**当前章节**的评论区。
+  ///
+  /// 拷贝漫画的章节留言走 App 端 `/api/v3/roasts?chapter_id=` —— 网页端把评论区
+  /// 关了，只有手机 App 能看到，所以这里必须用 `chapterCommentsLoader`（App 签名
+  /// 通道），而不是网页端接口。其它来源大多没有章节评论（`chapterCommentsLoader`
+  /// 为 null），此处给明确提示，不给一个点了没反应的按钮。
+  void openChapterComments() {
+    final source = ComicSource.find(type.sourceKey);
+    final chapters = widget.chapters;
+    if (source == null || source.chapterCommentsLoader == null) {
+      context.showMessage(message: "This source has no chapter comments".tl);
+      return;
+    }
+    if (chapters == null || chapters.length < chapter) {
+      context.showMessage(message: "Chapter list not loaded".tl);
+      return;
+    }
+    final epId = chapters.ids.elementAt(chapter - 1);
+    final chapterTitle = chapters.titles.elementAtOrNull(chapter - 1) ?? "";
+    showSideBar(
+      context,
+      ChapterCommentsPage(
+        comicId: cid,
+        epId: epId,
+        source: source,
+        comicTitle: widget.name,
+        chapterTitle: chapterTitle,
+      ),
+    );
+  }
+
+  void _onFocusManagerChanged() {
+    if (!mounted || focusNode.hasFocus) return;
+    // 焦点在路由切换的中间态会短暂落空，推到下一帧再看，避免与弹层初始化赛跑。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ensureReaderFocus();
+    });
+  }
+
+  // ==== P64：单击 / 长按空格 ====
+  Timer? _holdTicker;
+  DateTime? _holdStartedAt;
+  ReaderKeyAction? _holdAction;
+  DateTime? _holdLastPageStepAt;
+
+  void _beginHold(ReaderKeyAction action) {
+    // 系统按键重复会连续投 KeyDown/KeyRepeat，不能重置起算点，否则永远长按不起来。
+    if (_holdStartedAt != null) return;
+    _holdStartedAt = DateTime.now();
+    _holdAction = action;
+    _holdLastPageStepAt = null;
+    _holdTicker = Timer.periodic(kReaderHoldTick, (_) => _tickHold());
+  }
+
+  double get _holdViewportExtent {
+    final horizontal =
+        mode == ReaderMode.continuousLeftToRight ||
+        mode == ReaderMode.continuousRightToLeft ||
+        mode == ReaderMode.galleryLeftToRight ||
+        mode == ReaderMode.galleryRightToLeft;
+    return horizontal ? size.width : size.height;
+  }
+
+  void _tickHold() {
+    final started = _holdStartedAt;
+    final action = _holdAction;
+    final controller = _imageViewController;
+    if (!mounted || started == null || action == null || controller == null) {
+      _endHold(turnIfTap: false);
+      return;
+    }
+    // 焦点被抢走时 KeyUp 可能永远不来 —— 立刻刹车，别让页面自己跑。
+    if (!focusNode.hasFocus) {
+      _endHold(turnIfTap: false);
+      return;
+    }
+    final held = DateTime.now().difference(started);
+    if (held > kReaderHoldMaxDuration) {
+      _endHold(turnIfTap: false);
+      return;
+    }
+    if (!controller.supportsPixelScrolling) {
+      // gallery 页码离散，没有可插值的像素偏移：退化为按固定节奏翻页。
+      final last = _holdLastPageStepAt;
+      if (last == null ||
+          DateTime.now().difference(last) >= kReaderHoldPageInterval) {
+        _holdLastPageStepAt = DateTime.now();
+        controller.handleReaderAction(action);
+      }
+      return;
+    }
+    final delta = readerHoldDelta(
+      held: held,
+      tick: kReaderHoldTick,
+      viewportExtent: _holdViewportExtent,
+    );
+    if (delta <= 0) return;
+    controller.scrollBy(action == ReaderKeyAction.turnForward ? delta : -delta);
+  }
+
+  /// 结束长按。[turnIfTap] 为真且按住时长仍在单击窗口内时，补一次半屏缓动翻页，
+  /// 这样「单击」与「长按」共用同一个入口却给出两种手感。
+  void _endHold({bool turnIfTap = true}) {
+    final started = _holdStartedAt;
+    final action = _holdAction;
+    _holdTicker?.cancel();
+    _holdTicker = null;
+    _holdStartedAt = null;
+    _holdAction = null;
+    _holdLastPageStepAt = null;
+    if (!turnIfTap || started == null || action == null) return;
+    if (DateTime.now().difference(started) < kReaderHoldTriggerDelay) {
+      _imageViewController?.handleReaderAction(action);
+    }
+  }
+
   final ReadingTimeTracker _readingTimeTracker = ReadingTimeTracker();
   Timer? _readingCheckpointTimer;
   PageRoute<dynamic>? _readingRoute;
@@ -282,6 +439,8 @@ class _ReaderState extends State<Reader>
   @override
   void initState() {
     WidgetsBinding.instance.addObserver(this);
+    // P64：键盘焦点被弹层夺走后不会自己回来，靠这里补（见 ensureReaderFocus）。
+    FocusManager.instance.addListener(_onFocusManagerChanged);
     _appIsForeground =
         WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
@@ -396,7 +555,11 @@ class _ReaderState extends State<Reader>
     }
     autoPageTurningTimer?.cancel();
     autoScrollTimer?.cancel();
+    FocusManager.instance.removeListener(_onFocusManagerChanged);
+    _holdTicker?.cancel();
+    _holdTicker = null;
     focusNode.dispose();
+    chapterRevision.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     stopVolumeEvent();
     Future.microtask(() {
@@ -563,9 +726,17 @@ class _ReaderState extends State<Reader>
       );
       if (action == ReaderKeyAction.turnForward ||
           action == ReaderKeyAction.turnBackward) {
-        // 空格显式接管，不再依赖 Flutter 焦点激活的副产物。
-        if (event is KeyDownEvent || event is KeyRepeatEvent) {
-          _imageViewController?.handleReaderAction(action);
+        // P64：单击 = 半屏缓动翻一次；长按 = 自己按 16ms 节拍匀速推进，
+        // 松手当帧停住。KeyDown 只负责起算，真正翻页在 KeyUp 判定，
+        // 否则「按住」会先跳一屏再从新位置开始加速。
+        //
+        // 系统按键重复（KeyRepeatEvent）在这里**一律忽略**：长按速度必须
+        // 由我们自己的 ticker 决定，叠加系统重复会让节奏忽快忽慢，且松手后
+        // 系统可能还补发一串重复消息。
+        if (event is KeyDownEvent) {
+          _beginHold(action);
+        } else if (event is KeyUpEvent) {
+          _endHold();
         }
         return;
       }
@@ -937,7 +1108,22 @@ abstract mixin class _ReaderLocation {
     onPageChanged();
   }
 
-  int chapter = 1;
+  /// 章节号统一经 setter：无缝跳章、滚动跨章、remount 三条路径都会改它，
+  /// 过去右上角胶囊是 const widget、只靠父级重建碰运气，滚动/跳章后数字卡在
+  /// 旧话（P65 实证：左下角已是第163话，右上角仍 Ch.162/229）。
+  /// 这里让每次真实变化都推进 [chapterRevision]，由消费方显式订阅。
+  int _chapter = 1;
+
+  int get chapter => _chapter;
+
+  set chapter(int value) {
+    if (_chapter == value) return;
+    _chapter = value;
+    chapterRevision.value++;
+  }
+
+  /// 章号变更订阅点；不承载业务含义，只用来驱动章号显示。
+  final ValueNotifier<int> chapterRevision = ValueNotifier<int>(0);
 
   /// Bumped on explicit chapter jumps so the seamless reader (constant key) is
   /// forced to remount when the target chapter isn't in its loaded window.
@@ -1012,7 +1198,6 @@ abstract mixin class _ReaderLocation {
   }
 
   int _animationCount = 0;
-
   bool toPage(int page) {
     if (_validatePage(page)) {
       if (page == this.page && page != 1 && page != totalPages) {

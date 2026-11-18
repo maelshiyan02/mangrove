@@ -15,6 +15,93 @@ const double kReaderTurnFraction = 0.5;
 /// 沿用 Mangrove 连续模式原有的动画参数，只改步长，改动面最小。
 const int kReaderTurnDurationMs = 200;
 
+// ==== P64：单击 / 长按空格的两种手感 ====
+//
+// 单击 = 一次半屏 + 200ms 缓动（上面的 kReaderTurnFraction）。
+// 长按 = 按住多久滚多久，松手当帧停住。两者必须走**不同**的落地方式：
+// 长按若也用 animateTo，每个 tick 都会重启动画、互相打断，实际速度取决于
+// 定时器与动画的赛跑，既不可控也做不出「急刹」。
+//
+// 阈值 180ms 的取法：低于它只可能是点按（人手最短敲击 ~60–120ms），高于它
+// 用户已经能感觉到「按住」；与系统按键重复的首次延迟（~250–500ms）错开，
+// 保证长按速度曲线由我们自己的 ticker 决定，不受系统重复节奏影响。
+const Duration kReaderHoldTriggerDelay = Duration(milliseconds: 180);
+
+/// 长按刚触发时的速度（视口/秒）。略高于一次单击的等效速度
+/// （0.5 视口 / 0.2s ≈ 2.5/秒的瞬时值，但单击是一次性位移，按住连点最多
+/// 3–4 次/秒 ≈ 1.5 视口/秒），起步取 1.1 可避免一按住就窜出去。
+const double kReaderHoldStartSpeed = 1.1;
+
+/// 长按满速（视口/秒）。3.0 ≈ 每秒 3 屏，明显快于连点空格。
+const double kReaderHoldMaxSpeed = 3.0;
+
+/// 从起步加速到满速所需时长。
+const Duration kReaderHoldRampUp = Duration(milliseconds: 900);
+
+/// 长按推进的节拍。16ms ≈ 60fps，每帧 jumpTo 一小步。
+const Duration kReaderHoldTick = Duration(milliseconds: 16);
+
+/// 长按安全上限：焦点被抢走时 KeyUp 可能永远不来，到点必须自己刹车。
+const Duration kReaderHoldMaxDuration = Duration(seconds: 12);
+
+/// gallery 没有像素插值，长按退化为「按固定节奏翻页」。
+const Duration kReaderHoldPageInterval = Duration(milliseconds: 240);
+
+/// 长按到 [held] 时的速度（视口/秒）。返回 0 表示仍处于单击判定窗口。
+double readerHoldSpeed(Duration held) {
+  if (held < kReaderHoldTriggerDelay) return 0;
+  final ramp = kReaderHoldRampUp.inMicroseconds;
+  if (ramp <= 0) return kReaderHoldMaxSpeed;
+  final t =
+      ((held - kReaderHoldTriggerDelay).inMicroseconds / ramp).clamp(0.0, 1.0);
+  // smoothstep：起步平滑、末端收敛到满速，不会在阈值处突然跳一大步。
+  final eased = t * t * (3 - 2 * t);
+  return kReaderHoldStartSpeed +
+      (kReaderHoldMaxSpeed - kReaderHoldStartSpeed) * eased;
+}
+
+/// 一个 tick 应推进的像素数（恒为正，方向由调用方给）。
+double readerHoldDelta({
+  required Duration held,
+  required Duration tick,
+  required double viewportExtent,
+}) {
+  final speed = readerHoldSpeed(held);
+  if (speed <= 0) return 0;
+  if (viewportExtent <= 0 || !viewportExtent.isFinite) return 0;
+  return speed *
+      viewportExtent *
+      (tick.inMicroseconds / Duration.microsecondsPerSecond);
+}
+
+/// 键盘焦点自愈守卫（纯函数，零 Flutter 依赖，可被 headless 直接喂真值表）。
+///
+/// P64 实测的故障面：阅读器的 `KeyboardListener` 只有 [hasFocus] 为真才收键。
+/// 弹一次右键菜单 / 设置抽屉 / 章节抽屉之后，焦点落到裸 `FocusScopeNode`
+/// （"掉进虚空"），此后空格、↑↓ 全无反应，只有再点一下页面才回来 ——
+/// 用户感知到的「用一会儿空格就失效」就是它。
+///
+/// 判据故意收得很窄，只补「焦点落空」这一种：
+/// * 路由不是当前路由 → 不动（用户在别的页面上，抢焦点会打断人家）；
+/// * 已有真实控件持有焦点 → 不动（**评论区输入框正在打字时绝不能抢**）；
+/// * 只认 `primaryFocus == null` 或裸 `FocusScopeNode` 两种"虚空"态；
+/// * 自己已经有焦点 → 不动（避免每次点击都 requestFocus 触发重建）。
+///
+/// 反向口：把任一条件写成恒真（always restore），headless 的
+/// `reader.focus_guard_truth_table` / `reader.focus_guard_keeps_typing_focus`
+/// 必须变红 —— 否则「不抢输入框」这条就成了没验证过的口号。
+bool shouldReaderRestoreFocus({
+  required bool routeIsCurrent,
+  required bool hasFocus,
+  required bool editableFocused,
+  required bool primaryIsBareScope,
+}) {
+  if (!routeIsCurrent) return false;
+  if (hasFocus) return false;
+  if (editableFocused) return false;
+  return primaryIsBareScope;
+}
+
 /// `auto` 模式下按窗口宽度推断桌面布局的下限。
 const double kReaderDesktopLayoutMinWidth = 900.0;
 

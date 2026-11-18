@@ -23,6 +23,9 @@ builds/
 # 只会让 clone 变成一次大下载。`runs/*.json` 是断言证据（173 KB），保留。
 test-materials/inpaint/
 test-materials/legacy/
+# GUI 取证目录（P61/P62）：446 MB 后台截图 / BMP→PNG 像素产物，本地留证但不入库。
+# 结论账本已抽成 runs/*.json 与 worklog 正文，截图本身可再生，clone 不该背上它。
+test-materials/runs/gui_verify_20261115/
 # 第三方参考仓库的克隆（comix-downloader 等，232 MB，自带嵌套 .git）。
 # 它是**取证用的只读参考**，不是本项目源码；进了仓库只会让 clone 变成一次
 # 大规模下载，而且嵌套 .git 会让 git 把它当 gitlink/submodule 处理。

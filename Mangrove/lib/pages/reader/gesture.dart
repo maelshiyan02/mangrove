@@ -72,6 +72,10 @@ class _ReaderGestureDetectorState
           _previousEvent = null;
           return;
         }
+        // P64：指针落在页面上就把键盘焦点还给阅读器。弹层（右键菜单 / 设置 /
+        // 章节抽屉）关闭后焦点会落在裸 FocusScope 上且不会自己恢复，用户
+        // 表现为"用一会儿之后空格翻页失效"。这里是最自然的恢复点。
+        reader.ensureReaderFocus();
         _increaseFingers();
         if (ignoreNextTag) {
           ignoreNextTag = false;
@@ -401,6 +405,12 @@ class _ReaderGestureDetectorState
         onClick: () {
           context.readerScaffold.openChapterDrawer();
         },
+      ),
+      // P64：章节评论入口（与右缘工具栏同一动作），让没开工具栏的用户也能用。
+      MenuEntry(
+        icon: Icons.comment_outlined,
+        text: "Chapter Comments".tl,
+        onClick: () => context.reader.openChapterComments(),
       ),
       MenuEntry(
         icon: Icons.fullscreen,

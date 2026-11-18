@@ -15,6 +15,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:mangrove/foundation/comment_order_policy.dart';
 import 'package:mangrove/foundation/reader_ux_policy.dart';
 
 // 私有别名：headless.dart 同时 import 了 headless_p1_checks.dart，
@@ -51,6 +52,23 @@ String _read(Directory root, String relative) {
   } catch (_) {
     return '';
   }
+}
+
+/// 从（已剥注释的）源码里取出一个顶层类的整段正文，找不到返回空串。
+///
+/// 用于「同一文件里有多个同类页面」的逐类断言：文件级 `contains` 会被
+/// 一个接好的类喂绿，掩盖另一个没接的类（P66 实证：章节评论页接了排序，
+/// 内嵌评论页没接，文件级断言却 PASS）。切分锚点只认行首的顶层声明关键字，
+/// 类体内的缩进 `class` 不会被误当成边界。
+String _topLevelClassBody(String src, String name) {
+  final start = RegExp('^class $name\\b', multiLine: true).firstMatch(src);
+  if (start == null) return '';
+  final from = start.start;
+  final rest = src.substring(start.end);
+  final next = RegExp(r'^class \w', multiLine: true).firstMatch(rest);
+  return next == null
+      ? src.substring(from)
+      : src.substring(from, start.end + next.start);
 }
 
 // ── 故意写坏的实现：只用于「同一判据会不通过」的反向对照 ──────────────
@@ -677,5 +695,483 @@ void runP56Checks(_CheckSink check, {required Directory packageRoot}) {
     jSetting(settingsSrc, 'settingKey: "readerLayoutMode"'),
     jSetting('library;', 'settingKey: "readerLayoutMode"'),
     '阅读设置界面有可切换的三值下拉',
+  );
+}
+
+// ==== P64：单击 / 长按空格 + 焦点自愈 + 评论接线 ====
+//
+// 这几条判据的共同前提：**手感**（真滚起来顺不顺、急刹是否跟手）只能在 GUI
+// 会话里目视确认（A01 §3）；这里钉住的是「参数与接线」，即"改动真的落地了、
+// 而且落地的是这个策略"——源码被改回旧行为、或参数被换成不分单击长按的一档，
+// 对应断言必须变红。
+
+/// 故意写坏的长按速度：没有单击窗口，且恒定 —— 用它证明判据真能区分两种手感。
+double _badHoldSpeed(Duration held) => 2.0;
+
+double _holdDistance(Duration total, {double viewport = 1000}) {
+  const tick = Duration(milliseconds: 16);
+  var sum = 0.0;
+  for (var t = Duration.zero; t < total; t += tick) {
+    sum += readerHoldDelta(held: t, tick: tick, viewportExtent: viewport);
+  }
+  return sum;
+}
+
+void runP64Checks(_CheckSink check, {required Directory packageRoot}) {
+  const tick = Duration(milliseconds: 16);
+
+  // ── 1. 单击窗口内不许有长按位移 ────────────────────────────────
+  final tapWindow = kReaderHoldTriggerDelay - const Duration(milliseconds: 1);
+  _pair(
+    check,
+    'reader.hold_zero_within_tap_window',
+    readerHoldSpeed(tapWindow) == 0 && _holdDistance(tapWindow) == 0,
+    _badHoldSpeed(tapWindow) == 0,
+    '阈值前推 0px（单击仍是"一次半屏缓动"，不是"按住 1px 也算长按"）',
+  );
+
+  // ── 2. 越过阈值立刻起速，且单调不减 ────────────────────────────
+  final samples = <double>[
+    for (var ms = 0; ms <= 1600; ms += 40)
+      readerHoldSpeed(kReaderHoldTriggerDelay + Duration(milliseconds: ms)),
+  ];
+  bool nonDecreasing(List<double> values) {
+    for (var i = 1; i < values.length; i++) {
+      if (values[i] + 1e-9 < values[i - 1]) return false;
+    }
+    return true;
+  }
+
+  // 🔴 「单调不减」对恒定速度也成立 —— 必须再要求**至少一处真增**，否则
+  // 把速度写成一个常数照样能骗过判据（第一版就是这么假绿的）。
+  bool strictIncrease(List<double> values) {
+    for (var i = 1; i < values.length; i++) {
+      if (values[i] > values[i - 1] + 1e-9) return true;
+    }
+    return false;
+  }
+
+  final badSamples = <double>[
+    for (var ms = 0; ms <= 1600; ms += 40) _badHoldSpeed(Duration(milliseconds: ms)),
+  ];
+  _pair(
+    check,
+    'reader.hold_speed_monotonic',
+    nonDecreasing(samples) && strictIncrease(samples) && samples.first > 0,
+    nonDecreasing(badSamples) && strictIncrease(badSamples),
+    '2s 内单调不减 + 至少一处真增 + 起步 > 0；恒定速度必须被拒',
+  );
+
+  // ── 3. 加速到满速后封顶 ────────────────────────────────────────
+  final capped = readerHoldSpeed(
+    kReaderHoldTriggerDelay + kReaderHoldRampUp + const Duration(seconds: 2),
+  );
+  _pair(
+    check,
+    'reader.hold_speed_capped',
+    (capped - kReaderHoldMaxSpeed).abs() < 1e-9 && capped > kReaderHoldStartSpeed,
+    (_badHoldSpeed(const Duration(seconds: 3)) - kReaderHoldMaxSpeed).abs() < 1e-9,
+    '满速 = $kReaderHoldMaxSpeed 视口/秒，且严格快于起步 $kReaderHoldStartSpeed',
+  );
+
+  // ── 4. 长按比单击快：1 秒长按 > 2 次单击 ───────────────────────
+  final oneSecondHold = _holdDistance(const Duration(seconds: 1));
+  final twoTaps = 2 * (1000 * kReaderTurnFraction);
+  _pair(
+    check,
+    'reader.hold_faster_than_taps',
+    oneSecondHold > twoTaps,
+    _holdDistance(const Duration(seconds: 1)) <= 0,
+    '1s 长按推进 ${oneSecondHold.toStringAsFixed(0)}px > 2 次单击 ${twoTaps.toStringAsFixed(0)}px',
+  );
+
+  // ── 5. 速度与视口成比例（不同窗口尺寸不改变手感） ───────────────
+  final wide = _holdDistance(const Duration(seconds: 1), viewport: 2000);
+  _pair(
+    check,
+    'reader.hold_scales_with_viewport',
+    (wide - oneSecondHold * 2).abs() < 1e-6,
+    (wide - oneSecondHold).abs() < 1e-6,
+    '2000 视口的位移恰为 1000 视口的两倍（步长按视口比例给，不写死像素）',
+  );
+
+  // ── 6. 源码接线：按下起算、松开判定，且不再直接吃系统重复 ─────────
+  final readerSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/reader/reader.dart'),
+  );
+  final gestureSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/reader/gesture.dart'),
+  );
+  final toolbarSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/reader/side_toolbar.dart'),
+  );
+  final hubSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/comic_details_page/comments_hub.dart'),
+  );
+  final commentsSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/comic_details_page/comments_page.dart'),
+  );
+  final actionsSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/comic_details_page/actions.dart'),
+  );
+
+  bool wired(String src, String needle) => src.length > 500 && src.contains(needle);
+
+  _pair(
+    check,
+    'reader.hold_keydown_keyup_split',
+    wired(readerSrc, '_beginHold(action)') &&
+        wired(readerSrc, '_endHold();') &&
+        wired(readerSrc, 'Timer.periodic(kReaderHoldTick'),
+    wired('library;', '_beginHold(action)'),
+    'KeyDown 只起算（_beginHold），KeyUp 才判定单击/长按（_endHold），推进由 16ms ticker 负责',
+  );
+  _pair(
+    check,
+    'reader.hold_ignores_os_repeat',
+    !wired(readerSrc, 'event is KeyDownEvent || event is KeyRepeatEvent'),
+    wired(readerSrc, 'event is KeyDownEvent || event is KeyRepeatEvent'),
+    '旧的"KeyDown/KeyRepeat 直接翻页"必须删净：系统重复与自己的 ticker 叠加会忽快忽慢',
+  );
+  _pair(
+    check,
+    'reader.hold_self_brake_on_focus_loss',
+    wired(readerSrc, 'if (!focusNode.hasFocus) {') &&
+        wired(readerSrc, 'kReaderHoldMaxDuration'),
+    wired('library;', 'kReaderHoldMaxDuration'),
+    '焦点被抢走 / 超过安全上限时自己刹车，避免 KeyUp 丢失后页面一路滚到底',
+  );
+
+  // ── 7. 焦点自愈真的接在指针上 ─────────────────────────────────
+  _pair(
+    check,
+    'reader.focus_self_heal_wired',
+    wired(readerSrc, 'FocusManager.instance.addListener(_onFocusManagerChanged)') &&
+        wired(readerSrc, 'void ensureReaderFocus()') &&
+        wired(gestureSrc, 'reader.ensureReaderFocus();'),
+    wired('library;', 'void ensureReaderFocus()'),
+    '弹层关闭后焦点落空必须自动归还：FocusManager 监听 + 指针按下两处都接上',
+  );
+
+  // ── 7b. 焦点自愈守卫的真值表（纯函数，直接喂四种"焦点现场"） ────────
+  // 只验源码接线是不够的：条件写反了照样能通过 contains。这里把 4 种现场
+  // 直接喂进纯函数，并要求"该补的补、不该补的一律不动"。
+  bool guard({
+    bool routeIsCurrent = true,
+    bool hasFocus = false,
+    bool editableFocused = false,
+    bool primaryIsBareScope = true,
+  }) =>
+      shouldReaderRestoreFocus(
+        routeIsCurrent: routeIsCurrent,
+        hasFocus: hasFocus,
+        editableFocused: editableFocused,
+        primaryIsBareScope: primaryIsBareScope,
+      );
+
+  // 故障实现：只看"我自己有没有焦点"，其余全忽略（最容易写出来的那种）。
+  bool badGuard({
+    bool routeIsCurrent = true,
+    bool hasFocus = false,
+    bool editableFocused = false,
+    bool primaryIsBareScope = true,
+  }) =>
+      !hasFocus;
+
+  final truthTableOk = guard() &&
+      !guard(hasFocus: true) &&
+      !guard(routeIsCurrent: false) &&
+      !guard(primaryIsBareScope: false) &&
+      !guard(editableFocused: true);
+  final badTruthTableOk = badGuard() &&
+      !badGuard(hasFocus: true) &&
+      !badGuard(routeIsCurrent: false) &&
+      !badGuard(primaryIsBareScope: false) &&
+      !badGuard(editableFocused: true);
+  _pair(
+    check,
+    'reader.focus_guard_truth_table',
+    truthTableOk,
+    badTruthTableOk,
+    '只在「路由当前 + 自己没焦点 + 不是输入框 + primary 是裸 Scope」时补；'
+        '其余四种一律不动（少一个条件就是抢焦点）',
+  );
+  _pair(
+    check,
+    'reader.focus_guard_wired',
+    wired(readerSrc, 'shouldReaderRestoreFocus('),
+    !wired(readerSrc, 'shouldReaderRestoreFocus('),
+    'ensureReaderFocus 必须走这个纯函数，不能在 widget 里另写一套条件',
+  );
+
+  // ── 8. 右缘工具栏评论 = 当前章节，不再是占位 ────────────────────
+  _pair(
+    check,
+    'reader.comments_toolbar_wired',
+    wired(toolbarSrc, 'reader.openChapterComments') &&
+        !wired(toolbarSrc, 'Comments coming soon'),
+    wired(toolbarSrc, 'Comments coming soon'),
+    '评论按钮接 openChapterComments，占位提示必须消失',
+  );
+  _pair(
+    check,
+    'reader.comments_uses_current_chapter',
+    wired(readerSrc, 'chapterCommentsLoader == null') &&
+        wired(readerSrc, 'chapters.ids.elementAt(chapter - 1)') &&
+        wired(readerSrc, 'ChapterCommentsPage('),
+    wired('library;', 'chapters.ids.elementAt(chapter - 1)'),
+    '进门就取当前话的 epId（不是作品 id，也不是第 1 话）',
+  );
+
+  // ── 9. 详情页评论中心：双分类 + 章节选择 ───────────────────────
+  _pair(
+    check,
+    'detail.comments_hub_has_two_tabs',
+    wired(hubSrc, 'ButtonSegment(') &&
+        wired(hubSrc, 'epId: current.id') &&
+        wired(actionsSrc, 'CommentsHubPage(data: comic, source: source)'),
+    wired('library;', 'CommentsHubPage(data: comic, source: source)'),
+    '作品评论 / 章节评论两个分栏，章节分栏把 epId 透给同一套列表渲染',
+  );
+  _pair(
+    check,
+    'detail.comments_hub_chapter_picker',
+    wired(hubSrc, 'showDialog<int>') && wired(hubSrc, 'controller.text.trim()'),
+    wired('library;', 'showDialog<int>'),
+    '章节选择器可搜索（上百话时纯下拉不可用）',
+  );
+  _pair(
+    check,
+    'detail.comments_page_supports_ep',
+    wired(commentsSrc, 'chapterCommentsLoader') &&
+        wired(commentsSrc, 'sendChapterCommentFunc') &&
+        wired(commentsSrc, 'if (widget.embedded) return body;'),
+    wired('library;', 'if (widget.embedded) return body;'),
+    '同一套列表既能独立成页、也能嵌进分栏；发送按钮按模式选 sendChapterCommentFunc',
+  );
+
+  // ── 10. 拷贝侧：章节留言走 App 接口，不是网页端 ─────────────────
+  final copySrc = _read(packageRoot, '../comic_source/copy_manga(5).js');
+  final copyRuntime = _read(packageRoot, '../data/comic_source/copy_manga(5).js');
+  // 只看「loadChapterComments 这个函数体内用的是哪种通道」——整份文件里同时存在
+  // 网页端接口（详情/章节的降级通道），拿全文 contains 当反向口会把两条通道混读。
+  String between(String src, String from, String to) {
+    final a = src.indexOf(from);
+    if (a < 0) return '';
+    final b = src.indexOf(to, a + from.length);
+    if (b < 0) return '';
+    return src.substring(a, b);
+  }
+
+  final chapterCommentsBody = between(
+    copySrc,
+    'loadChapterComments:',
+    'sendChapterComment:',
+  );
+  _pair(
+    check,
+    'copy.chapter_comments_app_api',
+    chapterCommentsBody.contains('/api/v3/roasts?chapter_id=') &&
+        !chapterCommentsBody.contains('webBase'),
+    chapterCommentsBody.isEmpty ||
+        chapterCommentsBody.contains('/api/kb/web/'),
+    '章节留言函数体里只有 App 端 roasts（网页端评论区是关的，只有手机 App 能看）',
+  );
+  _pair(
+    check,
+    'copy.runtime_copy_in_sync',
+    copyRuntime.isNotEmpty && copyRuntime == copySrc,
+    copyRuntime.isNotEmpty && copyRuntime != copySrc,
+    'data/comic_source 是运行时真正加载的副本，必须与源文件逐字节一致',
+  );
+}
+
+// ==== P65：章号胶囊实时刷新 + 评论时间排序 ====
+//
+// 章号 bug 的现场：点下一话后左下角已是「第163话」，右上角仍停在
+// `Ch.162 / 229`。根因不是没切章，而是 const 胶囊只在父级碰巧 rebuild 时
+// 才读一次章号 ⇒ 这里钉住「setter 推进 revision + 显示方订阅」这条契约。
+void runP65Checks(_CheckSink check, {required Directory packageRoot}) {
+  final cap162 = readerChapterCaption(162, 229);
+  final cap163 = readerChapterCaption(163, 229);
+  _pair(
+    check,
+    'reader.chapter_caption_tracks_number',
+    cap162 == 'Ch.162 / 229' && cap163 == 'Ch.163 / 229' && cap162 != cap163,
+    cap162 == cap163,
+    '章号 162→163 时胶囊文案必须不同（故障=写死章号）',
+  );
+
+  final readerSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/reader/reader.dart'),
+  );
+  final capsuleSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/reader/chapter_capsule.dart'),
+  );
+  bool notifierWired(String src) =>
+      src.contains('set chapter(int value)') &&
+      src.contains('chapterRevision.value++') &&
+      src.contains('chapterRevision.dispose()');
+  bool capsuleWired(String src) =>
+      src.contains('ValueListenableBuilder<int>') &&
+      src.contains('chapterRevision') &&
+      src.contains('readerChapterCaption(current, total)');
+  _pair(
+    check,
+    'reader.chapter_revision_subscription',
+    notifierWired(readerSrc) && capsuleWired(capsuleSrc),
+    notifierWired('class Fake { int chapter = 1; }') &&
+        capsuleWired('Text(chapter)'),
+    '章号 setter 推进 revision、dispose 回收、胶囊订阅；故障=任一环节断开',
+  );
+
+  bool timeKeysOk(int? Function(String?) f) =>
+      f('2026-11-11 13:05:48') != null &&
+      f('1762851948') == 1762851948 * 1000000 &&
+      f('1700000000123') == 1700000000123 * 1000 &&
+      f('') == null &&
+      f('not-a-time') == null;
+  int? brokenTimeKey(String? _) => null;
+  _pair(
+    check,
+    'comments.time_key_formats',
+    timeKeysOk(commentTimeKey),
+    timeKeysOk(brokenTimeKey),
+    'ISO/秒/毫秒都要能比较，空串与非时间判未知; '
+    'iso=${commentTimeKey('2026-11-11 13:05:48')} '
+    'sec=${commentTimeKey('1762851948')} '
+    'ms=${commentTimeKey('1700000000123')} '
+    'empty=${commentTimeKey('')} bad=${commentTimeKey('not-a-time')}',
+  );
+
+  final times = [
+    '2026-11-16 10:00:00',
+    '2026-11-11 13:05:48',
+    '2026-11-14 09:00:00',
+  ];
+  bool orderOk(List<int> Function(List<String?>, CommentOrder) f) {
+    final old = f(times, CommentOrder.oldestFirst);
+    final neu = f(times, CommentOrder.newestFirst);
+    return old.length == 3 &&
+        old[0] == 1 &&
+        old[1] == 2 &&
+        old[2] == 0 &&
+        neu[0] == 0 &&
+        neu[1] == 2 &&
+        neu[2] == 1;
+  }
+
+  List<int> brokenOrder(List<String?> t, CommentOrder _) =>
+      List<int>.generate(t.length, (i) => i);
+  _pair(
+    check,
+    'comments.order_oldest_and_newest',
+    orderOk(orderedCommentIndices),
+    orderOk(brokenOrder),
+    '三条真时间必须给出旧→新 [1,2,0] 与新→旧 [0,2,1]（故障=原序不动）',
+  );
+
+  final tieTimes = ['2026-11-11 10:00:00', 'not-a-time', '2026-11-11 10:00:00'];
+  final stable = orderedCommentIndices(tieTimes, CommentOrder.oldestFirst);
+  _pair(
+    check,
+    'comments.order_stable_when_unknown',
+    stable.length == 3 && stable[0] == 0 && stable[1] == 2 && stable[2] == 1,
+    brokenOrder(tieTimes, CommentOrder.oldestFirst).join(',') == stable.join(','),
+    '同秒保原序、未知时间沉底；故障=原样返回 [0,1,2]',
+  );
+
+  bool firstPageOk(
+    int Function({required int? maxPage, required CommentOrder order}) f,
+  ) =>
+      f(maxPage: 3, order: CommentOrder.oldestFirst) == 3 &&
+      f(maxPage: 3, order: CommentOrder.newestFirst) == 1 &&
+      f(maxPage: null, order: CommentOrder.oldestFirst) == 1;
+  int brokenFirstPage({required int? maxPage, required CommentOrder order}) => 1;
+  _pair(
+    check,
+    'comments.first_page_from_oldest',
+    firstPageOk(commentFirstPage),
+    firstPageOk(brokenFirstPage),
+    '旧→新首屏从服务端最后一页开始（故障=永远 offset 0）',
+  );
+
+  bool nextPageOk(
+    int? Function({
+      required int page,
+      required int? maxPage,
+      required CommentOrder order,
+    }) f,
+  ) {
+    final old = [
+      f(page: 3, maxPage: 3, order: CommentOrder.oldestFirst),
+      f(page: 2, maxPage: 3, order: CommentOrder.oldestFirst),
+      f(page: 1, maxPage: 3, order: CommentOrder.oldestFirst),
+    ];
+    final neu = [
+      f(page: 1, maxPage: 3, order: CommentOrder.newestFirst),
+      f(page: 2, maxPage: 3, order: CommentOrder.newestFirst),
+      f(page: 3, maxPage: 3, order: CommentOrder.newestFirst),
+    ];
+    final asText = (int? v) => v?.toString() ?? 'null';
+    return old.map(asText).join(',') == '2,1,null' &&
+        neu.map(asText).join(',') == '2,3,null';
+  }
+
+  int? brokenNextPage({
+    required int page,
+    required int? maxPage,
+    required CommentOrder order,
+  }) =>
+      null;
+  _pair(
+    check,
+    'comments.next_page_direction',
+    nextPageOk(commentNextPage),
+    nextPageOk(brokenNextPage),
+    '旧→新往回翻页、新→旧往前翻页；故障=永远无下一页',
+  );
+
+  final detailSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/comic_details_page/comments_page.dart'),
+  );
+  final chapterSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/reader/chapter_comments.dart'),
+  );
+  bool commentPageWired(String src) =>
+      src.contains('CommentOrder') &&
+      src.contains('orderComments') &&
+      src.contains('commentFirstPage') &&
+      src.contains('commentNextPage') &&
+      // 方法定义 + build() 里真实调用，两处都要在；只定义不挂等于没有排序条。
+      'buildOrderBar'.allMatches(src).length >= 2 &&
+      src.contains('_order = CommentOrder.oldestFirst');
+  // P66：逐**类**取值，不再整份文件 contains —— 否则同一个文件里一个页面接好
+  // 排序就会把没接的另一个页面喂绿。三处评论区任一没接都必须红。
+  final detailState = _topLevelClassBody(detailSrc, '_CommentsPageState');
+  final chapterState = _topLevelClassBody(chapterSrc, '_ChapterCommentsPageState');
+  final embeddedState =
+      _topLevelClassBody(chapterSrc, '_EmbeddedChapterCommentsPageState');
+  _pair(
+    check,
+    'comments.both_pages_use_order_policy',
+    commentPageWired(detailState) &&
+        commentPageWired(chapterState) &&
+        commentPageWired(embeddedState),
+    commentPageWired('class Fake {}'),
+    '作品/独立章节/章末内嵌三处评论页都接排序条与反向分页、默认旧→新'
+    '（故障=空源码）; bodies=${[detailState.length, chapterState.length, embeddedState.length].join(",")}',
+  );
+
+  final tr = _read(packageRoot, 'assets/translation.json');
+  _pair(
+    check,
+    'comments.order_labels_localized',
+    tr.contains('"Oldest first"') &&
+        tr.contains('"Newest first"') &&
+        tr.contains('"从旧到新"') &&
+        tr.contains('"从新到旧"'),
+    !tr.contains('"Oldest first"'),
+    '排序条两条文案必须进 translation.json（故障=缺键时界面露英文）; trLen=${tr.length}',
   );
 }

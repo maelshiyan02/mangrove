@@ -47,7 +47,16 @@ class Baozi extends ComicSource {
   //   → 逐页去重 added=0 提前 break → 整章恒被截断成 50 页(实测"秘密小姐"第11话
   //   只显 50 页, 实有 144 页)。修复: loadInfo 从章节 href 提取后缀存盘, loadEp 拼
   //   到 comicId 后。appcn 兜底路径维持不带后缀(P48 行为, 未实测验证)。
-  version = "1.2.9";
+  // 🔴 2026-11-15 (Mangrove P60 / A方案借鉴 Scrapling) v1.3.0:
+  //   ① 修复 v1.2.9 真回归: appcn 官方域回落调用已删除的 collectPages → 必抛
+  //      "collectPages is not defined", P48"最新章只有 App 能看"自愈 100% 断裂;
+  //      改为内联逐页收集, 不依赖引擎全局注入。
+  //   ② 分页对账: 旧 `pgAdded===0 break` 在已知 total 时把"后缀缺失被钳制回
+  //      首页"误判为到底 → 整章静默截断成 50 图; 现改为 total 已知时继续抓,
+  //      末尾按 productivePages 对账, 钳制则抛 DomainBlock 换镜像/回落 appcn。
+  //   验证桩 test-materials/runs/baozi_p48_check.cjs 25/25; 两条故障注入各只红
+  //   目标子集(移除对账→红测试5两条; 回退 collectPages→红回落3条)。
+  version = "1.3.0";
 
   minAppVersion = "1.0.0";
 
@@ -887,6 +896,12 @@ class Baozi extends ComicSource {
           }
           let pager = pagerOf(firstRes.body);
           let total = pager ? pager.total : null;
+          // 🔴 A 方案(2026-11-15) 分页对账: productivePages = 拿到新图的页数。
+          //   首页已 push 过, 若首页有图则记 1。正常分页章每页都有新图
+          //   (实测 50/54/54/22), 而 per-comic 后缀缺失会被站点钳制回第 1 页,
+          //   导致第 2 页起 added=0 —— 旧逻辑把它当"到底"提前 break, 于是
+          //   "整章 150 图只拿到 50 图"。对账判据见循环后的 DomainBlock。
+          let productivePages = added > 0 ? 1 : 0;
 
           // 跟随分页: 第 2 页起用带后缀的 effectiveId
           for (let page = 2; page <= 200; page++) {
@@ -907,8 +922,27 @@ class Baozi extends ComicSource {
               if (total == null) total = pg.total;
             }
             const pgAdded = pushImages(parseImages(res.body));
-            if (pgAdded === 0) break; // 无新图即到底(兼容无分页标记站点)
+            if (pgAdded > 0) {
+              productivePages++;
+            } else if (total == null) {
+              // 仅无分页标记的站点形态才把"无新图"当作到底
+              break;
+            }
+            // total 已知时即使某页 added=0 也不提前 break, 继续抓到 total,
+            // 由末尾对账决定是"钳制失效"还是"正常末页无新增"。
             if (total != null && page >= total) break;
+          }
+
+          // 🔴 A 方案分页对账(可真红): 站点明确声明 total>1 页, 却只有首页
+          //   贡献了新图(productivePages<2, 后续页全被钳制回首页) ⇒ 判定该
+          //   镜像分页失效, 抛 DomainBlock 触发换镜像; 全部镜像失效则回落官方
+          //   app 域。这样"150 图只拿到 50 图"不再静默通过, 而是走既有兜底。
+          //   正常单页章(total 缺省/1)与正常多页章(每页有新增)均不触发。
+          if (total != null && total > 1 && productivePages < 2) {
+            throw new Error(
+              `DomainBlock: chapter pagination clamped (declared ${total} pages, ` +
+                `only ${productivePages} yielded images)`
+            );
           }
           return collected;
         });
@@ -931,14 +965,61 @@ class Baozi extends ComicSource {
         if (!this._isFallbackError(webError)) {
           throw webError;
         }
+        // 🔴 A 方案(2026-11-15) 真 bug 修复: v1.2.9 重构网页路径为内联循环后
+        //   删除了 collectPages 定义, 却遗漏了这里的调用 —— 一旦走官方 app 域
+        //   回落必抛 `collectPages is not defined`, P48「最新章只有 App 能看」
+        //   自愈通道 100% 断裂。改为内联收集(与网页路径同构), 不再依赖任何
+        //   引擎全局注入。CloudflareException 仍原样透传(见上方注释)。
         const appBase = "https://appcn.baozimh.com/baozimhapp";
-        const images = await collectPages(async (page) => {
+        const appSeen = new Set();
+        const appImages = [];
+        let appTotal = null;
+        for (let page = 1; page <= 200; page++) {
           const res = await Network.get(
             `${appBase}/comic/chapter/${comicId}/${pagePath(page)}`
           );
-          return { status: res.status, body: res.body };
-        });
-        return { images: images };
+          if (!res || res.status !== 200) {
+            if (page === 1) {
+              throw `Invalid status code: ${res ? res.status : "null"}`;
+            }
+            if (appTotal != null && page <= appTotal) {
+              throw new Error(
+                `DomainBlock: app chapter page ${page} status ${res ? res.status : "null"}`
+              );
+            }
+            break;
+          }
+          const pg = pagerOf(res.body);
+          if (pg) {
+            if (pg.current > pg.total) break;
+            if (appTotal == null) appTotal = pg.total;
+          }
+          let added = 0;
+          for (const u of parseImages(res.body)) {
+            if (appSeen.has(u)) continue;
+            appSeen.add(u);
+            appImages.push(u);
+            added++;
+          }
+          if (page === 1) {
+            if (appImages.length === 0) {
+              throw new Error("DomainBlock: empty chapter images (app fallback)");
+            }
+            // 与网页路径同款"首图残缺/串错书"识别(样本 v_app152 里 91 图全含
+            // 正确 slug, 不触发)。P48 CloudflareException 由 Network.get 直接
+            // 抛, 不经此分支改写, 自动验证入口保持有效。
+            const slugOk = appImages.some((u) => u.indexOf(comicId) >= 0);
+            if (!slugOk && appImages.length < 5) {
+              throw new Error(
+                "DomainBlock: app fallback images reference a different comic"
+              );
+            }
+          } else if (added === 0 && appTotal == null) {
+            break; // 无分页标记时靠"无新图"到底
+          }
+          if (appTotal != null && page >= appTotal) break;
+        }
+        return { images: appImages };
       }
     },
 

@@ -32,14 +32,24 @@ const loadSample = (f) => {
   process.exit(3);
 };
 const BROKEN = loadSample("v_151.html"); // 镜像 152 残缺
-const GOOD = loadSample("v_150.html"); // 镜像 151 正常
+const GOOD = loadSample("v_150.html"); // 镜像 151 正常(首页 title=第151话(1/2))
 const APP = loadSample("v_app152.html"); // 官方 152 完整
+
+// A 方案(P60) 合成"正常第2页": 基于真实首页 v_150.html, 把 title 改成 (2/2),
+// 并把每张图 URL 加 `p2-` 前缀使其与首页不同(模拟站点第2页确实有新图)。
+// 依据: v_150.html 的 <title> 明写 "第151话(1/2)", 真实第2页应有新图 ——
+// P48 旧桩把 0_150_2.html 也映射回首页副本, 相当于一直在模拟"分页钳制",
+// 这才让"正常章"恰好只有 50 图。构造该页才能正确验 A 方案分页对账。
+const GOOD_P2 = GOOD
+  .replace("<title>第151话(1/2)", "<title>第151话(2/2)")
+  .replace(/\/(\d+)\.jpg/g, "/p2-$1.jpg");
 
 // ---- 最小框架桩 ----
 class ComicSource {}
 class Cookie { constructor(o) { Object.assign(this, o || {}); } }
 let appcnHeaders = null; // 记录回落请求实际发出的头
 let appcnForbidden = false; // 故障注入开关: 模拟官方域 CF 挑战
+let clampMirrorPages = false; // A方案故障注入: 镜像第2页返回首页副本(模拟后缀缺失被钳制)
 const Network = {
   get: async (url, headers) => {
     if (url.includes("appcn.baozimh.com")) {
@@ -49,8 +59,15 @@ const Network = {
       if (appcnForbidden) throw new Error("CloudflareException: " + url);
       return { status: 200, body: APP };
     }
+    // 正常 151 章的分页: 首页 (1/2)=GOOD, 第2页 (2/2)=GOOD_P2。
+    // 注意匹配顺序: 必须先判 `_2` 再判 `0_150`(后者是前者的子串)。
+    if (url.includes("0_150")) {
+      if (url.includes("0_150_")) {
+        return { status: 200, body: clampMirrorPages ? GOOD : GOOD_P2 };
+      }
+      return { status: 200, body: GOOD };
+    }
     if (url.includes("0_151")) return { status: 200, body: BROKEN }; // 残缺 152
-    if (url.includes("0_150")) return { status: 200, body: GOOD }; // 正常 151
     return { status: 200, body: GOOD };
   },
   post: async () => ({ status: 200, body: "{}" }),
@@ -163,7 +180,7 @@ console.log("\n=== 测试3a: 残缺 152 章 → 回落官方域拿到完整 91 �
   assert(result.images.every((u) => u.includes("baozicdn.com")),
     "图来自官方域 baozicdn.com");
 })().then(() => {
-  console.log("\n=== 测试3b: 正常 151 章 → 不误伤，拿 50 图 ===");
+  console.log("\n=== 测试3b: 正常 151 章(1/2) → 两页拿全 100 图，不误回落 ===");
   return (async () => {
     let result;
     try {
@@ -173,10 +190,12 @@ console.log("\n=== 测试3a: 残缺 152 章 → 回落官方域拿到完整 91 �
       result = { images: [] };
     }
     assert(result && Array.isArray(result.images), "loadEp 返回 {images}");
-    assert(result.images.length === 50,
-      "正常章拿到 50 张 (实际 " + result.images.length + ")");
+    assert(result.images.length === 100,
+      "正常 (1/2) 章拿到两页共 100 张 (实际 " + result.images.length + ")");
     assert(result.images.every((u) => u.includes(COMIC_ID)),
       "所有图含正确 slug");
+    assert(result.images.every((u) => u.includes("s1.bzcdn.net")),
+      "正常章不回落 appcn(图仍来自镜像域 s1.bzcdn.net)");
   })();
 }).then(() => {
   console.log("\n=== 测试4a: 回落请求不得覆盖 UA（交由引擎注入 webUA）===");
@@ -200,6 +219,27 @@ console.log("\n=== 测试3a: 残缺 152 章 → 回落官方域拿到完整 91 �
     assert(/CloudflareException/.test(msg), "消息保留 CloudflareException 前缀(自动验证入口仍可识别) (实际: " + msg + ")");
     assert(!/DomainChallenge/.test(msg), "没有被源改写成 DomainChallenge 之类的自造错误");
     appcnForbidden = false;
+  })();
+}).then(() => {
+  console.log("\n=== 测试5: A方案分页对账 — 镜像钳制(第2页=首页副本)不得静默截断 ===");
+  // 注入"后缀缺失被钳制": 镜像第2页返回首页副本, added 恒 0。
+  // 旧逻辑会 `pgAdded===0 break` → 静默返回 50 图(用户症状"150 只拿 50")。
+  // A 方案应对账抛 DomainBlock → 换镜像全失败 → 回落 appcn 拿全 86 图。
+  clampMirrorPages = true;
+  return (async () => {
+    let result;
+    try {
+      result = await b.comic.loadEp(COMIC_ID, "150"); // (1/2) 但第2页被钳制
+    } catch (e) {
+      console.log("  loadEp 抛错:", String((e && e.message) || e));
+      result = { images: [] };
+    }
+    assert(result && Array.isArray(result.images), "loadEp 返回 {images}");
+    assert(result.images.length >= 80,
+      "钳制时不静默截断, 回落 appcn 拿全章 (实际 " + result.images.length + " 张；旧逻辑会是 50)");
+    assert(result.images.every((u) => u.includes("baozicdn.com")),
+      "钳制后图来自官方域 baozicdn.com(确实走了回落)");
+    clampMirrorPages = false; // 还原, 避免污染后续
   })();
 }).then(() => {
   console.log("\n========== 结果: " + pass + " 通过, " + fail + " 失败 ==========");

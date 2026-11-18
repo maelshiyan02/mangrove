@@ -1,0 +1,240 @@
+{
+  "round": "P63",
+  "date": "2026-11-16",
+  "built_at": "2026-11-16T00:10:28+08:00",
+  "binary": "builds/mangrove/mangrove.exe (app.so 00:10:28)",
+  "build_verdict": {
+    "wrapper": "=== BUILD_OK ===",
+    "flutter_analyze_errors": 0,
+    "comic_source_version": "1.9.1",
+    "source_md5_match": "c30ca53288b19a582c877c42f1738deb (comic_source == data/comic_source)"
+  },
+  "requirements": [
+    {
+      "id": 1,
+      "ask": "压缩上下文",
+      "verdict": "PASS",
+      "evidence": [
+        "交接摘要 + 本 worklog 作为收口后可复用记录"
+      ]
+    },
+    {
+      "id": 2,
+      "ask": "调整 clash 连接",
+      "verdict": "PASS",
+      "detail": "🌩️ Cloudflare 组由 '🔰 选择节点'(澳大利亚Y01) 改为 DIRECT；PUT /proxies 返回 204",
+      "rollback_value": "🔰 选择节点",
+      "evidence": [
+        "3 轮 × 10 域名 = 29/30 通",
+        "cn.kukuc.co 200 in 1.40/1.48/1.46s",
+        "签名搜索 5/5 关键词有数据"
+      ]
+    },
+    {
+      "id": 3,
+      "ask": "修复卡顿",
+      "verdict": "PASS",
+      "root_cause": "持久化 _adaptive_delay=38400 被 throttle() 当作每次请求间隔；章节重试 6 次指数退避",
+      "fix": "throttleBase=800 与退避解耦; backoffMaxSession=8000 夹紧; loadEp 重试 6→3 单次封顶 8s; 清除持久化残留；storeState() 加 mounted 守卫",
+      "evidence": [
+        "124 话章节列表 23:58:28 → 23:58:32 = 4s（修复前 >20s）",
+        "119 话 ~5s",
+        "57 话 ~3-7s (p63_66_state.png → p63_67_wait2.png)"
+      ]
+    },
+    {
+      "id": 4,
+      "ask": "修复拷贝漫画空白 + 多漫画实测",
+      "verdict": "PASS",
+      "root_causes": [
+        "ensureChannel 探针用 homeIndex.recComics，该接口匿名 region=0 下恒空 → 自锁 12h",
+        "webSearch 空列表静默返回 [] 冒充无结果",
+        "详情/章节软风控 markAppDead()，把搜索一起拖死",
+        "【本轮新发现】本地下载记录(DB 投影)与磁盘真相不一致 → 阅读器把 PathNotFoundException 直接显示给用户"
+      ],
+      "fix": [
+        "探针改 /api/v3/search/comic，探活成功即 clearAppDead()",
+        "webSearch 空列表显式抛错",
+        "详情/章节软风控按接口分流直降网页端",
+        "reader/images.dart: 网络漫画本地读失败回落网络通道；type==local 仍如实报错"
+      ],
+      "fault_injection": [
+        {
+          "inject": "探针改回 homeIndex",
+          "result": "PASS=14 FAIL=5",
+          "red_only": [
+            "A",
+            "A'",
+            "B",
+            "C",
+            "I'"
+          ]
+        },
+        {
+          "inject": "删除空列表抛错",
+          "result": "PASS=16 FAIL=3",
+          "red_only": [
+            "E",
+            "E'",
+            "I''"
+          ]
+        }
+      ],
+      "baseline_harness": {
+        "file": "test-materials/runs/copy_v191_channel_check.cjs",
+        "result": "PASS=19 FAIL=0 SELFTEST PASS"
+      },
+      "comics_tested": [
+        {
+          "title": "秘密小姐",
+          "chapters": 124,
+          "reader": "Ch.23/124, 第23话 32/75, 100%",
+          "shot": "p63_26_read1_after.png"
+        },
+        {
+          "title": "秘密小姐（另一话）",
+          "chapters": 124,
+          "reader": "Ch.30/124, 第30话 1/63",
+          "shot": "p63_29_open2_after.png"
+        },
+        {
+          "title": "试着换个类型吧",
+          "chapters": 119,
+          "reader": "Ch.1/119, 第01话 1/8",
+          "shot": "p63_38_read3_wait.png"
+        },
+        {
+          "title": "试卷伪装甜点吧",
+          "chapters": null,
+          "reader": "详情页正常打开",
+          "shot": "p63_35_detail3.png"
+        },
+        {
+          "title": "那個大公的華麗婚姻騙局",
+          "chapters": 69,
+          "reader": "修复前白屏报错 → 修复后 Ch.2/69 (1/112) 与 Ch.3/69 (1/99) 均出图",
+          "shot": [
+            "p63_49_state.png",
+            "p63_58_state.png",
+            "p63_63_state.png"
+          ]
+        },
+        {
+          "title": "大公女的寵物戀人",
+          "chapters": 58,
+          "reader": "Ch.10/58, 第10話 1/30",
+          "shot": "p63_68_state.png"
+        }
+      ],
+      "keyword_searches": [
+        {
+          "q": "恶女",
+          "result": "Page 1/3, 25+ 卡片, 来源均 拷贝漫画"
+        },
+        {
+          "q": "让我们转变剧情风格",
+          "result": "1 条"
+        },
+        {
+          "q": "大公",
+          "result": "Page 1/6, 25+ 卡片"
+        },
+        {
+          "q": "恶女重生",
+          "result": "Page 1/11, 25+ 卡片"
+        }
+      ],
+      "local_regression": {
+        "title": "秘密小姐(本地库 type=local)",
+        "result": "第1話 1/230 正常出图",
+        "shot": "p63_72_state.png"
+      }
+    },
+    {
+      "id": 5,
+      "ask": "不要被 CF 验证按钮误导",
+      "verdict": "PASS",
+      "evidence": [
+        "全程未点击 App 内 验证 CF / Verify CF",
+        "未使用内置浏览器访问拷贝/包子",
+        "全部走源站 API + 网页端 SSR 通道"
+      ]
+    },
+    {
+      "id": 6,
+      "ask": "恢复字体（去掉描边阴影）",
+      "verdict": "PASS",
+      "change": "app_theme.dart 删除 buildTextOutline()/withTextOutline() 及两处调用 (-64 行)",
+      "grep": "withTextOutline|buildTextOutline|halo → 无残留调用",
+      "evidence": [
+        "p63_00_launch.png 目视无阴影/重影"
+      ]
+    }
+  ],
+  "ab_reverse_control_reader_fix": {
+    "same_input": "搜索『大公』→ 第3行第3张 → 第02話",
+    "old_binary": {
+      "detail_shot": "p63_48_state.png",
+      "detail_md5": "269cf576c74d72909a89349e68e2ff80",
+      "reader_shot": "p63_49_state.png",
+      "reader_result": "PathNotFoundException: Directory listing failed ... (errno=3) 白屏"
+    },
+    "new_binary": {
+      "detail_shot": "p63_57_state.png",
+      "detail_md5": "269cf576c74d72909a89349e68e2ff80",
+      "reader_shot": "p63_58_state.png",
+      "reader_result": "Ch.2/69, 第02話 1/112, 正常出图"
+    },
+    "note": "详情页两版 PNG 逐字节相同 ⇒ 输入与状态一致，差异仅来自 images.dart 改动"
+  },
+  "data_level_findings": [
+    {
+      "table": "data/local.db comics",
+      "id": "ngdgdhlhypj",
+      "comic_type": 557997769,
+      "directory": "那個大公的華麗婚姻騙局",
+      "downloadedChapters": "5 个 UUID（含第2话 28911d66-632e-11ee-9733-d3d228a76de6）",
+      "disk_truth": "目录存在，71 个子目录，全部为 'N [copymanga]' 命名；UUID 子目录不存在",
+      "impact": "前5话每次先跑一趟失败的本地读取再回落网络（亚秒级）；详情页章节格可能仍显示已下载",
+      "status": "未修（不擅自改用户数据，留给下载侧磁盘对账）"
+    },
+    {
+      "table": "data/local.db comics",
+      "issue": "同标题的本地导入记录(id=8)与网络记录(ngdgdhlhypj)共用同一漫画目录",
+      "impact": "网络下载会往同一目录写 UUID 命名章节，与导入的 'N [copymanga]' 并存",
+      "status": "未修（需单独立项：目录归属规则）"
+    }
+  ],
+  "uncommitted_changes": [
+    "Mangrove/lib/foundation/app_theme.dart",
+    "Mangrove/lib/components/comic.dart",
+    "Mangrove/lib/pages/reader/images.dart",
+    "comic_source/copy_manga(5).js",
+    "comic_source/baozi.js (P60 遗留)",
+    "venera-configs-main/baozi.js (P60 遗留, 本轮未动, mtime 20:45)"
+  ],
+  "notes": [
+    "本轮未 commit / 未 push",
+    "GUI 全程后台（PostMessageW + PrintWindow(...,2)），未抢焦点",
+    "GUI 测试实例 PID 5532 收工已关闭"
+  ],
+  "runtime_state_after_test": {
+    "file": "data/comic_source/copy_manga.data",
+    "checked_at": "2026-11-16T00:38+08:00",
+    "absent_keys": [
+      "_adaptive_delay",
+      "_app_dead_until"
+    ],
+    "meaning": "本轮在修复后的二进制上跑完 4 个关键词搜索 + 6 本漫画（含 3 话章节阅读/回落）后，持久化状态里既没有重新长出 _adaptive_delay，也没有 12h 死标记 ⇒ 退避夹紧与通道自愈都真的生效，不是一次性清数据",
+    "present_keys_sample": [
+      "_last_req_time",
+      "_exclude_deviceinfo",
+      "_exclude_device",
+      "settings",
+      "_web_hosts",
+      "_search_api",
+      "_api_candidates",
+      "_api_host"
+    ]
+  }
+}

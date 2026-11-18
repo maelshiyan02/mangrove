@@ -1,0 +1,33 @@
+{
+  "baseline_checks": 75,
+  "baseline_green": true,
+  "cases": [
+    {
+      "case": "embedded_page_default_newest",
+      "verdict": "PASS",
+      "why": "内嵌页默认退回拷贝的「最新在前」；旧文件级断言会被独立页喂绿，逐类断言必须红",
+      "expect_red": [
+        "comments.both_pages_use_order_policy"
+      ],
+      "actual_red": [
+        "comments.both_pages_use_order_policy"
+      ],
+      "restored": true,
+      "sha256": "8023a19c7665b2fb03cede141654d5f60ace3bac04e96724a6f367bf02589184"
+    },
+    {
+      "case": "embedded_page_no_order_bar",
+      "verdict": "PASS",
+      "why": "内嵌页去掉排序条；逐类断言必须红",
+      "expect_red": [
+        "comments.both_pages_use_order_policy"
+      ],
+      "actual_red": [
+        "comments.both_pages_use_order_policy"
+      ],
+      "restored": true,
+      "sha256": "8023a19c7665b2fb03cede141654d5f60ace3bac04e96724a6f367bf02589184"
+    }
+  ],
+  "overall": "PASS"
+}

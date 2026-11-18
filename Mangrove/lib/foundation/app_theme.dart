@@ -4,60 +4,10 @@ import 'package:flutter/material.dart';
 import 'app.dart';
 import 'appdata.dart';
 
-/// 全站文字描边：给每个 [TextStyle] 叠一圈「背景同色」的极细光晕。
-///
-/// Flutter 没有全局 stroke 能力（真描边要给每段文字叠一个
-/// `PaintStyle.stroke` 的副本，无法在主题层统一），所以用 8 方向的零模糊
-/// `shadows` 近似一圈 1px 轮廓。夜间档文字是浅色、护眼档是深墨色，光晕统一
-/// 取当前 surface 色 —— 三种档位下文字都能从图片、彩色底和渐变上「浮」出来。
-List<Shadow> buildTextOutline(Color halo) {
-  const r = 1.0;
-  const dirs = <(double, double)>[
-    (0, -1),
-    (0, 1),
-    (-1, 0),
-    (1, 0),
-    (-0.7, -0.7),
-    (0.7, -0.7),
-    (-0.7, 0.7),
-    (0.7, 0.7),
-  ];
-  return [
-    for (final d in dirs)
-      Shadow(
-        color: halo.withValues(alpha: 0.85),
-        offset: Offset(d.$1 * r, d.$2 * r),
-        blurRadius: 0.4,
-      ),
-  ];
-}
-
-/// 把描边光晕铺到整张 [TextTheme] 上。
-///
-/// 下级控件的 `ts.s14` 之类都只设字号/颜色，`shadows` 为空时会从
-/// `DefaultTextStyle`（即这里的 bodyMedium）继承，因此这一处修改即可覆盖
-/// 绝大多数文本，无需逐页改绘制方式。
-TextTheme withTextOutline(TextTheme t, Color halo) {
-  final shadows = buildTextOutline(halo);
-  TextStyle? o(TextStyle? s) => s?.copyWith(shadows: shadows);
-  return TextTheme(
-    displayLarge: o(t.displayLarge),
-    displayMedium: o(t.displayMedium),
-    displaySmall: o(t.displaySmall),
-    headlineLarge: o(t.headlineLarge),
-    headlineMedium: o(t.headlineMedium),
-    headlineSmall: o(t.headlineSmall),
-    titleLarge: o(t.titleLarge),
-    titleMedium: o(t.titleMedium),
-    titleSmall: o(t.titleSmall),
-    bodyLarge: o(t.bodyLarge),
-    bodyMedium: o(t.bodyMedium),
-    bodySmall: o(t.bodySmall),
-    labelLarge: o(t.labelLarge),
-    labelMedium: o(t.labelMedium),
-    labelSmall: o(t.labelSmall),
-  );
-}
+// P57 曾在此处给全站 TextTheme 叠 8 方向零模糊 `shadows`，模拟 1px 同底色
+// 描边。用户实测反馈这层描边让字形发虚、像套了阴影框线，正常阅读反而不如
+// 无描边的原始字体，故整体移除（buildTextOutline / withTextOutline 一并删除，
+// 避免留下只在自检里用得到的死代码）。文字现在直接继承基础主题，不再有阴影。
 
 /// Builds the app's [ThemeData] from a seed colour.
 ///
@@ -122,9 +72,7 @@ ThemeData buildAppTheme({
         : null,
   );
   if (!sepia) {
-    return theme.copyWith(
-      textTheme: withTextOutline(theme.textTheme, theme.colorScheme.surface),
-    );
+    return theme;
   }
   // 护眼：暖色纸张表面替换所有 surface 层级，主色（seed）保留为强调色。
   const paper = Color(0xFFF7F0E1);
@@ -157,7 +105,5 @@ ThemeData buildAppTheme({
     colorScheme: sepiaScheme,
     scaffoldBackgroundColor: paper,
     dialogTheme: DialogThemeData(backgroundColor: paperMid),
-    // 护眼档的描边取纸面暖色，深墨色文字在纸面上仍有清晰的边。
-    textTheme: withTextOutline(theme.textTheme, paper),
   );
 }

@@ -1,0 +1,59 @@
+{
+  "baseline_checks": 66,
+  "baseline_green": true,
+  "cases": [
+    {
+      "case": "no_pointer_focus_heal",
+      "verdict": "PASS",
+      "why": "指针按下时不再还焦点 —— 只走 FocusManager 一条路时就该报警",
+      "expect_red": [
+        "reader.focus_self_heal_wired"
+      ],
+      "actual_red": [
+        "reader.focus_self_heal_wired"
+      ],
+      "restored": true,
+      "sha256": "ba3dde3c1524d9e5da181c113593dac2bf60168771af238d5a2fee0c2f434427"
+    },
+    {
+      "case": "comments_always_chapter_one",
+      "verdict": "PASS",
+      "why": "把「当前话」写成「第 1 话」—— 阅读器里的评论就会串到别的章",
+      "expect_red": [
+        "reader.comments_uses_current_chapter"
+      ],
+      "actual_red": [
+        "reader.comments_uses_current_chapter"
+      ],
+      "restored": true,
+      "sha256": "9e6db93f0204e4d2fa7e0f1b4a91ae1891a3f8489082a3dac8499ffe045be1f5"
+    },
+    {
+      "case": "toolbar_comment_back_to_placeholder",
+      "verdict": "PASS",
+      "why": "评论按钮退回占位提示",
+      "expect_red": [
+        "reader.comments_toolbar_wired"
+      ],
+      "actual_red": [
+        "reader.comments_toolbar_wired"
+      ],
+      "restored": true,
+      "sha256": "3ea8ebbc4099812269c341f81619a4636e4cc9a21fb118145aad40d2232a08b1"
+    },
+    {
+      "case": "focus_guard_bypassed",
+      "verdict": "PASS",
+      "why": "ensureReaderFocus 退回「只看自己有没有焦点」的裸守卫（不再走纯函数）",
+      "expect_red": [
+        "reader.focus_guard_wired"
+      ],
+      "actual_red": [
+        "reader.focus_guard_wired"
+      ],
+      "restored": true,
+      "sha256": "9e6db93f0204e4d2fa7e0f1b4a91ae1891a3f8489082a3dac8499ffe045be1f5"
+    }
+  ],
+  "overall": "PASS"
+}

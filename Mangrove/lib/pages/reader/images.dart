@@ -37,98 +37,118 @@ class _ReaderImagesState extends State<_ReaderImages> {
     }
   }
 
+  /// 本地读取：BT 工程按 imgtrans 的页序，其余走 LocalManager 目录列举。
+  ///
+  /// 注释见原处：BT 的原始目录里的 mask/inpainted 兄弟文件对页序没有意义；
+  /// 这里的 await 还顺带完成"按需扫描"，history / favorites / 深链等非本地库
+  /// 入口都依赖它。
+  Future<List<String>> _loadLocalPages() async {
+    return BtProjectManager.isBtComic(reader.cid)
+        ? await BtProjectManager().getImages(reader.cid, reader.chapter)
+        : await LocalManager().getImages(
+            reader.cid,
+            reader.type,
+            reader.chapter,
+          );
+  }
+
+  void _applyImages(List<String> images) {
+    setState(() {
+      reader.images = images;
+      reader.isLoading = false;
+      inProgress = false;
+      _handleJumpToLastPage();
+      Future.microtask(() {
+        reader.updateHistory();
+      });
+    });
+  }
+
+  // `Res.errorMessage` 是 `String?`（源侧没给文案时为空），所以这里也收
+  // `String?`：网络失败要原样透传，不能为了让类型好看就凭空造一句文案。
+  void _fail(String? message) {
+    setState(() {
+      error = message;
+      reader.isLoading = false;
+      inProgress = false;
+    });
+  }
+
+  /// 网络通道取这一话的页，并在成功/失败时就地更新状态。
+  ///
+  /// 本地读取失败后的回落也走这里 —— 见 [load] 的注释。
+  Future<void> _loadNetworkPages() async {
+    try {
+      var cp = reader.widget.chapters?.ids.elementAtOrNull(
+        reader.chapter - 1,
+      );
+      var res = await reader
+          .type
+          .comicSource!
+          .loadComicPages!(reader.widget.cid, cp)
+          .timeout(
+            _readerPageLoadTimeout,
+            onTimeout: () => const Res.error("Network error"),
+          );
+      if (!mounted) return;
+      if (res.error) {
+        _fail(res.errorMessage);
+      } else if (res.data.isEmpty) {
+        // 空图片列表不能当成功处理：下游会以空列表计算 maxPage(=0) 并构建
+        // 页面，触发 "Invalid argument(s): 1" 之类的崩溃。与本地漫画分支的
+        // isEmpty 检查对齐，转成可重试的错误页。
+        _fail("No readable pages found.");
+      } else {
+        _applyImages(res.data);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _fail(e.toString());
+    }
+  }
+
   void load() async {
     if (inProgress) return;
     inProgress = true;
-    if (reader.type == ComicType.local ||
-        (LocalManager().isDownloaded(
+    // 本地优先：`type == local`，或"这一话在数据库里标着已下载"。
+    //
+    // 🔴 但 `isDownloaded` 只看 `downloadedChapters`，而那是磁盘的**投影**而不是
+    // 真相（P63 实测：`那個大公的華麗婚姻騙局` 的网络记录把 5 个 UUID 章节标成
+    // 已下载，磁盘上却只有导入命名的 `1 [copymanga]`…`69 [copymanga]`；两套命名
+    // 并存于**同一个**漫画目录，是"同标题的导入记录 + 网络记录共用目录"留下的
+    // 陈旧账）。照着投影走就会在 `Directory.list` 上抛
+    // `PathNotFoundException: Directory listing failed`，然后把这段原始 OS 异常
+    // 直接糊到读者脸上 —— 表现为"点进某一话就白屏报错"。
+    //
+    // 所以本地方失败对**网络漫画不是终点**：回落网络通道重取这一话。真正属于
+    // 本地的漫画（`type == local`）没有网络通道可回落，仍然如实报错。
+    // 记录层不去改用户数据（`downloadedChapters` 的清理由下载侧的磁盘对账负责），
+    // 这里只保证"读不到就换一条路"，不静默改账。
+    final preferLocal = reader.type == ComicType.local ||
+        LocalManager().isDownloaded(
           reader.cid,
           reader.type,
           reader.chapter,
           reader.widget.chapters,
-        ))) {
+        );
+    if (preferLocal) {
       try {
-        // BT projects keep their page order in the imgtrans json; the raw
-        // directory listing (mask/inpainted siblings) is not meaningful here.
-        // The awaited call also performs the on-demand scan that entry points
-        // other than the local comics tab (history, favorites, deep links)
-        // rely on.
-        var images = BtProjectManager.isBtComic(reader.cid)
-            ? await BtProjectManager().getImages(reader.cid, reader.chapter)
-            : await LocalManager().getImages(
-                reader.cid,
-                reader.type,
-                reader.chapter,
-              );
+        final images = await _loadLocalPages();
         if (images.isEmpty) {
           throw "No readable pages found.";
         }
         if (!mounted) return;
-        setState(() {
-          reader.images = images;
-          reader.isLoading = false;
-          inProgress = false;
-          _handleJumpToLastPage();
-          Future.microtask(() {
-            reader.updateHistory();
-          });
-        });
+        _applyImages(images);
       } catch (e) {
         if (!mounted) return;
-        setState(() {
-          error = e.toString();
-          reader.isLoading = false;
-          inProgress = false;
-        });
+        if (reader.type == ComicType.local) {
+          _fail(e.toString());
+        } else {
+          await _loadNetworkPages();
+        }
       }
     } else {
-      try {
-        var cp = reader.widget.chapters?.ids.elementAtOrNull(
-          reader.chapter - 1,
-        );
-        var res = await reader
-            .type
-            .comicSource!
-            .loadComicPages!(reader.widget.cid, cp)
-            .timeout(
-              _readerPageLoadTimeout,
-              onTimeout: () => const Res.error("Network error"),
-            );
-        if (!mounted) return;
-        if (res.error) {
-          setState(() {
-            error = res.errorMessage;
-            reader.isLoading = false;
-            inProgress = false;
-          });
-        } else if (res.data.isEmpty) {
-          // 空图片列表不能当成功处理：下游会以空列表计算 maxPage(=0) 并构建
-          // 页面，触发 "Invalid argument(s): 1" 之类的崩溃。与本地漫画分支的
-          // isEmpty 检查对齐，转成可重试的错误页。
-          setState(() {
-            error = "No readable pages found.";
-            reader.isLoading = false;
-            inProgress = false;
-          });
-        } else {
-          setState(() {
-            reader.images = res.data;
-            reader.isLoading = false;
-            inProgress = false;
-            _handleJumpToLastPage();
-            Future.microtask(() {
-              reader.updateHistory();
-            });
-          });
-        }
-      } catch (e) {
-        if (!mounted) return;
-        setState(() {
-          error = e.toString();
-          reader.isLoading = false;
-          inProgress = false;
-        });
-      }
+      await _loadNetworkPages();
     }
     if (!mounted) return;
     context.readerScaffold.update();
@@ -2477,7 +2497,9 @@ class _ContinuousModeState extends State<_ContinuousMode>
   /// P56：空格 / ↑↓ / WASD 与移动端方向键共用同一套步进。
   /// 步长取**当前阅读主轴**的视口长度 × 0.5，动画 200ms / Curves.ease。
   void _applyTurn(bool? forward) {
-    if (forward == null || !scrollController.hasClients) return;
+    if (forward == null || !scrollController.hasClients) {
+      return;
+    }
     final action = forward
         ? ReaderKeyAction.turnForward
         : ReaderKeyAction.turnBackward;
