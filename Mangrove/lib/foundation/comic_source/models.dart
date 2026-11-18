@@ -471,6 +471,61 @@ class ComicChapterVersion {
       'ComicChapterVersion(group=$scanlationGroup, lang=$language, title=$title, key=$chapterKey)';
 }
 
+/// 章节矩阵的三种形态，对应 `ComicChapters` 的三个构造函数。
+///
+/// 同一个站点/同一本书在不同写入路径下会落成不同形态，这不是异常而是常态：
+/// - **versioned**：`{话号: [{group, lang, title, key}, …]}`。comix.to 这类
+///   多翻译组源天然是它；P52 手工重建过的本地库矩阵也是它。
+/// - **grouped**：`{组名: {章节 key: 标题}}`。拷贝漫画（App 接口与网页端）的
+///   `chapters` 就是单组「默認」，组内 key 是**章节 UUID**（`230c97f8-…`），
+///   标题才是「第01话」。
+/// - **flat**：`{章节 key: 标题}`。只有一个版本、没有组概念的源，或早期落库的
+///   老记录（key 形如 `1 [HiveToons] [comix.to]`）。
+///
+/// 见 [ComicChapters.mergedWith]：跨形态合并按「话号 + 组」规范化后再落回本地形态。
+enum ChapterMatrixMode { flat, grouped, versioned }
+
+/// 合并用的**规范格**：把三种形态压成同一件事。
+///
+/// 为什么需要它：三种形态的关键信息位置不同 —— 版本化把话号放在外层键、组名放在
+/// 版本对象里；分组式把组名放在外层键、话号藏在章节 key 或标题里；扁平式只有 key。
+/// 直接两两写合并分支会 O(3×3) 爆炸且容易漏，先把两边都摊平成"一格一章"再并集，
+/// 只留一个落盘方向。
+///
+/// - [bucketKey]：原始桶键，落盘时原样写回（版本化=外层话号键，其余=章节 key）。
+/// - [numberKey]：归一话号（`1`），判断"是不是同一话"用。
+/// - [group]：归一翻译组；「默認/默认/default」视为无组（见 [_normalizeChapterGroup]）。
+typedef _ChapterCell = ({
+  String bucketKey,
+  String? numberKey,
+  String? group,
+  ComicChapterVersion version,
+});
+
+/// 归一翻译组名：把各源对"默认组"的不同叫法折成 null。
+///
+/// 拷贝漫画的 `默認` 与 comix.to 的"无组"在身份判定上必须是同一件事，否则同一话
+/// 会被当成两个组各留一格（跨形态合并时表现为整本翻倍）。
+String? _normalizeChapterGroup(String? group) {
+  final g = (group ?? '').trim();
+  if (g.isEmpty) return null;
+  final lower = g.toLowerCase();
+  if (lower == '默認' || lower == '默认' || lower == 'default') return null;
+  return g;
+}
+
+/// 一格章节的归一话号：章节 key → 标题 → 桶键，依次尝试。
+///
+/// 🔴 顺序很关键。拷贝漫画分组式的 key 是 UUID（读不出话号），话号只在标题
+/// 「第01话」里；P52 重建的版本化矩阵则相反 —— 外层键 `1 [copymanga]` 有号码、
+/// 版本里的 key 可能是 UUID。任一位置读到即可，不要只看一个字段。
+String? _cellNumberKey(String bucketKey, ComicChapterVersion v) {
+  final n = parseChapterTitle(v.chapterKey).chapterNumber ??
+      parseChapterTitle(v.title).chapterNumber ??
+      parseChapterTitle(bucketKey).chapterNumber;
+  return n?.toString();
+}
+
 /// 章节合并时的**身份键**：话号 + 翻译组 + 语种，**刻意忽略站点标签**。
 ///
 /// 用于 [ComicChapters.mergedWith] 去重。本地记录里的 key 是干净话号（`1`），
@@ -480,8 +535,13 @@ class ComicChapterVersion {
 /// - 有可解析话号 → `n:<话号>|g:<组|语种>`（站标 `[baozimh]` 已被
 ///   `parseChapterTitle` 视为非组名，天然不进组位）。
 /// - 无话号（番外 / UUID）→ 退回 key 本身，避免把所有无话号章节挤成一格。
-String _chapterMergeIdentity(ComicChapterVersion v) {
-  final num = parseChapterTitle(v.chapterKey).chapterNumber;
+///
+/// P69 起话号还会往**标题**与**外层桶键**回退（拷贝漫画的 key 是 UUID、话号只在
+/// 「第01话」标题里）；`bucketKey` 不传时行为与旧版完全一致。
+String _chapterMergeIdentity(ComicChapterVersion v, {String? bucketKey}) {
+  final num = parseChapterTitle(v.chapterKey).chapterNumber ??
+      parseChapterTitle(v.title).chapterNumber ??
+      (bucketKey == null ? null : parseChapterTitle(bucketKey).chapterNumber);
   final group = (v.scanlationGroup ?? '').trim().toLowerCase();
   final lang = (v.language ?? '').trim().toLowerCase();
   if (num == null) return 'k:${v.chapterKey}|g:$group|l:$lang';
@@ -791,8 +851,13 @@ class ComicChapters {
   /// P-DL6（2026-10-16）起支持**分组式与扁平式**：拷贝漫画等源的章节是
   /// 单组「默認」的分组矩阵，此前 `mergedWith` 只认版本化矩阵导致本地
   /// 记录永远合并不到新增章节（"第一次告白 62 话 vs 网站 63 话"的成因
-  /// 之一）。同模式并集、key 相同保留本地值；模式不同（版本化 vs 扁平等）
-  /// 依旧不混并，返回本地原矩阵。
+  /// 之一）。同模式并集、key 相同保留本地值。
+  ///
+  /// P69（2026-11-18）起**跨形态也并**：两边先摊平成规范格
+  /// （[_ChapterCell]）按「话号 + 组」去重，再按**本对象的形态**落盘。
+  /// 旧实现在模式不同时 `return this`，于是「版本化本地记录 + 分组式源」
+  /// 这类组合（拷贝漫画的库矩阵被手工重建成版本化后就会这样）永远补不到
+  /// 新章节 —— 用户只能删历史重新识别，因为那条路径绕开了合并。
   ComicChapters mergedWith(ComicChapters? other) {
     if (other == null) return this;
     if (isVersioned && other.isVersioned) {
@@ -808,12 +873,14 @@ class ComicChapters {
       for (final entry in _versionedChapters!.entries) {
         merged[entry.key] = List<ComicChapterVersion>.of(entry.value);
         for (final v in entry.value) {
-          identityToKey[_chapterMergeIdentity(v)] = entry.key;
+          identityToKey[_chapterMergeIdentity(v, bucketKey: entry.key)] =
+              entry.key;
         }
       }
       for (final entry in other._versionedChapters!.entries) {
         for (final version in entry.value) {
-          final identity = _chapterMergeIdentity(version);
+          final identity =
+              _chapterMergeIdentity(version, bucketKey: entry.key);
           // 同话同组已在本地 ⇒ 这是同一章的重复登记，跳过（绝不新建格）。
           if (identityToKey.containsKey(identity)) continue;
           final target =
@@ -850,22 +917,189 @@ class ComicChapters {
       // 🔴 2026-11-02 同版本化分支：扁平章节按**话号**去重，忽略站点标签。
       //   `1` 与 `1 [baozimh]` 是同一章，不能各留一格。
       final nums = <String>{};
-      for (final k in merged.keys) {
-        final n = parseChapterTitle(k).chapterNumber;
-        if (n != null) nums.add(n.toString());
+      String? numOf(String key, String title) =>
+          (parseChapterTitle(key).chapterNumber ??
+                  parseChapterTitle(title).chapterNumber)
+              ?.toString();
+      for (final e in merged.entries) {
+        final n = numOf(e.key, e.value);
+        if (n != null) nums.add(n);
       }
       for (final e in (other._chapters ?? const {}).entries) {
         if (merged.containsKey(e.key)) continue;
-        final n = parseChapterTitle(e.key).chapterNumber;
-        if (n != null && nums.contains(n.toString())) continue;
+        final n = numOf(e.key, e.value);
+        if (n != null && nums.contains(n)) continue;
         merged[e.key] = e.value;
-        if (n != null) nums.add(n.toString());
+        if (n != null) nums.add(n);
       }
       return ComicChapters(merged);
     }
-    // 模式不同不混并：混起来会把章节列表结构搞乱，保守保留本地矩阵。
-    return this;
+    // ---- 跨形态合并（P69）----
+    //
+    // 旧实现到这里就 `return this;`，把「模式不同」当成不可调和的矛盾。代价是：
+    // 拷贝漫画这类**分组式**源刷新一本**版本化**本地记录（或反过来）时，新章节
+    // 永远补不进来 —— 用户实测「第一次告白」本地 63 话、站点 68 话，刷新/重进
+    // 详情页都停在 63，只有删历史重新识别（localComic==null，直接返回网络详情，
+    // 绕开合并）才恢复。
+    //
+    // 现在：两边先摊平成 [_ChapterCell]，按「话号 + 组」去重后并集，再按**本地
+    // 形态**落盘。保留本地形态是有意的 —— UI 的分组页签、下载目录名、阅读器下标
+    // 全部按本地形态计算，换成源那边的形态会连累一票下游代码。
+    final mine = _canonicalCells();
+    // 扁平形态一话只能占一格（没有组维度可放第二格），所以落盘目标是扁平时分母
+    // 只认话号，不认组；其余形态保留「话 + 组」维度，多组合并不丢版本。
+    String identityOf(_ChapterCell c) =>
+        matrixMode == ChapterMatrixMode.flat && c.numberKey != null
+            ? 'n:${c.numberKey}'
+            : _cellIdentity(c);
+    final seen = <String>{for (final c in mine) identityOf(c)};
+    final union = <_ChapterCell>[...mine];
+    for (final c in other._canonicalCells()) {
+      if (!seen.add(identityOf(c))) continue;
+      // 版本化的外层键既是「话号」也是 `versionsFor()` 的入参：分组式源给的 key
+      // 是 UUID，直接当外层键会让这本书退化成字典序、新话排到最后，所以补进来
+      // 的格子按归一话号落桶。分组/扁平形态的 key 本身就是取章用的 key（UUID），
+      // 必须原样保留。
+      union.add(
+        matrixMode == ChapterMatrixMode.versioned && c.numberKey != null
+            ? (
+                bucketKey: c.numberKey!,
+                numberKey: c.numberKey,
+                group: c.group,
+                version: c.version,
+              )
+            : c,
+      );
+    }
+    return _emitCells(
+      union,
+      matrixMode,
+      defaultGroup: isGrouped && _groupedChapters!.length == 1
+          ? _groupedChapters!.keys.first
+          : '默認',
+    );
   }
+
+  /// 当前矩阵形态。
+  ChapterMatrixMode get matrixMode {
+    if (_versionedChapters != null) return ChapterMatrixMode.versioned;
+    if (_groupedChapters != null) return ChapterMatrixMode.grouped;
+    return ChapterMatrixMode.flat;
+  }
+
+  /// 摊平成规范格（见 [_ChapterCell]）。纯函数，不改自身。
+  List<_ChapterCell> _canonicalCells() {
+    final versioned = _versionedChapters;
+    if (versioned != null) {
+      final cells = <_ChapterCell>[];
+      for (final entry in versioned.entries) {
+        for (final v in entry.value) {
+          cells.add((
+            bucketKey: entry.key,
+            numberKey: _cellNumberKey(entry.key, v),
+            group: _normalizeChapterGroup(v.scanlationGroup),
+            version: v,
+          ));
+        }
+      }
+      return cells;
+    }
+    final grouped = _groupedChapters;
+    if (grouped != null) {
+      final cells = <_ChapterCell>[];
+      for (final g in grouped.entries) {
+        for (final e in g.value.entries) {
+          final v = ComicChapterVersion(
+            scanlationGroup: g.key,
+            title: e.value,
+            chapterKey: e.key,
+          );
+          cells.add((
+            bucketKey: e.key,
+            numberKey: _cellNumberKey(e.key, v),
+            group: _normalizeChapterGroup(g.key),
+            version: v,
+          ));
+        }
+      }
+      return cells;
+    }
+    final cells = <_ChapterCell>[];
+    for (final e in (_chapters ?? const <String, String>{}).entries) {
+      final v = ComicChapterVersion(title: e.value, chapterKey: e.key);
+      cells.add((
+        bucketKey: e.key,
+        numberKey: _cellNumberKey(e.key, v),
+        group: null,
+        version: v,
+      ));
+    }
+    return cells;
+  }
+
+  /// 规范格的身份键：有话号按「话号 + 组」，否则按「章节 key + 组」。
+  String _cellIdentity(_ChapterCell c) {
+    final g = c.group ?? '';
+    final n = c.numberKey;
+    return n != null ? 'n:$n|g:$g' : 'k:${c.version.chapterKey}|g:$g';
+  }
+
+  /// 把规范格按 [mode] 落盘成矩阵。同桶内同 `chapterKey` 只留第一次出现的那条。
+  ///
+  /// [defaultGroup] 只在落成分组式且格子里没有组名时使用（拷贝漫画的「默認」）。
+  ComicChapters _emitCells(
+    List<_ChapterCell> cells,
+    ChapterMatrixMode mode, {
+    String defaultGroup = '默認',
+  }) {
+    switch (mode) {
+      case ChapterMatrixMode.versioned:
+        final out = <String, List<ComicChapterVersion>>{};
+        for (final c in cells) {
+          final list =
+              out.putIfAbsent(c.bucketKey, () => <ComicChapterVersion>[]);
+          if (list.every((v) => v.chapterKey != c.version.chapterKey)) {
+            list.add(c.version);
+          }
+        }
+        return ComicChapters.versioned(out);
+      case ChapterMatrixMode.grouped:
+        final out = <String, Map<String, String>>{};
+        for (final c in cells) {
+          final g = c.group ?? defaultGroup;
+          out
+              .putIfAbsent(g, () => <String, String>{})
+              .putIfAbsent(c.bucketKey, () => c.version.title);
+        }
+        return ComicChapters.grouped(out);
+      case ChapterMatrixMode.flat:
+        final out = <String, String>{};
+        for (final c in cells) {
+          out.putIfAbsent(c.bucketKey, () => c.version.title);
+        }
+        return ComicChapters(out);
+    }
+  }
+
+  /// 转成版本化矩阵（幂等）。跨形态合并、测试与一次性迁移用。
+  ComicChapters toVersioned() => matrixMode == ChapterMatrixMode.versioned
+      ? this
+      : _emitCells(_canonicalCells(), ChapterMatrixMode.versioned);
+
+  /// 转成分组矩阵（幂等）。无组名的版本落进 [defaultGroup]。
+  ComicChapters toGrouped({String defaultGroup = '默認'}) =>
+      matrixMode == ChapterMatrixMode.grouped
+          ? this
+          : _emitCells(
+              _canonicalCells(),
+              ChapterMatrixMode.grouped,
+              defaultGroup: defaultGroup,
+            );
+
+  /// 转成扁平矩阵（幂等）。会丢掉组名 —— 只在下游只要「key → 标题」时用。
+  ComicChapters toFlat() => matrixMode == ChapterMatrixMode.flat
+      ? this
+      : _emitCells(_canonicalCells(), ChapterMatrixMode.flat);
 
   /// For versioned chapters, returns the scanlation group name of the
   /// first version at the given 0-based index. Returns null for

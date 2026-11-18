@@ -1,0 +1,77 @@
+{
+  "baseline_checks": 90,
+  "baseline_green": true,
+  "cases": [
+    {
+      "case": "cross_mode_versioned_bails",
+      "verdict": "PASS",
+      "why": "版本化本地记录遇分组式源直接 return this（P67 那条死路）",
+      "file": "Mangrove/lib/foundation/comic_source/models.dart",
+      "expect_red": [
+        "chapters.cross_mode_merge_grows"
+      ],
+      "actual_red": [
+        "chapters.cross_mode_merge_grows"
+      ],
+      "restored": true,
+      "sha256": "a0a25ca143412091c169f738754ee0c899994738434e38448cf4422a66a5702e"
+    },
+    {
+      "case": "cross_mode_grouped_bails",
+      "verdict": "PASS",
+      "why": "分组式本地记录遇版本化源直接 return this（反方向同样不可接受）",
+      "file": "Mangrove/lib/foundation/comic_source/models.dart",
+      "expect_red": [
+        "chapters.cross_mode_keeps_local_shape"
+      ],
+      "actual_red": [
+        "chapters.cross_mode_keeps_local_shape"
+      ],
+      "restored": true,
+      "sha256": "a0a25ca143412091c169f738754ee0c899994738434e38448cf4422a66a5702e"
+    },
+    {
+      "case": "union_drops_local",
+      "verdict": "PASS",
+      "why": "并集以源侧为底 ⇒ 源比本地少时缩水（已下载 key 变孤儿）",
+      "file": "Mangrove/lib/foundation/comic_source/models.dart",
+      "expect_red": [
+        "chapters.cross_mode_never_shrinks"
+      ],
+      "actual_red": [
+        "chapters.cross_mode_never_shrinks"
+      ],
+      "restored": true,
+      "sha256": "a0a25ca143412091c169f738754ee0c899994738434e38448cf4422a66a5702e"
+    },
+    {
+      "case": "identity_no_title_number",
+      "verdict": "PASS",
+      "why": "身份判定只看章节 key 的话号 ⇒ UUID 键与编号键各建一格（整本翻倍）",
+      "file": "Mangrove/lib/foundation/comic_source/models.dart",
+      "expect_red": [
+        "chapters.merge_identity_reads_title_number"
+      ],
+      "actual_red": [
+        "chapters.merge_identity_reads_title_number"
+      ],
+      "restored": true,
+      "sha256": "a0a25ca143412091c169f738754ee0c899994738434e38448cf4422a66a5702e"
+    },
+    {
+      "case": "conversion_is_noop",
+      "verdict": "PASS",
+      "why": "toGrouped 不真转 ⇒ 形态互转是空话（下游按分组渲染的地方拿不到组）",
+      "file": "Mangrove/lib/foundation/comic_source/models.dart",
+      "expect_red": [
+        "chapters.mode_conversion_roundtrip"
+      ],
+      "actual_red": [
+        "chapters.mode_conversion_roundtrip"
+      ],
+      "restored": true,
+      "sha256": "a0a25ca143412091c169f738754ee0c899994738434e38448cf4422a66a5702e"
+    }
+  ],
+  "overall": "PASS"
+}

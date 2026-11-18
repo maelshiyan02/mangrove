@@ -16,6 +16,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:mangrove/foundation/comment_order_policy.dart';
+import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/local_details_policy.dart';
 import 'package:mangrove/foundation/reader_ux_policy.dart';
 
@@ -1423,5 +1424,161 @@ void runP68Checks(_CheckSink check, {required Directory packageRoot}) {
     pagingWired('class Fake {}'),
     '三处评论列表都要：首屏空页回退 + 到头停翻 + 不再对排序产物 addAll；'
     '故障=任一页漏接（bodyLens=${bodies.map((b) => b.length).join(",")}）',
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P69 · 章节矩阵跨形态合并（版本化 / 分组式 / 扁平）。
+//
+// 🔴 为什么这组断言必须用**真实形态**而不是手搓的干净样例：P67 的三条断言只测
+//    「策略函数返回值」，全部是理想数据（`{1: [...]}` + `{1: ...}`），于是
+//    `mergedWith` 在模式不同时 `return this` 这条死路一次都没被碰到 —— 用户实测
+//    「第一次告白」本地 63 话、站点 68 话，刷新一百次也不补章。真实形态是：
+//    - 拷贝漫画（分组式）：`{"默認": {"230c97f8-…": "第01话"}}`，话号只在标题里；
+//    - 本地库版本化矩阵（P52 重建）：外层键 `1 [copymanga]`；
+//    - comix.to：外层键 `1 [Rokari Comics] [comix.to]`，多组一话多版本。
+//    下面每组都按这三类真实写法构造，并且反向对照组喂「旧行为产物」。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 本地库版本化矩阵（P52 手工重建后的拷贝漫画记录形态）。
+ComicChapters _p69LocalVersioned(int chapters) {
+  final map = <String, List<ComicChapterVersion>>{};
+  for (var i = 1; i <= chapters; i++) {
+    final key = '$i [copymanga]';
+    map[key] = [
+      ComicChapterVersion(title: '第$i话', chapterKey: key),
+    ];
+  }
+  return ComicChapters.versioned(map);
+}
+
+/// 拷贝漫画源返回的分组式矩阵：单组「默認」，key 是章节 UUID，话号只在标题。
+ComicChapters _p69OnlineGrouped(int chapters, {String group = '默認'}) {
+  final inner = <String, String>{};
+  for (var i = 1; i <= chapters; i++) {
+    inner['230c97f8-632e-11ee-9733-d3d228a7${i.toString().padLeft(4, '0')}'] =
+        '第$i话';
+  }
+  return ComicChapters.grouped({group: inner});
+}
+
+void runP69Checks(_CheckSink check, {required Directory packageRoot}) {
+  // ① 版本化本地记录 + 分组式源 → 新章节必须并进来（P67 那条死路的正面）。
+  bool growsOk(ComicChapters c) =>
+      c.isVersioned &&
+      c.length == 68 &&
+      c.allChapters.length == 68 &&
+      c.allChapters.values.contains('第68话');
+  final localV63 = _p69LocalVersioned(63);
+  final grown = localV63.mergedWith(_p69OnlineGrouped(68));
+  _pair(
+    check,
+    'chapters.cross_mode_merge_grows',
+    growsOk(grown),
+    growsOk(localV63),
+    '本地 versioned 63 话 + 源 grouped 68 话 ⇒ 必须 68 话；故障=模式不同就 '
+    'return this（P67 实测：刷新一百次仍停在 63，只能删历史重识别）',
+  );
+
+  // ② 反方向：分组式本地记录 + 版本化源 → 并进来且**保住分组形态**。
+  bool keepsShape(ComicChapters c) =>
+      c.isGrouped &&
+      c.groupCount == 1 &&
+      c.length == 70 &&
+      c.getGroup('默認').length == 70;
+  final localG68 = _p69OnlineGrouped(68);
+  _pair(
+    check,
+    'chapters.cross_mode_keeps_local_shape',
+    keepsShape(localG68.mergedWith(_p69LocalVersioned(70))),
+    keepsShape(_p69LocalVersioned(70)),
+    '本地 grouped 68 话 + 源 versioned 70 话 ⇒ 仍是单组「默認」70 话；'
+    '故障=把本地形态换成源的版本化形态（分组页签、下载目录名全按本地形态算）',
+  );
+
+  // ③ 只增不减：源比本地少时不得缩水（本地可能有源上已下架的旧话）。
+  bool noShrinkOk(ComicChapters c) =>
+      c.isVersioned &&
+      c.length == 68 &&
+      _p69LocalVersioned(68).ids.every((k) => c.allVersionKeys.contains(k));
+  final localV68 = _p69LocalVersioned(68);
+  _pair(
+    check,
+    'chapters.cross_mode_never_shrinks',
+    noShrinkOk(localV68.mergedWith(_p69OnlineGrouped(63))),
+    noShrinkOk(_p69OnlineGrouped(63)),
+    '本地 68 话 + 源 63 话 ⇒ 仍是 68 话且本地每个版本 key 都还在；'
+    '故障=拿源整体替换本地（已下载的 key 会变成孤儿）',
+  );
+
+  // ④ 身份判定要能从标题里读话号：UUID 键的两种形态是同一话，不能各留一格。
+  const uuid = '230c97f8-632e-11ee-9733-d3d228a7ffff';
+  final uuidLocal = ComicChapters.versioned({
+    uuid: [ComicChapterVersion(title: '第01话', chapterKey: uuid)],
+  });
+  final numberedOnline = ComicChapters.versioned({
+    '1 [copymanga]': [
+      ComicChapterVersion(title: '第01话', chapterKey: '1 [copymanga]'),
+    ],
+  });
+  bool identityOk(ComicChapters c) => c.length == 1;
+  final oldIdentityProduct = ComicChapters.versioned({
+    uuid: [ComicChapterVersion(title: '第01话', chapterKey: uuid)],
+    '1 [copymanga]': [
+      ComicChapterVersion(title: '第01话', chapterKey: '1 [copymanga]'),
+    ],
+  });
+  _pair(
+    check,
+    'chapters.merge_identity_reads_title_number',
+    identityOk(uuidLocal.mergedWith(numberedOnline)),
+    identityOk(oldIdentityProduct),
+    '本地键是 UUID、源键是「1 [copymanga]」，两边标题都是「第01话」⇒ 必须判同'
+    '一章（1 格）；故障=只看章节 key 的话号，同一话各建一格（整本翻倍）',
+  );
+
+  // ⑤ 三种形态可互转，且转换不丢话、不丢 key。
+  final versioned = _p69LocalVersioned(63);
+  final asGrouped = versioned.toGrouped();
+  final backToVersioned = asGrouped.toVersioned();
+  final asFlat = versioned.toFlat();
+  _pair(
+    check,
+    'chapters.mode_conversion_roundtrip',
+    asGrouped.isGrouped &&
+        asGrouped.groupCount == 1 &&
+        asGrouped.length == 63 &&
+        backToVersioned.isVersioned &&
+        backToVersioned.length == 63 &&
+        backToVersioned.allVersionKeys.toSet().containsAll(versioned.ids) &&
+        asFlat.length == 63,
+    asGrouped.isGrouped == false && backToVersioned.isVersioned == false,
+    'versioned → grouped → versioned 必须保住 63 话与全部 key；'
+    '故障=互转时丢版本（toGrouped 直接 return this 或漏写 key）',
+  );
+
+  // ⑥ 三个回填入口都还得走 mergedWith（防止哪天被改回「直接返回源矩阵」）。
+  final modelsSrc = _stripComments(
+    _read(packageRoot, 'lib/foundation/comic_source/models.dart'),
+  );
+  final localSrc = _stripComments(_read(packageRoot, 'lib/foundation/local.dart'));
+  final detailSrc = _stripComments(
+    _read(packageRoot, 'lib/pages/comic_details_page/comic_page.dart'),
+  );
+  bool wiredOk(String models, String local, String page) =>
+      // 只认**代码**锚点（`_stripComments` 已把注释剥掉，写注释里的标记会假绿）：
+      // 规范格摊平 + 按本地形态落盘这两步必须在 models.dart 里真的存在。
+      models.contains('_canonicalCells()') &&
+      models.contains('_emitCells(') &&
+      models.contains('final union = <_ChapterCell>[...mine];') &&
+      local.contains('mergedWith(online)') &&
+      'mergedWith('.allMatches(page).length >= 2;
+  _pair(
+    check,
+    'chapters.cross_mode_wired_in_backfill',
+    wiredOk(modelsSrc, localSrc, detailSrc),
+    wiredOk('class Fake {}', 'class Fake {}', 'class Fake {}'),
+    '跨形态分支必须在 models.dart；local.enrichComicChapters 与详情页两处回填'
+    '都必须走 mergedWith；故障=任一处改成直接取源矩阵（会丢本地旧章）',
   );
 }

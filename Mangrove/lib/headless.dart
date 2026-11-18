@@ -3168,6 +3168,8 @@ Future<void> runReaderUxCheck(List<String> args, int commandIndex) async {
     runP67Checks(check, packageRoot: packageRoot);
     // P68：评论尾页高估（总数整除页大小）导致的首屏空列表 + 分页死循环。
     runP68Checks(check, packageRoot: packageRoot);
+    // P69：章节矩阵跨形态合并（versioned / grouped / flat）与形态互转。
+    runP69Checks(check, packageRoot: packageRoot);
     // 空断言集必须判 FAIL（A02 §7 第 1 条）。
     passed = checks.isNotEmpty && checks.every((c) => c['passed'] == true);
     await finish(
