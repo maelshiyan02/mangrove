@@ -131,17 +131,17 @@ class LocalComic with HistoryMixin implements Comic {
   });
 
   LocalComic.fromRow(Row row)
-    : id = row['id'] as String,
-      title = row['title'] as String,
-      subtitle = row['subtitle'] as String,
-      tags = List.from(jsonDecode(row['tags'] as String)),
-      directory = row['directory'] as String,
-      chapters =
-          ComicChapters.fromJsonOrNull(jsonDecode(row['chapters'] as String)),
-      cover = row['cover'] as String,
-      comicType = ComicType(row['comic_type'] as int),
-      downloadedChapters =
-          List.from(jsonDecode(row['downloadedChapters'] as String)),
+      : id = row['id'] as String,
+        title = row['title'] as String,
+        subtitle = row['subtitle'] as String,
+        tags = List.from(jsonDecode(row['tags'] as String)),
+        directory = row['directory'] as String,
+        chapters =
+            ComicChapters.fromJsonOrNull(jsonDecode(row['chapters'] as String)),
+        cover = row['cover'] as String,
+        comicType = ComicType(row['comic_type'] as int),
+        downloadedChapters =
+            List.from(jsonDecode(row['downloadedChapters'] as String)),
       createdAt = DateTime.fromMillisecondsSinceEpoch(row['created_at'] as int),
       description = (row['description'] as String?) ?? "",
       source = (row['source'] as String?) ?? "",
@@ -501,6 +501,10 @@ class LocalManager with ChangeNotifier {
   Future<void> init() async {
     _db = DatabaseGateway.instance.openManaged(_dbPath);
     _ensureSchema();
+    // P71：先清掉库里已经写坏的「同一话两个 key」矩阵（P69 跨形态合并的
+    // 遗留）。必须在任何页面读取 comics 表之前做，否则 138 格会出现在
+    // 章节列表里并在每格上重复跑下载状态查询（用户实测详情页卡顿）。
+    _migrateDuplicateChapterKeys();
     final savedPathFile = File(FilePath.join(App.dataPath, 'local_path'));
     final savedPath = savedPathFile.existsSync()
         ? savedPathFile.readAsStringSync().trim()
@@ -628,7 +632,63 @@ class LocalManager with ChangeNotifier {
       _db = DatabaseGateway.instance.openManaged(_dbPath);
     }
     _ensureSchema();
+    _migrateDuplicateChapterKeys();
     notifyListeners();
+  }
+
+  /// P71：清理库内**已经写坏**的重复章节矩阵。
+  ///
+  /// 触发条件是 P69 跨形态合并用旧话号口径（`parseChapterTitle` 认不出
+  /// `1 [copymanga]`）把同一话的编号 key 与 UUID key 各落了一格：实测
+  /// 《大公的华丽婚姻騙局》69 话被写成 138 格，蓝标全对但列表翻倍、每格
+  /// 重复跑下载状态查询。P70 修了新增路径，这里补存量自愈。
+  ///
+  /// 只改章节矩阵与 `downloadedChapters` 的 key：目录名、历史话号下标、
+  /// 缺页表都不动（规范 key 是编号 key，目录名本来就与它一致）。
+  void _migrateDuplicateChapterKeys() {
+    final rows = _db.select(
+      'SELECT id, comic_type, title, chapters, downloadedChapters FROM comics;',
+    );
+    var fixed = 0;
+    for (final row in rows) {
+      try {
+        final raw = jsonDecode(row['chapters'] as String);
+        final chapters = ComicChapters.fromJsonOrNull(raw);
+        if (chapters == null) continue;
+        final result = chapters.deduplicatedWithRemap();
+        if (result.remap.isEmpty) continue;
+        final downloaded = List<String>.from(
+          jsonDecode(row['downloadedChapters'] as String),
+        );
+        final remapped = ComicChapters.remapKeys(downloaded, result.remap);
+        _db.execute(
+          'UPDATE comics SET chapters = ?, downloadedChapters = ? '
+          'WHERE id = ? AND comic_type = ?;',
+          [
+            jsonEncode(result.chapters.toJson()),
+            jsonEncode(remapped),
+            row['id'],
+            row['comic_type'],
+          ],
+        );
+        fixed++;
+        Log.info(
+          'LocalManager',
+          "Deduplicated chapter keys of '${row['title']}': "
+          '${chapters.entryCount} -> ${result.chapters.entryCount} entries, '
+          '${downloaded.length} -> ${remapped.length} downloaded keys',
+        );
+      } catch (e, s) {
+        Log.error(
+          'LocalManager',
+          "Failed to deduplicate chapters of '${row['title']}': $e",
+          s,
+        );
+      }
+    }
+    if (fixed > 0) {
+      Log.info('LocalManager', 'Deduplicated chapter matrices: $fixed comic(s)');
+    }
   }
 
   /// Resume downloads that were genuinely running when the app was last closed,

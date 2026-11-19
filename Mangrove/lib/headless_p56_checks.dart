@@ -1657,6 +1657,111 @@ void runP70Checks(_CheckSink check, {required Directory packageRoot}) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// P71 · 存量重复章节矩阵的自愈（大公华丽婚姻验收后实测）。
+//
+// P70 完成蓝标后，用户看到 138 个章节按钮（69 编号 key + 69 UUID key），
+// 详情页卡顿。根因是 P69 跨形态合并时旧话号口径认不出 `1 [copymanga]`，
+// 同一话各落一格并**已写库**；P70 只修了增量合并，存量没清。
+// ─────────────────────────────────────────────────────────────────────────────
+void runP71Checks(_CheckSink check, {required Directory packageRoot}) {
+  // ① 存量 138 格归一成 69 格，且规范 key 是能算出磁盘目录的编号 key。
+  final deduped = bothFormsMatrix().deduplicated;
+  bool collapsedOk(ComicChapters c) {
+    // 🔴 不能用 `c.ids.toList() == const [...]`：Dart 的 List.== 是引用比较，
+    // 常量列表永远不相等，断言会恒红（本次实测踩过）。
+    final ids = c.ids.toList();
+    return c.length == 1 &&
+        ids.length == 1 &&
+        ids.first == '1 [copymanga]' &&
+        chapterDirectoryName(c, ids.first) == '1 [copymanga]';
+  }
+  _pair(
+    check,
+    'chapters.existing_duplicate_matrix_collapses',
+    collapsedOk(deduped),
+    collapsedOk(bothFormsMatrix()),
+    '同一话的编号 key + UUID key 必须折成一格，且保留编号 key（UUID key '
+    '算出的目录名读不到磁盘）；故障=沿用未归一的 138 格矩阵',
+  );
+
+  // ② 旧下载记录里的 UUID key 要映射到规范 key，不能凭空丢下载状态。
+  final remap = bothFormsMatrix().deduplicatedWithRemap().remap;
+  final rewritten = ComicChapters.remapKeys(
+    const ['1 [copymanga]', '230c97f8-632e-11ee-9733-d3d228a76de6', '77 [x]'],
+    remap,
+  );
+  bool remapOk(List<String> keys) =>
+      keys.length == 2 &&
+      keys.first == '1 [copymanga]' &&
+      keys.last == '77 [x]';
+  _pair(
+    check,
+    'chapters.downloaded_keys_remapped_on_dedupe',
+    remapOk(rewritten),
+    remapOk(const [
+      '1 [copymanga]',
+      '230c97f8-632e-11ee-9733-d3d228a76de6',
+      '77 [x]',
+    ]),
+    '去重后旧 UUID 下载 key 必须改写为编号 key，且保序去重；故障=直接沿用'
+    '旧列表（蓝标全丢或重复登记）',
+  );
+
+  // ③ 多组版本不能被误折叠：同一话不同翻译组仍是两个版本。
+  final multi = ComicChapters.versioned({
+    '1': [
+      const ComicChapterVersion(
+        title: '第1话',
+        chapterKey: 'a1',
+        scanlationGroup: 'Asura Scans',
+      ),
+      const ComicChapterVersion(
+        title: '第1话',
+        chapterKey: 'd1',
+        scanlationGroup: 'DivaScans',
+      ),
+    ],
+  });
+  bool groupsOk(ComicChapters c) =>
+      c.length == 1 &&
+      c.versionsFor('1')!.length == 2 &&
+      c.allVersionKeys.toSet().containsAll(const ['a1', 'd1']);
+  _pair(
+    check,
+    'chapters.dedupe_keeps_distinct_scanlation_groups',
+    groupsOk(multi.deduplicated),
+    groupsOk(ComicChapters.versioned({
+      '1': [
+        const ComicChapterVersion(
+          title: '第1话',
+          chapterKey: 'a1',
+          scanlationGroup: 'Asura Scans',
+        ),
+      ],
+    })),
+    '去重只折等价 key，不能把同话不同翻译组并成一格；故障=只按话号折叠',
+  );
+
+  // ④ 存量迁移必须在 init 与 restoreFrom 两处接线，并改写 downloadedChapters。
+  final localSrc = _stripComments(
+    _read(packageRoot, 'lib/foundation/local.dart'),
+  );
+  bool wiredOk(String src) =>
+      src.contains('_migrateDuplicateChapterKeys();') &&
+      src.contains('ComicChapters.remapKeys(downloaded, result.remap)') &&
+      src.contains('jsonEncode(result.chapters.toJson())');
+  final callCount = localSrc.split('_migrateDuplicateChapterKeys();').length - 1;
+  _pair(
+    check,
+    'chapters.duplicate_migration_wired',
+    wiredOk(localSrc) && callCount >= 2,
+    wiredOk('class Fake {}'),
+    '存量去重必须在 init 与 restoreFrom 都跑，并回写 chapters + '
+    'downloadedChapters；故障=只归一内存或只在页面层过滤（重启后又出现）',
+  );
+}
+
 /// 同一话的两种真实表示并存（P70 故障注入夹具）。
 ComicChapters bothFormsMatrix() {
   const uuid = '230c97f8-632e-11ee-9733-d3d228a76de6';

@@ -857,6 +857,16 @@ class ComicChapters {
   /// 新章节 —— 用户只能删历史重新识别，因为那条路径绕开了合并。
   ComicChapters mergedWith(ComicChapters? other) {
     if (other == null) return this;
+    // P71：先把两边**各自内部**的等价键折掉再并。P70 只做了「本地 vs 源」
+    // 之间的去重，库里已经写坏的 69+69=138 格仍会原样保留 —— 用户刷新后
+    // 蓝标全对但章节列表翻倍、每格跑一次状态查询导致详情页卡顿。
+    final left = deduplicated;
+    final right = other.deduplicated;
+    return left._mergeDeduplicated(right);
+  }
+
+  /// 合并已归一的矩阵；调用方必须保证左右两侧都无内部重复。
+  ComicChapters _mergeDeduplicated(ComicChapters other) {
     if (isVersioned && other.isVersioned) {
       final merged = <String, List<ComicChapterVersion>>{};
       // 🔴 2026-11-02 「刷新章节后翻倍」根因修复（用户实测）：
@@ -1077,6 +1087,79 @@ class ComicChapters {
         return ComicChapters(out);
     }
   }
+
+  /// 把**同一个矩阵内部**的等价键折成一格，返回落盘矩阵与旧键→规范键映射。
+  ///
+  /// P70 只修了「磁盘目录 → 所有等价 key」和「合并时两个来源之间去重」，
+  /// 没有清理**已经写进库里**的重复矩阵。《大公的华丽婚姻騙局》因此留下了
+  /// 69 个 `1 [copymanga]` 编号 key + 69 个 UUID key，共 138 个格子：
+  /// 蓝标全对（P70 的功劳），但章节列表翻倍、每格都要跑一次下载状态查询，
+  /// 详情页明显卡顿，阅读历史的话号也跟着错位。
+  ///
+  /// 规范键优先选**能读出话号的 key**（`1 [copymanga]`），而不是标题里带话号
+  /// 的 UUID key。原因：本地阅读用 `chapterDirectoryName(chapters, chapterKey)`
+  /// 找磁盘目录，编号 key 直接算出 `1 [copymanga]`；UUID key 会算出 UUID 本身，
+  /// 读不到磁盘上的目录。多组版本按「话号 + 组 + 语种」判等，不同翻译组保留。
+  ({ComicChapters chapters, Map<String, String> remap})
+      deduplicatedWithRemap() {
+    final cells = _canonicalCells();
+    final keptByIdentity = <String, _ChapterCell>{};
+    final remap = <String, String>{};
+    for (final cell in cells) {
+      final identity =
+          _chapterMergeIdentity(cell.version, bucketKey: cell.bucketKey);
+      final current = keptByIdentity[identity];
+      if (current == null) {
+        keptByIdentity[identity] = cell;
+        continue;
+      }
+      final winner = _preferCanonicalCell(current, cell);
+      final dropped = identical(winner, current) ? cell : current;
+      keptByIdentity[identity] = winner;
+      final canonicalKey = winner.version.chapterKey;
+      remap.putIfAbsent(dropped.bucketKey, () => canonicalKey);
+      remap.putIfAbsent(dropped.version.chapterKey, () => canonicalKey);
+    }
+    final chapters = _emitCells(
+      keptByIdentity.values.toList(),
+      matrixMode,
+      defaultGroup: isGrouped && _groupedChapters!.length == 1
+          ? _groupedChapters!.keys.first
+          : '默認',
+    );
+    return (chapters: chapters, remap: remap);
+  }
+
+  /// 幂等版：无重复时原样返回 [this]，避免无谓重建与排序抖动。
+  ComicChapters get deduplicated =>
+      deduplicatedWithRemap().chapters;
+
+  /// 把旧 `downloadedChapters` / `readEpisode` 里的别名 key 按迁移映射改写。
+  /// 保序去重：规范 key 已在列表里时不再追加，历史顺序不受影响。
+  static List<String> remapKeys(
+    Iterable<String> keys,
+    Map<String, String> remap,
+  ) {
+    final out = <String>[];
+    for (final key in keys) {
+      final next = remap[key] ?? key;
+      if (!out.contains(next)) out.add(next);
+    }
+    return out;
+  }
+
+  /// 规范格打分：话号可读的 key + 目录名同形优先；同分时保留先出现的。
+  int _canonicalCellScore(_ChapterCell c) {
+    var score = 0;
+    if (chapterNumberKeyOf(c.bucketKey) != null) score += 4;
+    if (chapterNumberKeyOf(c.version.chapterKey) != null) score += 2;
+    if (c.bucketKey == c.version.chapterKey) score += 1;
+    if (c.version.title == c.bucketKey) score += 1;
+    return score;
+  }
+
+  _ChapterCell _preferCanonicalCell(_ChapterCell a, _ChapterCell b) =>
+      _canonicalCellScore(b) > _canonicalCellScore(a) ? b : a;
 
   /// 转成版本化矩阵（幂等）。跨形态合并、测试与一次性迁移用。
   ComicChapters toVersioned() => matrixMode == ChapterMatrixMode.versioned

@@ -1,0 +1,63 @@
+{
+  "baseline_checks": 97,
+  "baseline_green": true,
+  "cases": [
+    {
+      "case": "dedupe_emits_unfolded",
+      "verdict": "PASS",
+      "why": "只算了 remap 却仍把 138 格写回，列表翻倍与卡顿照旧",
+      "file": "Mangrove/lib/foundation/comic_source/models.dart",
+      "expect_red": [
+        "chapters.existing_duplicate_matrix_collapses"
+      ],
+      "actual_red": [
+        "chapters.existing_duplicate_matrix_collapses"
+      ],
+      "restored": true,
+      "sha256": "847ea7223c069c9e938168284b46294ad5b1ad6df5f71f30654d40db4cc71a65"
+    },
+    {
+      "case": "remap_keys_disabled",
+      "verdict": "PASS",
+      "why": "旧 UUID 下载 key 不改写，折叠后蓝标全丢",
+      "file": "Mangrove/lib/foundation/comic_source/models.dart",
+      "expect_red": [
+        "chapters.downloaded_keys_remapped_on_dedupe"
+      ],
+      "actual_red": [
+        "chapters.downloaded_keys_remapped_on_dedupe"
+      ],
+      "restored": true,
+      "sha256": "847ea7223c069c9e938168284b46294ad5b1ad6df5f71f30654d40db4cc71a65"
+    },
+    {
+      "case": "dedupe_ignores_scanlation_group",
+      "verdict": "PASS",
+      "why": "只按话号判等，同话两个翻译组被折成一个版本",
+      "file": "Mangrove/lib/foundation/comic_source/models.dart",
+      "expect_red": [
+        "chapters.dedupe_keeps_distinct_scanlation_groups"
+      ],
+      "actual_red": [
+        "chapters.dedupe_keeps_distinct_scanlation_groups"
+      ],
+      "restored": true,
+      "sha256": "847ea7223c069c9e938168284b46294ad5b1ad6df5f71f30654d40db4cc71a65"
+    },
+    {
+      "case": "migration_skips_restore",
+      "verdict": "PASS",
+      "why": "恢复备份后不再自愈，138 格会重新回到列表",
+      "file": "Mangrove/lib/foundation/local.dart",
+      "expect_red": [
+        "chapters.duplicate_migration_wired"
+      ],
+      "actual_red": [
+        "chapters.duplicate_migration_wired"
+      ],
+      "restored": true,
+      "sha256": "97d0d64850c9402a558ad7d66124e2600a35f68fd8f715829c01379b80404a97"
+    }
+  ],
+  "overall": "PASS"
+}
