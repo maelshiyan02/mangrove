@@ -1,0 +1,569 @@
+{
+  "version": 1,
+  "command": "page-reconcile",
+  "comicId": "ngdgdhlhypj",
+  "title": "那個大公的華麗婚姻騙局",
+  "source": "copy_manga",
+  "baseDir": "D:/AI Coding Project Management/Mangrove/ComicLibrary/downloads\\那個大公的華麗婚姻騙局",
+  "missingBefore": 0,
+  "missingAfter": 0,
+  "newlyRecorded": 0,
+  "downloadedBefore": 69,
+  "downloadedAfter": 69,
+  "newlyRegistered": [],
+  "chapters": [
+    {
+      "chapter": "1 [copymanga]",
+      "pagesOnDisk": 136,
+      "maxIndex": 135,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "10 [copymanga]",
+      "pagesOnDisk": 107,
+      "maxIndex": 106,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "11 [copymanga]",
+      "pagesOnDisk": 101,
+      "maxIndex": 100,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "12 [copymanga]",
+      "pagesOnDisk": 99,
+      "maxIndex": 98,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "13 [copymanga]",
+      "pagesOnDisk": 104,
+      "maxIndex": 103,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "14 [copymanga]",
+      "pagesOnDisk": 101,
+      "maxIndex": 100,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "15 [copymanga]",
+      "pagesOnDisk": 104,
+      "maxIndex": 103,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "16 [copymanga]",
+      "pagesOnDisk": 98,
+      "maxIndex": 97,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "17 [copymanga]",
+      "pagesOnDisk": 108,
+      "maxIndex": 107,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "18 [copymanga]",
+      "pagesOnDisk": 101,
+      "maxIndex": 100,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "19 [copymanga]",
+      "pagesOnDisk": 101,
+      "maxIndex": 100,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "2 [copymanga]",
+      "pagesOnDisk": 112,
+      "maxIndex": 111,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "20 [copymanga]",
+      "pagesOnDisk": 102,
+      "maxIndex": 101,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "21 [copymanga]",
+      "pagesOnDisk": 105,
+      "maxIndex": 104,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "22 [copymanga]",
+      "pagesOnDisk": 111,
+      "maxIndex": 110,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "23 [copymanga]",
+      "pagesOnDisk": 109,
+      "maxIndex": 108,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "24 [copymanga]",
+      "pagesOnDisk": 71,
+      "maxIndex": 70,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "25 [copymanga]",
+      "pagesOnDisk": 73,
+      "maxIndex": 72,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "26 [copymanga]",
+      "pagesOnDisk": 79,
+      "maxIndex": 78,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "27 [copymanga]",
+      "pagesOnDisk": 72,
+      "maxIndex": 71,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "28 [copymanga]",
+      "pagesOnDisk": 72,
+      "maxIndex": 71,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "29 [copymanga]",
+      "pagesOnDisk": 104,
+      "maxIndex": 103,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "3 [copymanga]",
+      "pagesOnDisk": 99,
+      "maxIndex": 98,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "30 [copymanga]",
+      "pagesOnDisk": 91,
+      "maxIndex": 90,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "31 [copymanga]",
+      "pagesOnDisk": 104,
+      "maxIndex": 103,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "32 [copymanga]",
+      "pagesOnDisk": 116,
+      "maxIndex": 115,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "33 [copymanga]",
+      "pagesOnDisk": 111,
+      "maxIndex": 110,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "34 [copymanga]",
+      "pagesOnDisk": 100,
+      "maxIndex": 99,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "35 [copymanga]",
+      "pagesOnDisk": 100,
+      "maxIndex": 99,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "36 [copymanga]",
+      "pagesOnDisk": 70,
+      "maxIndex": 69,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "37 [copymanga]",
+      "pagesOnDisk": 70,
+      "maxIndex": 69,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "38 [copymanga]",
+      "pagesOnDisk": 75,
+      "maxIndex": 74,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "39 [copymanga]",
+      "pagesOnDisk": 80,
+      "maxIndex": 79,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "4 [copymanga]",
+      "pagesOnDisk": 107,
+      "maxIndex": 106,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "40 [copymanga]",
+      "pagesOnDisk": 70,
+      "maxIndex": 69,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "41 [copymanga]",
+      "pagesOnDisk": 90,
+      "maxIndex": 89,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "42 [copymanga]",
+      "pagesOnDisk": 156,
+      "maxIndex": 155,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "43 [copymanga]",
+      "pagesOnDisk": 144,
+      "maxIndex": 143,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "44 [copymanga]",
+      "pagesOnDisk": 146,
+      "maxIndex": 145,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "45 [copymanga]",
+      "pagesOnDisk": 125,
+      "maxIndex": 124,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "46 [copymanga]",
+      "pagesOnDisk": 146,
+      "maxIndex": 145,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "47 [copymanga]",
+      "pagesOnDisk": 148,
+      "maxIndex": 147,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "48 [copymanga]",
+      "pagesOnDisk": 103,
+      "maxIndex": 102,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "49 [copymanga]",
+      "pagesOnDisk": 130,
+      "maxIndex": 129,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "5 [copymanga]",
+      "pagesOnDisk": 111,
+      "maxIndex": 110,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "50 [copymanga]",
+      "pagesOnDisk": 129,
+      "maxIndex": 128,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "51 [copymanga]",
+      "pagesOnDisk": 122,
+      "maxIndex": 121,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "52 [copymanga]",
+      "pagesOnDisk": 120,
+      "maxIndex": 119,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "53 [copymanga]",
+      "pagesOnDisk": 113,
+      "maxIndex": 112,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "54 [copymanga]",
+      "pagesOnDisk": 109,
+      "maxIndex": 108,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "55 [copymanga]",
+      "pagesOnDisk": 114,
+      "maxIndex": 113,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "56 [copymanga]",
+      "pagesOnDisk": 107,
+      "maxIndex": 106,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "57 [copymanga]",
+      "pagesOnDisk": 102,
+      "maxIndex": 101,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "58 [copymanga]",
+      "pagesOnDisk": 106,
+      "maxIndex": 105,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "59 [copymanga]",
+      "pagesOnDisk": 104,
+      "maxIndex": 103,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "6 [copymanga]",
+      "pagesOnDisk": 105,
+      "maxIndex": 104,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "60 [copymanga]",
+      "pagesOnDisk": 117,
+      "maxIndex": 116,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "61 [copymanga]",
+      "pagesOnDisk": 118,
+      "maxIndex": 117,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "62 [copymanga]",
+      "pagesOnDisk": 109,
+      "maxIndex": 108,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "63 [copymanga]",
+      "pagesOnDisk": 99,
+      "maxIndex": 98,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "64 [copymanga]",
+      "pagesOnDisk": 107,
+      "maxIndex": 106,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "65 [copymanga]",
+      "pagesOnDisk": 107,
+      "maxIndex": 106,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "66 [copymanga]",
+      "pagesOnDisk": 115,
+      "maxIndex": 114,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "67 [copymanga]",
+      "pagesOnDisk": 104,
+      "maxIndex": 103,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "68 [copymanga]",
+      "pagesOnDisk": 110,
+      "maxIndex": 109,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "69 [copymanga]",
+      "pagesOnDisk": 108,
+      "maxIndex": 107,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "7 [copymanga]",
+      "pagesOnDisk": 99,
+      "maxIndex": 98,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "8 [copymanga]",
+      "pagesOnDisk": 98,
+      "maxIndex": 97,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    },
+    {
+      "chapter": "9 [copymanga]",
+      "pagesOnDisk": 109,
+      "maxIndex": 108,
+      "gaps": [],
+      "registeredBefore": true,
+      "registeredAfter": true
+    }
+  ],
+  "entries": []
+}
