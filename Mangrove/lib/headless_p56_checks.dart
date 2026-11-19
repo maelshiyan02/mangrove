@@ -15,6 +15,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:mangrove/foundation/chapter_directory.dart';
+import 'package:mangrove/foundation/chapter_title_parser.dart';
 import 'package:mangrove/foundation/comment_order_policy.dart';
 import 'package:mangrove/foundation/comic_source/comic_source.dart';
 import 'package:mangrove/foundation/local_details_policy.dart';
@@ -1581,4 +1583,87 @@ void runP69Checks(_CheckSink check, {required Directory packageRoot}) {
     '跨形态分支必须在 models.dart；local.enrichComicChapters 与详情页两处回填'
     '都必须走 mergedWith；故障=任一处改成直接取源矩阵（会丢本地旧章）',
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P70 · 编号 key ↔ UUID key 的同一话归一（大公华丽婚姻实测）。
+//
+// 真实形态（不是手搓的干净样例）：
+//   网源 chapters = {"默認": {"230c97f8-…": "第01话"}}
+//   磁盘目录     = `1 [copymanga]`（agent 辅助下载，没走下载器通道）
+//   本地记录     = versioned，同时含 `1 [copymanga]` 与 UUID 两个版本 key
+// 旧口径下 `parseChapterTitle('1 [copymanga]') == null`，于是同一话既叫
+// `k:1 [copymanga]` 又叫 `n:1`：合并翻倍、蓝色标志只认 5 个 UUID、刷新
+// 每点一次都把 69 个目录当新章。这里三条断言分别钉住归一、反查、接线。
+// ─────────────────────────────────────────────────────────────────────────────
+void runP70Checks(_CheckSink check, {required Directory packageRoot}) {
+  // ① 真实 DB 形态：「1 [copymanga]」标题不是「第1话」，也必须判成同一话。
+  const uuid = '230c97f8-632e-11ee-9733-d3d228a76de6';
+  final numberedLocal = ComicChapters.versioned({
+    '1 [copymanga]': [
+      ComicChapterVersion(title: '1 [copymanga]', chapterKey: '1 [copymanga]'),
+    ],
+  });
+  final uuidOnline = ComicChapters.grouped({
+    '默認': {uuid: '第01话'},
+  });
+  final merged = numberedLocal.mergedWith(uuidOnline);
+  bool dedupedOk(ComicChapters c) => c.length == 1;
+  final oldProduct = ComicChapters.versioned({
+    '1 [copymanga]': [
+      ComicChapterVersion(title: '1 [copymanga]', chapterKey: '1 [copymanga]'),
+    ],
+    uuid: [ComicChapterVersion(title: '第01话', chapterKey: uuid)],
+  });
+  _pair(
+    check,
+    'chapters.merge_dedupes_numbered_key_form',
+    dedupedOk(merged),
+    dedupedOk(oldProduct),
+    '本地标题是「1 [copymanga]」、源 key 是 UUID 标题「第01话」⇒ 必须同为第1话'
+    '只留一格；故障=只用 parseChapterTitle 认话号，两格并存的整本翻倍形态',
+  );
+
+  // ② 磁盘目录反查要返回**所有**等价 key，而不是只认字面命中的那一个。
+  final both = chapterKeysForDirectoryName(bothFormsMatrix(), '1 [copymanga]');
+  bool allKeysOk(List<String> keys) =>
+      keys.length == 2 && keys.contains('1 [copymanga]') && keys.contains(uuid);
+  _pair(
+    check,
+    'chapters.disk_dir_maps_to_all_equivalent_keys',
+    allKeysOk(both),
+    allKeysOk(both.take(1).toList()),
+    '目录 `1 [copymanga]` 同时对应编号 key 与 UUID key ⇒ 磁盘对账要把两个都标'
+    '已下载，网络视图才会全蓝；故障=只返回第一个字面命中的 key',
+  );
+
+  // ③ 两个消费端都必须走这条共用映射（防止改回逐字 chapterDirectoryName）。
+  final localSrc = _stripComments(
+    _read(packageRoot, 'lib/foundation/local.dart'),
+  );
+  final editSrc = _stripComments(
+    _read(packageRoot, 'lib/utils/local_comic_edit.dart'),
+  );
+  bool wiredOk(String local, String edit) =>
+      local.contains('chapterKeysForDirectoryName(chapters, name)') &&
+      edit.contains('chapterKeysForDirectoryName(existing, entry.name)');
+  _pair(
+    check,
+    'chapters.equivalent_key_mapping_wired',
+    wiredOk(localSrc, editSrc),
+    wiredOk('class Fake {}', 'class Fake {}'),
+    '磁盘对账与「刷新章节」都必须走共用等价键映射；故障=任一处改回逐字匹配'
+    '（表现为日志 69 个目录 unmapped + 每次刷新都报新增）',
+  );
+}
+
+/// 同一话的两种真实表示并存（P70 故障注入夹具）。
+ComicChapters bothFormsMatrix() {
+  const uuid = '230c97f8-632e-11ee-9733-d3d228a76de6';
+  return ComicChapters.versioned({
+    '1 [copymanga]': [
+      ComicChapterVersion(title: '1 [copymanga]', chapterKey: '1 [copymanga]'),
+    ],
+    uuid: [ComicChapterVersion(title: '第01话', chapterKey: uuid)],
+  });
 }

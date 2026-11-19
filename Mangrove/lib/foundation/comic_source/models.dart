@@ -507,11 +507,8 @@ typedef _ChapterCell = ({
 /// 拷贝漫画的 `默認` 与 comix.to 的"无组"在身份判定上必须是同一件事，否则同一话
 /// 会被当成两个组各留一格（跨形态合并时表现为整本翻倍）。
 String? _normalizeChapterGroup(String? group) {
-  final g = (group ?? '').trim();
-  if (g.isEmpty) return null;
-  final lower = g.toLowerCase();
-  if (lower == '默認' || lower == '默认' || lower == 'default') return null;
-  return g;
+  final key = normalizedChapterGroupKey(group);
+  return key.isEmpty ? null : key;
 }
 
 /// 一格章节的归一话号：章节 key → 标题 → 桶键，依次尝试。
@@ -520,10 +517,10 @@ String? _normalizeChapterGroup(String? group) {
 /// 「第01话」里；P52 重建的版本化矩阵则相反 —— 外层键 `1 [copymanga]` 有号码、
 /// 版本里的 key 可能是 UUID。任一位置读到即可，不要只看一个字段。
 String? _cellNumberKey(String bucketKey, ComicChapterVersion v) {
-  final n = parseChapterTitle(v.chapterKey).chapterNumber ??
-      parseChapterTitle(v.title).chapterNumber ??
-      parseChapterTitle(bucketKey).chapterNumber;
-  return n?.toString();
+  final n = chapterNumberKeyOf(v.chapterKey) ??
+      chapterNumberKeyOf(v.title) ??
+      chapterNumberKeyOf(bucketKey);
+  return n;
 }
 
 /// 章节合并时的**身份键**：话号 + 翻译组 + 语种，**刻意忽略站点标签**。
@@ -539,10 +536,10 @@ String? _cellNumberKey(String bucketKey, ComicChapterVersion v) {
 /// P69 起话号还会往**标题**与**外层桶键**回退（拷贝漫画的 key 是 UUID、话号只在
 /// 「第01话」标题里）；`bucketKey` 不传时行为与旧版完全一致。
 String _chapterMergeIdentity(ComicChapterVersion v, {String? bucketKey}) {
-  final num = parseChapterTitle(v.chapterKey).chapterNumber ??
-      parseChapterTitle(v.title).chapterNumber ??
-      (bucketKey == null ? null : parseChapterTitle(bucketKey).chapterNumber);
-  final group = (v.scanlationGroup ?? '').trim().toLowerCase();
+  final num = chapterNumberKeyOf(v.chapterKey) ??
+      chapterNumberKeyOf(v.title) ??
+      (bucketKey == null ? null : chapterNumberKeyOf(bucketKey));
+  final group = normalizedChapterGroupKey(v.scanlationGroup);
   final lang = (v.language ?? '').trim().toLowerCase();
   if (num == null) return 'k:${v.chapterKey}|g:$group|l:$lang';
   return 'n:$num|g:$group|l:$lang';

@@ -151,3 +151,30 @@ double? chapterNumberValueOf(String raw) {
   if (lead != null) return double.tryParse(lead.group(1)!);
   return null;
 }
+
+/// 从「章节 key / 标题 / 目录名」取**可比较的话号字符串**，读不出返回 null。
+///
+/// [parseChapterTitle] 只认 `第N话` / `Ch.N` / 纯数字，不认 `1 [copymanga]`
+/// 这种「话号 + 站标」的目录写法；而 [chapterNumberValueOf] 认后者，却不认
+/// `第N话` 之外的排版变体。两处入口并存会让同一话在合并身份里既叫 `n:1`
+/// 又叫 `k:1 [copymanga]`，于是同一章各留一格（大公华丽婚姻实测 69→138）。
+/// 这里把两条通路合成一个归一入口，调用方一律用它判「是不是同一话」。
+String? chapterNumberKeyOf(String raw) {
+  final parsed = parseChapterTitle(raw).chapterNumber;
+  if (parsed != null) return '$parsed';
+  final value = chapterNumberValueOf(raw);
+  if (value == null) return null;
+  return value == value.roundToDouble()
+      ? value.toInt().toString()
+      : value.toString();
+}
+
+/// 翻译组身份归一：空串 / 「默認」「默认」「default」都视作无组。
+///
+/// 与目录名解析的 `ChapterDirectoryRef.groupKey` 同口径（小写），
+/// 供章节身份判定与磁盘目录反查共用，避免一处认无组、另一处认有组。
+String normalizedChapterGroupKey(String? group) {
+  final g = (group ?? '').trim().toLowerCase();
+  if (g.isEmpty || g == '默認' || g == '默认' || g == 'default') return '';
+  return g;
+}

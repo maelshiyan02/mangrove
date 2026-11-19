@@ -3170,6 +3170,8 @@ Future<void> runReaderUxCheck(List<String> args, int commandIndex) async {
     runP68Checks(check, packageRoot: packageRoot);
     // P69：章节矩阵跨形态合并（versioned / grouped / flat）与形态互转。
     runP69Checks(check, packageRoot: packageRoot);
+    // P70：编号 key ↔ UUID key 同一话归一（大公华丽婚姻下载标志/刷新误报）。
+    runP70Checks(check, packageRoot: packageRoot);
     // 空断言集必须判 FAIL（A02 §7 第 1 条）。
     passed = checks.isNotEmpty && checks.every((c) => c['passed'] == true);
     await finish(

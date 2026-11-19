@@ -738,3 +738,55 @@ String _baseChapterDirectoryName(
   }
   return sanitizePathSegment('$number$site');
 }
+
+/// 磁盘目录名 → 章节矩阵里**所有等价** chapterKey（可能多于一个）。
+///
+/// 本函数的存在理由是一次真实事故：《大公的华丽婚姻騙局》网源章节 key 是 UUID
+/// （`230c97f8-…`，标题「第01话」），而磁盘目录是 agent 辅助下载留下的
+/// `1 [copymanga]`；`chapterDirectoryName` 逐字反查一个都匹配不上，于是
+/// ① 详情页蓝色已下载标志只有最初 5 个 UUID 命中；② 每次点「刷新章节」
+/// 又把 69 个目录当新章登记。这里按「话号 + 归一翻译组」反查，并把同一等价
+/// 类的所有 key 都交出去（编号 key 与 UUID key 同时标记），兼容两种视图。
+///
+/// 顺序：字面同名 → 话号+组 → 无组话号兜底；不同组绝不互相顶替。
+List<String> chapterKeysForDirectoryName(
+  ComicChapters? chapters,
+  String directoryName,
+) {
+  if (chapters == null) return const <String>[];
+  final keys = <String>{};
+  final byNumberGroup = <String, List<String>>{};
+  final byNumberNoGroup = <String, List<String>>{};
+  for (final key in chapters.allVersionKeys) {
+    final name = chapterDirectoryName(chapters, key);
+    if (name.isNotEmpty && name == directoryName) keys.add(key);
+    final version = chapters.versionEntryOf(key)?.version;
+    final ref = parseChapterDirectoryName(name) ??
+        parseChapterDirectoryName(key);
+    final number = ref?.number ??
+        chapterNumberKeyOf(key) ??
+        (version == null ? null : chapterNumberKeyOf(version.title));
+    if (number == null) continue;
+    final group = normalizedChapterGroupKey(
+      ref != null && ref.groups.isNotEmpty
+          ? ref.groups.join(' ')
+          : version?.scanlationGroup,
+    );
+    if (group.isEmpty) {
+      byNumberNoGroup.putIfAbsent(number, () => <String>[]).add(key);
+    }
+    byNumberGroup.putIfAbsent('$number|$group', () => <String>[]).add(key);
+  }
+  final disk = parseChapterDirectoryName(directoryName);
+  if (disk == null) return keys.toList();
+  final diskGroup = normalizedChapterGroupKey(
+    disk.groups.isNotEmpty ? disk.groups.join(' ') : null,
+  );
+  final hit = byNumberGroup['${disk.number}|$diskGroup'];
+  if (hit != null) keys.addAll(hit);
+  // 目录名没有组名时才允许「只看话号」兜底，避免把别的翻译组认成本组。
+  if (diskGroup.isEmpty) {
+    keys.addAll(byNumberNoGroup[disk.number] ?? const <String>[]);
+  }
+  return keys.toList();
+}

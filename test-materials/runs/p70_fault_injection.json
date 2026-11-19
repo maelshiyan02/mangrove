@@ -1,0 +1,49 @@
+{
+  "baseline_checks": 93,
+  "baseline_green": true,
+  "cases": [
+    {
+      "case": "cell_number_ignores_directory_style",
+      "verdict": "PASS",
+      "why": "话号归一退回 parseChapterTitle，编号 key 与 UUID key 各占一格",
+      "file": "Mangrove/lib/foundation/comic_source/models.dart",
+      "expect_red": [
+        "chapters.merge_dedupes_numbered_key_form"
+      ],
+      "actual_red": [
+        "chapters.merge_dedupes_numbered_key_form"
+      ],
+      "restored": true,
+      "sha256": "ea22db4df5794f4a36d92f814582c610ea2dd567403ee4a9b27c75c9c91cb15a"
+    },
+    {
+      "case": "disk_dir_returns_only_first_key",
+      "verdict": "PASS",
+      "why": "目录只反查到一个 key，网络视图的 UUID key 永远不会被标已下载",
+      "file": "Mangrove/lib/foundation/chapter_directory.dart",
+      "expect_red": [
+        "chapters.disk_dir_maps_to_all_equivalent_keys"
+      ],
+      "actual_red": [
+        "chapters.disk_dir_maps_to_all_equivalent_keys"
+      ],
+      "restored": true,
+      "sha256": "1d6c952a6233052df64fd5a2f75c1dcae53f2171d6b2599ade493088c2f12bc6"
+    },
+    {
+      "case": "reconcile_wired_back_to_exact_name",
+      "verdict": "PASS",
+      "why": "磁盘对账改回逐字目录名 ⇒ 69 个目录 unmapped，刷新反复误报新增",
+      "file": "Mangrove/lib/foundation/local.dart",
+      "expect_red": [
+        "chapters.equivalent_key_mapping_wired"
+      ],
+      "actual_red": [
+        "chapters.equivalent_key_mapping_wired"
+      ],
+      "restored": true,
+      "sha256": "63b6b1184ad7f62461036cf26b93c39cc25135de32ba7ce85bf02e4aa2c967dd"
+    }
+  ],
+  "overall": "PASS"
+}

@@ -400,6 +400,13 @@ Future<int> refreshLocalComicChapters(LocalComic comic) async {
         (diskIdentity != null && knownIdentities.contains(diskIdentity))) {
       continue;
     }
+    // 🔴 P70：网源 key 是 UUID、磁盘目录是 `NN [copymanga]` 时，上面按目录名
+    // 字面/话号的闸门都认不出同一章（UUID 读不出话号）。改为问共用的
+    // 「目录名 → 全部等价 chapterKey」映射：命中就说明矩阵里已有这一话的
+    // 某个表示，绝不再当新章登记（否则每点一次刷新就多一格）。
+    if (chapterKeysForDirectoryName(existing, entry.name).isNotEmpty) {
+      continue;
+    }
     // 只认"有图"的文件夹，避免把无关目录登记成空章。
     if (!await _directoryHasImage(entry)) continue;
     final key = sanitizePathSegment(entry.name);

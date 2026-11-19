@@ -2043,34 +2043,14 @@ Future<List<String>> getImagesForComic(LocalComic comic, Object ep) async {
     final root = Directory(row.baseDir);
     if (!root.existsSync()) return 0;
 
-    // 目录名 → chapterKey。与下载侧、读取侧共用 `chapterDirectoryName`
-    // （唯一真相），所以这里反查出的 key 一定和 UI 判据用的是同一个。
+    // 目录名 → 全部等价 chapterKey。纯函数抽在 chapter_directory.dart，
+    // 与下载侧/读取侧共用同一套归一话号口径（见 chapterKeysForDirectoryName）。
     //
-    // D1 兼容：磁盘目录可能比规范名多一个 `[站点]`（新下的）或少一个（旧下的）。
-    // 字面相等只是第一层，第二层按「话号 + 翻译组」语义匹配，第三层退到只看
-    // 话号。三层都不中才算 unmapped——宁可留着不登记，也不猜成别的一话。
-    final keyByDir = <String, String>{};
-    final keyByNumberGroup = <String, String>{};
-    final keyByNumber = <String, String>{};
-    for (final key in chapters.allVersionKeys) {
-      final name = chapterDirectoryName(chapters, key);
-      if (name.isEmpty) continue;
-      keyByDir.putIfAbsent(name, () => key);
-      final ref = parseChapterDirectoryName(name);
-      if (ref == null) continue;
-      keyByNumberGroup.putIfAbsent('${ref.number}|${ref.groupKey}', () => key);
-      keyByNumber.putIfAbsent(ref.number, () => key);
-    }
-
-    String? keyOfDirectory(String name) {
-      final exact = keyByDir[name];
-      if (exact != null) return exact;
-      final ref = parseChapterDirectoryName(name);
-      if (ref == null) return null;
-      return keyByNumberGroup['${ref.number}|${ref.groupKey}'] ??
-          keyByNumber[ref.number];
-    }
-
+    // 🔴 P70：拷贝漫画的网源 key 是 UUID（标题「第NN话」），agent 辅助下载
+    //   留下的磁盘目录却是 `NN [copymanga]`。旧实现只从 chapterDirectoryName
+    //   字面反查，69 个目录全部 unmapped —— 详情页只有 5 个 UUID 显示蓝色，
+    //   刷新章节还会把同一批目录反复当新章。现在一次反查返回**同一话的所有
+    //   key**，编号视图与 UUID 视图都能正确显示已下载。
     final known = <String>{
       ...comic.downloadedChapters,
       ...row.downloadedChapters,
@@ -2085,17 +2065,19 @@ Future<List<String>> getImagesForComic(LocalComic comic, Object ep) async {
       if (name.isEmpty || name.startsWith('.')) continue;
       // 封面池不是章节（P12）：`cover/` 里放的是多季封面，别登记成"已下载"。
       if (isCoverDirectoryName(name)) continue;
-      final key = keyOfDirectory(name);
-      if (key == null) {
+      final keys = chapterKeysForDirectoryName(chapters, name);
+      if (keys.isEmpty) {
         // 目录在磁盘上，但章节矩阵里没有对应版本（矩阵被冲掉、或该版本已从
         // 源上下架）。不猜、不删、不登记，只留一条可诊断的日志。
         unmapped.add(name);
         continue;
       }
-      if (known.contains(key)) continue;
+      final needed = keys.where((k) => !known.contains(k)).toList();
+      if (needed.isEmpty) continue;
       // 只有 `cover.jpg` 之类的伴随文件不算一话。
       if (_pageIndexesIn(entity).isEmpty) continue;
-      added.add(key);
+      added.addAll(needed);
+      known.addAll(needed);
     }
 
     if (unmapped.isNotEmpty) {
