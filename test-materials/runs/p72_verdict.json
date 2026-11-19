@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "kind": "p72-verdict",
+  "comic": {
+    "id": "2",
+    "title": "The Runaway Extra and the Obsessive Duke",
+    "before": {
+      "cells": 50,
+      "downloaded": 50,
+      "diskDirs": 50
+    },
+    "after": {
+      "cells": 54,
+      "uniqueNumbers": 54,
+      "downloaded": 54,
+      "diskDirs": 54,
+      "range": [
+        "1",
+        "54"
+      ]
+    }
+  },
+  "dbAudit": {
+    "cells": 54,
+    "uniqueNumbers": 54,
+    "minNumber": "1",
+    "maxNumber": "54",
+    "downloaded": 54,
+    "diskDirs": 54,
+    "orphanKeys": [],
+    "duplicateNumbers": [],
+    "downloadedWithoutDir": [],
+    "dirNotDownloaded": [],
+    "emptyDirs": [],
+    "ok": true
+  },
+  "pageReconcile": {
+    "missingBefore": 0,
+    "missingAfter": 0,
+    "downloadedBefore": 54,
+    "downloadedAfter": 54,
+    "newlyRegistered": []
+  },
+  "chapterOrder": {
+    "passed": true,
+    "chapters": 54,
+    "last": [
+      "第51话",
+      "第52话",
+      "第53话",
+      "第54话"
+    ],
+    "orderViolations": []
+  },
+  "negativeControl": {
+    "exit": 0,
+    "lines": [
+      "PASS 少一页 → 必须 FAIL  [rc=1 count=84 gaps=[41]]",
+      "PASS 空目录 → 必须 FAIL  [rc=1 count=0]",
+      "PASS 坏图 → 必须 FAIL  [rc=1 decodeFail=1]",
+      "PASS 少一条 downloaded → 必须 FAIL  [rc=1 dirNotDownloaded=['54 [MagusManga] [comix.to]']]",
+      "PASS 孤儿 key → 必须 FAIL  [rc=1 orphan=['99 [Ghost] [comix.to]']]",
+      "PASS 话号重复 → 必须 FAIL  [rc=1 dup=['54']]",
+      "PASS 还原后必须 PASS  [rc=0]",
+      "=== 反向验证 全部符合预期 ==="
+    ]
+  },
+  "passed": true
+}

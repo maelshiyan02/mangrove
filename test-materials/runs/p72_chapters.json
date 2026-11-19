@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "kind": "p72-chapters",
+  "styleNote": "MagusManga 上传宽度 720（既有 Rokari/Lux 为 800）：跨组差异，非缺陷；同话内宽度 100% 一致、格式全 WEBP",
+  "existingStyle": {
+    "Rokari": "800x14xx-15xx WEBP",
+    "Lux": "800x14xx-15xx WEBP"
+  },
+  "chapters": [
+    {
+      "chapter": 51,
+      "group": "MagusManga",
+      "dir": "51 [MagusManga] [comix.to]",
+      "url": "https://comix.to/title/6emnz-the-runaway-extra-and-the-obsessive-duke/title/6emnz-the-runaway-extra-and-the-obsessive-duke/11712962-chapter-51",
+      "pageButtons": 93,
+      "imageUrls": 93,
+      "filesOnDisk": 93,
+      "indexRange": [
+        1,
+        93
+      ],
+      "gaps": [],
+      "decodeFailures": 0,
+      "widths": {
+        "720": 93
+      },
+      "formats": {
+        "WEBP": 93
+      },
+      "countOk": true,
+      "rangeOk": true,
+      "decodeOk": true,
+      "passed": true
+    },
+    {
+      "chapter": 52,
+      "group": "MagusManga",
+      "dir": "52 [MagusManga] [comix.to]",
+      "url": "https://comix.to/title/6emnz-the-runaway-extra-and-the-obsessive-duke/title/6emnz-the-runaway-extra-and-the-obsessive-duke/11731998-chapter-52",
+      "pageButtons": 101,
+      "imageUrls": 101,
+      "filesOnDisk": 101,
+      "indexRange": [
+        1,
+        101
+      ],
+      "gaps": [],
+      "decodeFailures": 0,
+      "widths": {
+        "720": 101
+      },
+      "formats": {
+        "WEBP": 101
+      },
+      "countOk": true,
+      "rangeOk": true,
+      "decodeOk": true,
+      "passed": true
+    },
+    {
+      "chapter": 53,
+      "group": "MagusManga",
+      "dir": "53 [MagusManga] [comix.to]",
+      "url": "https://comix.to/title/6emnz-the-runaway-extra-and-the-obsessive-duke/title/6emnz-the-runaway-extra-and-the-obsessive-duke/11756490-chapter-53",
+      "pageButtons": 96,
+      "imageUrls": 96,
+      "filesOnDisk": 96,
+      "indexRange": [
+        1,
+        96
+      ],
+      "gaps": [],
+      "decodeFailures": 0,
+      "widths": {
+        "720": 96
+      },
+      "formats": {
+        "WEBP": 96
+      },
+      "countOk": true,
+      "rangeOk": true,
+      "decodeOk": true,
+      "passed": true
+    },
+    {
+      "chapter": 54,
+      "group": "MagusManga",
+      "dir": "54 [MagusManga] [comix.to]",
+      "url": "https://comix.to/title/6emnz-the-runaway-extra-and-the-obsessive-duke/title/6emnz-the-runaway-extra-and-the-obsessive-duke/11756492-chapter-54",
+      "pageButtons": 85,
+      "imageUrls": 85,
+      "filesOnDisk": 85,
+      "indexRange": [
+        1,
+        85
+      ],
+      "gaps": [],
+      "decodeFailures": 0,
+      "widths": {
+        "720": 85
+      },
+      "formats": {
+        "WEBP": 85
+      },
+      "countOk": true,
+      "rangeOk": true,
+      "decodeOk": true,
+      "passed": true
+    }
+  ],
+  "allPassed": true
+}
