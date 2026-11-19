@@ -24,9 +24,7 @@
       "widths": {
         "720": 93
       },
-      "formats": {
-        "WEBP": 93
-      },
+      "formats": {},
       "countOk": true,
       "rangeOk": true,
       "decodeOk": true,
@@ -49,9 +47,7 @@
       "widths": {
         "720": 101
       },
-      "formats": {
-        "WEBP": 101
-      },
+      "formats": {},
       "countOk": true,
       "rangeOk": true,
       "decodeOk": true,
@@ -74,9 +70,7 @@
       "widths": {
         "720": 96
       },
-      "formats": {
-        "WEBP": 96
-      },
+      "formats": {},
       "countOk": true,
       "rangeOk": true,
       "decodeOk": true,
@@ -99,9 +93,7 @@
       "widths": {
         "720": 85
       },
-      "formats": {
-        "WEBP": 85
-      },
+      "formats": {},
       "countOk": true,
       "rangeOk": true,
       "decodeOk": true,
