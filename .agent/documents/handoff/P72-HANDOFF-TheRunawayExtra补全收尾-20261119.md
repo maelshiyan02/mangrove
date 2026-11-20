@@ -33,20 +33,32 @@
 - [ ] 51 与 54 能打开、翻页不卡
 - [ ] 「刷新章节」报「没有新增章节」
 
-## 4. 下一轮候选（唯一真问题）
+## 4. ~~下一轮候选（唯一真问题）~~ ❌ 已证伪（2026-11-20，P73 查漏补缺轮）
 
-🔴 **`chapterKeysForDirectoryName` 的组名回退缺失**（P73 候选，本轮只记录未改）：
+> **结论：下面这条 P73 候选是假阳性，不改代码。原推断的两处前提都经实测推翻。**
+> 查漏补缺 experimentation 见 `_work/p73_probe_reconcile.py`、`_work/p73_probe_result.json`、
+> `_work/p73_diag.json`；本轮未改任何业务代码，版本仍 `3.1.9+285`，基线仍 97/97。
 
-版本 `scanlationGroup == null` 时（本库绝大多数 agent 落库记录都是这种形态），该函数只用
-`chapterDirectoryName(chapters, key)` 的结果（如 `51`，无组）去解析组名，而**组名只写在 key 里**
-（`51 [MagusManga] [comix.to]`）⇒ `byNumberGroup` 键变成 `51|`，磁盘 `diskGroup=magusmanga`
-匹配不到 ⇒ 自动登记 0 条。
+~~🔴 `chapterKeysForDirectoryName` 的组名回退缺失（P73 候选）：版本 `scanlationGroup == null`
+时只从规范名 `51`（无组）解析组名、不回退 key ⇒ byNumberGroup 键成 `51|`、磁盘带组目录
+匹配不到 ⇒ 自动登记 0 条。~~
 
-- 实证：P72 首次 `page-reconcile` 对 51–54 报 `registeredAfter:false / 0 newly registered`；
-  手写 `downloadedChapters` 后立即 `true`。
-- 影响面：所有「版本无组名 + 目录名带组」的书 —— 用户把下载目录手工拷进库后，
-  「刷新章节」「磁盘对账」都不会自动登记（蓝标不亮、需人工写库）。
-- 修法建议：`ref == null || ref.groups.isEmpty()` 时回退 `parseChapterDirectoryName(key)`
-  取组名，再做 `byNumberGroup` 查询；顺带给 `refreshLocalComicChapters` 加同一回退。
-- 断言口径：造「版本无组 + 目录 `51 [MagusManga]`」夹具，要求 `chapterKeysForDirectoryName` 非空；
-  注入回退删除后必须变红。
+**证伪证据（三条，均可复算）**：
+
+1. **诊断断言实测**：`ComicChapters.versioned({'51':[ComicChapterVersion(title:'第51话 ·
+   MagusManga', chapterKey:'51 [MagusManga] [comix.to]')]})` 上，
+   `chapterDirectoryName` 返回 **`51 [MagusManga] [comix.to]`**（原样带组，并非推断的裸 `51`）——
+   因为 versioned + group 空时走 `parseChapterTitle(chapterKey)`，它认不出带方括号的目录名，
+   fallback 原样返回 chapterKey。`chapterKeysForDirectoryName` 字面命中即返回该 key。
+   加了「无组回退 key」修复后，故障对照 `broken_would_pass=true`（新旧实现结果相同）⇒ 该回退是惰性的。
+2. **决定性实验**：把 `data/local.db` 的 `downloadedChapters` 临时从 54 回退到 50，
+   跑官方 `page-reconcile 2`，结果仍 `50 → 50 / 0 newly registered`（`_work/p73_probe_result.json`），
+   且 51–54 四话 `pagesOnDisk=93/101/96/85`（磁盘有图）。已自动恢复 54 条。
+3. **真因**：`id=2` 的 `comic_type=0 = ComicType.local`，而 `reconcileDownloadedChapters`
+   首行 `if (comic.comicType == ComicType.local) return 0;` 直接跳过所有对账 —— 与组名解析无关。
+   local 漫画的目录名本身就是 key，下载时即写入 `downloadedChapters`，本就不走 reconcile 自愈。
+   P72 手写登记是正确路径，不是绕 bug。
+
+**修订后的认知**：数据侧已自洽（54 格 / 54 条 / 54 目录 / 0 孤儿 / 四话图片齐全），
+无待修 bug。`page-reconcile` 不登记 local 漫画是设计边界，不是缺陷；
+若要让 local 漫画也支持「磁盘补登」，那是新需求（需去掉守卫并评估副作用），不属于 bug 修复。
